@@ -46,6 +46,12 @@ The application pairs a **React/Electron** frontend with a **Rust** backend exec
 
 ---
 
+## Screenshots
+<img width="1704" height="956" alt="Screenshot 2026-02-02 at 23 21 03" src="https://github.com/user-attachments/assets/e655deeb-ca1c-4204-9cff-0292cac81ba8" />
+
+<img width="839" height="805" alt="Screenshot 2026-02-02 at 23 22 05" src="https://github.com/user-attachments/assets/639c99ab-959e-4be4-8a78-2e1d8d67c149" />
+
+
 ## Architecture
 
 ```
