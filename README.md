@@ -419,3 +419,4 @@ This project is licensed under the MIT License.
 - [ ] Execution history and result comparison
 - [ ] Remote execution support (SSH, cloud runners)
 - [ ] Plugin system for custom node types
+- [ ] Support for custom scripts
