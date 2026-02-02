@@ -107,7 +107,7 @@ The application pairs a **React/Electron** frontend with a **Rust** backend exec
 
 ### Optional
 
-- **Micromamba** -- Required for workflows that use conda-managed tools. Download from [micro.mamba.pm](https://micro.mamba.pm/) and place the binary at `RustRunner/runtime/micromamba`.
+- **Micromamba** -- Required for workflows that use conda-managed tools. Download from [micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html) and place the binary at `RustRunner/runtime/micromamba`.
 
 ---
 
