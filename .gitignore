@@ -1,0 +1,44 @@
+# =============================================================================
+# RustRunner .gitignore
+# =============================================================================
+
+# Rust
+/RustRunner/target/
+**/*.rs.bk
+Cargo.lock
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Electron
+/RustRunner-Desktop/release/
+/RustRunner-Desktop/dist/
+/RustRunner-Desktop/.erb/dll/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime
+/RustRunner/runtime/micromamba
+.rustrunner/
+
+# Logs
+*.log
+
+# Build artifacts
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.rpm

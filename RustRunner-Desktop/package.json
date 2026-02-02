@@ -1,0 +1,124 @@
+{
+  "name": "rustrunner-desktop",
+  "version": "1.0.0",
+  "description": "Visual Workflow Execution Engine for Bioinformatics Pipelines",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "start": "npm run build && electron .",
+    "build": "npm run build:main && npm run build:renderer",
+    "build:main": "tsc -p tsconfig.main.json",
+    "build:renderer": "webpack --config webpack.config.js",
+    "dev": "concurrently \"npm run dev:renderer\" \"wait-on http://localhost:3000 && npm run dev:main\"",
+    "dev:main": "tsc -p tsconfig.main.json && electron .",
+    "dev:renderer": "webpack serve --config webpack.config.js",
+    "package": "npm run build && electron-builder build --publish never",
+    "package:mac": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder build --mac --publish never",
+    "package:win": "npm run build && electron-builder build --win --publish never",
+    "package:linux": "npm run build && electron-builder build --linux --publish never"
+  },
+  "author": "Hasan Yilmaz",
+  "license": "MIT",
+  "dependencies": {
+    "@xyflow/react": "^12.4.4",
+    "electron-log": "^5.3.2",
+    "js-yaml": "^4.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.13.10",
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.5",
+    "concurrently": "^9.1.2",
+    "css-loader": "^7.1.2",
+    "electron": "^35.0.2",
+    "electron-builder": "^26.7.0",
+    "html-webpack-plugin": "^5.6.3",
+    "style-loader": "^4.0.0",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.8.2",
+    "wait-on": "^8.0.3",
+    "webpack": "^5.98.0",
+    "webpack-cli": "^6.0.1",
+    "webpack-dev-server": "^5.2.0"
+  },
+  "build": {
+    "productName": "RustRunner",
+    "appId": "com.rustrunner.app",
+    "asar": false,
+    "icon": "assets/icon_light.png",
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/._*"
+    ],
+    "extraResources": [
+      {
+        "from": "../RustRunner/target/release/rustrunner",
+        "to": "rustrunner"
+      },
+      {
+        "from": "../RustRunner/runtime/micromamba",
+        "to": "micromamba",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../RustRunner/runtime/env_map.json",
+        "to": "env_map.json"
+      },
+      {
+        "from": "assets",
+        "to": "assets",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "assets/icon_light.icns",
+      "darkModeSupport": true,
+      "identity": null,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": null,
+      "entitlementsInherit": null
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Science",
+      "icon": "assets/icon_light.png"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "assets/icon_light.ico",
+      "forceCodeSigning": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon_light.ico",
+      "uninstallerIcon": "assets/icon_light.ico"
+    },
+    "dmg": {
+      "icon": "assets/icon_light.icns"
+    },
+    "directories": {
+      "output": "release/build"
+    },
+    "afterPack": "./scripts/afterPack.js"
+  }
+}
