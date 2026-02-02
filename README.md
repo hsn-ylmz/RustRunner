@@ -1,5 +1,5 @@
-<img width="5025" height="1284" alt="RustRunner_banner" src="https://github.com/user-attachments/assets/0728ba5d-b2e0-4206-b262-2fa55267c77f" />
 
+<img width="5400" height="1542" alt="RustRunner_banner" src="https://github.com/user-attachments/assets/3f52f7dc-84fe-410e-91e2-b9aecee5318c" />
 
 # RustRunner
 
