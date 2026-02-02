@@ -26,7 +26,6 @@ The application pairs a **React/Electron** frontend with a **Rust** backend exec
 - **Real-Time Logging** -- Live execution output streamed from the Rust engine to the GUI
 - **Resource Monitoring** -- CPU and memory usage tracking during execution
 - **Cross-Platform** -- Builds for macOS, Windows, and Linux
-- **Dark Mode** -- Automatic icon theming based on system appearance
 
 ---
 
