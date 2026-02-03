@@ -22,7 +22,20 @@ use serde::{Deserialize, Serialize};
 
 /// Lazily-initialized path to the environment mapping file.
 pub static ENV_MAP_PATH: Lazy<PathBuf> = Lazy::new(|| {
-    // Priority 1: Development environment
+    // Priority 1: Production environment (next to executable)
+    // Check this first to ensure packaged apps use their bundled env_map
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let prod_path = exe_dir.join("env_map.json");
+            if prod_path.exists() {
+                info!("Using production env_map: {}", prod_path.display());
+                return prod_path;
+            }
+        }
+    }
+
+    // Priority 2: Development environment (only if production not found)
+    // This is used when running via `cargo run` during development
     let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("runtime")
         .join("env_map.json");
@@ -30,18 +43,6 @@ pub static ENV_MAP_PATH: Lazy<PathBuf> = Lazy::new(|| {
     if dev_path.exists() {
         info!("Using development env_map: {}", dev_path.display());
         return dev_path;
-    }
-
-    // Priority 2: Production environment (next to executable)
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let prod_path = exe_dir.join("env_map.json");
-            // Check if parent directory exists (for writing)
-            if exe_dir.exists() {
-                info!("Using production env_map: {}", prod_path.display());
-                return prod_path;
-            }
-        }
     }
 
     // Priority 3: Current working directory
@@ -52,17 +53,8 @@ pub static ENV_MAP_PATH: Lazy<PathBuf> = Lazy::new(|| {
 
 /// Lazily-initialized path to the micromamba binary.
 pub static MICROMAMBA_PATH: Lazy<PathBuf> = Lazy::new(|| {
-    // Priority 1: Development environment
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("runtime")
-        .join("micromamba");
-
-    if dev_path.exists() {
-        info!("Using development micromamba: {}", dev_path.display());
-        return dev_path;
-    }
-
-    // Priority 2: Production environment
+    // Priority 1: Production environment (next to executable)
+    // Check this first to ensure packaged apps use their bundled micromamba
     let exe_path = std::env::current_exe().expect("Failed to get current executable path");
     let exe_dir = exe_path.parent().expect("Executable must be in a directory");
     let prod_path = exe_dir.join("micromamba");
@@ -70,6 +62,16 @@ pub static MICROMAMBA_PATH: Lazy<PathBuf> = Lazy::new(|| {
     if prod_path.exists() {
         info!("Using production micromamba: {}", prod_path.display());
         return prod_path;
+    }
+
+    // Priority 2: Development environment (only if production not found)
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("runtime")
+        .join("micromamba");
+
+    if dev_path.exists() {
+        info!("Using development micromamba: {}", dev_path.display());
+        return dev_path;
     }
 
     // Priority 3: System PATH
@@ -86,13 +88,44 @@ pub static MICROMAMBA_PATH: Lazy<PathBuf> = Lazy::new(|| {
 
     // Not found
     warn!("Micromamba binary not found");
-    warn!("  Searched: {}", dev_path.display());
     warn!("  Searched: {}", prod_path.display());
+    warn!("  Searched: {}", dev_path.display());
     warn!("  Searched: system PATH");
     warn!("  Download from: https://micro.mamba.pm/");
 
     prod_path
 });
+
+/// Lazily-initialized path to the micromamba root prefix (where environments are stored).
+/// This ensures the app uses its own isolated environment directory, not the system's.
+pub static MAMBA_ROOT_PREFIX: Lazy<PathBuf> = Lazy::new(|| {
+    // Use app-specific directory in user's home for environments
+    // This keeps environments isolated per-app and persists across updates
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+
+    let prefix = PathBuf::from(home)
+        .join(".rustrunner")
+        .join("micromamba");
+
+    // Create the directory if it doesn't exist
+    if !prefix.exists() {
+        if let Err(e) = fs::create_dir_all(&prefix) {
+            warn!("Failed to create micromamba root prefix: {}", e);
+        }
+    }
+
+    info!("Using micromamba root prefix: {}", prefix.display());
+    prefix
+});
+
+/// Creates a Command configured with the correct MAMBA_ROOT_PREFIX environment variable.
+fn micromamba_command() -> Command {
+    let mut cmd = Command::new(&*MICROMAMBA_PATH);
+    cmd.env("MAMBA_ROOT_PREFIX", &*MAMBA_ROOT_PREFIX);
+    cmd
+}
 
 /// Mapping of tool names to conda environment names.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -152,7 +185,7 @@ impl Default for ToolEnvMap {
 
 /// Checks whether a micromamba environment exists.
 fn check_env(env_name: &str) -> Result<bool, Box<dyn Error>> {
-    let output = Command::new(&*MICROMAMBA_PATH)
+    let output = micromamba_command()
         .arg("env")
         .arg("list")
         .output()?;
@@ -203,7 +236,7 @@ pub fn create_env(env_name: &str, tools: &[String]) -> Result<(), Box<dyn Error>
         env_name, tools
     );
 
-    let output = Command::new(&*MICROMAMBA_PATH)
+    let output = micromamba_command()
         .arg("create")
         .arg("-y")
         .arg("-n")
@@ -238,7 +271,7 @@ pub fn create_env(env_name: &str, tools: &[String]) -> Result<(), Box<dyn Error>
 pub fn search_packages(query: &str, channel: Option<&str>) -> Result<Vec<String>, Box<dyn Error>> {
     let channel = channel.unwrap_or("bioconda");
 
-    let output = Command::new(&*MICROMAMBA_PATH)
+    let output = micromamba_command()
         .arg("search")
         .arg("-c")
         .arg(channel)
@@ -269,7 +302,7 @@ pub fn search_packages(query: &str, channel: Option<&str>) -> Result<Vec<String>
 
 /// Lists packages installed in an environment.
 pub fn list_packages(env_name: &str) -> Result<Vec<String>, Box<dyn Error>> {
-    let output = Command::new(&*MICROMAMBA_PATH)
+    let output = micromamba_command()
         .arg("list")
         .arg("-n")
         .arg(env_name)

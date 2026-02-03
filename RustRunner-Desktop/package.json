@@ -14,8 +14,10 @@
     "package": "npm run build && electron-builder build --publish never",
     "package:mac": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder build --mac --publish never",
     "package:mac-x64": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder build --mac --x64 --publish never",
+    "package:mac-arm64": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder build --mac --arm64 --publish never",
     "package:win": "npm run build && electron-builder build --win --x64 --publish never",
-    "package:linux": "npm run build && electron-builder build --linux --x64 --publish never"
+    "package:linux": "npm run build && electron-builder build --linux --x64 --publish never",
+    "package:linux-arm64": "npm run build && electron-builder build --linux --arm64 --publish never"
   },
   "author": "Hasan Yilmaz",
   "license": "MIT",

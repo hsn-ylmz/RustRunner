@@ -5,4 +5,4 @@
 
 pub mod conda;
 
-pub use conda::{create_env, search_packages, ToolEnvMap, MICROMAMBA_PATH, ENV_MAP_PATH};
+pub use conda::{create_env, search_packages, ToolEnvMap, MICROMAMBA_PATH, ENV_MAP_PATH, MAMBA_ROOT_PREFIX};

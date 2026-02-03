@@ -1,12 +1,3 @@
 {
-  "map": {
-    "sra-tools": "sra-tools",
-    "fastqc": "fastqc",
-    "fastp": "fastp",
-    "bowtie2": "bowtie2",
-    "samtools": "samtools",
-    "subread": "subread",
-    "bwa": "bwa",
-    "hisat2": "hisat2"
-  }
+  "map": {}
 }

@@ -15,7 +15,7 @@ use std::process::Command;
 
 use log::{debug, error, warn};
 
-use crate::environment::conda::MICROMAMBA_PATH;
+use crate::environment::conda::{MICROMAMBA_PATH, MAMBA_ROOT_PREFIX};
 use crate::workflow::Step;
 
 /// Tools available in standard system PATH that don't require conda.
@@ -217,6 +217,7 @@ fn execute_with_conda(
     })?;
 
     let mut cmd = Command::new(&*MICROMAMBA_PATH);
+    cmd.env("MAMBA_ROOT_PREFIX", &*MAMBA_ROOT_PREFIX);
     cmd.arg("run").arg("-n").arg(env_name).arg("bash").arg(script_path);
 
     if let Some(dir) = working_dir {
