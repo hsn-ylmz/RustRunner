@@ -1,6 +1,6 @@
 {
   "name": "rustrunner-desktop",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "Visual Workflow Execution Engine for Bioinformatics Pipelines",
   "main": "dist/main/main.js",
   "scripts": {
@@ -13,8 +13,9 @@
     "dev:renderer": "webpack serve --config webpack.config.js",
     "package": "npm run build && electron-builder build --publish never",
     "package:mac": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder build --mac --publish never",
-    "package:win": "npm run build && electron-builder build --win --publish never",
-    "package:linux": "npm run build && electron-builder build --linux --publish never"
+    "package:mac-x64": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder build --mac --x64 --publish never",
+    "package:win": "npm run build && electron-builder build --win --x64 --publish never",
+    "package:linux": "npm run build && electron-builder build --linux --x64 --publish never"
   },
   "author": "Hasan Yilmaz",
   "license": "MIT",
@@ -56,17 +57,6 @@
       "!**/._*"
     ],
     "extraResources": [
-      {
-        "from": "../RustRunner/target/release/rustrunner",
-        "to": "rustrunner"
-      },
-      {
-        "from": "../RustRunner/runtime/micromamba",
-        "to": "micromamba",
-        "filter": [
-          "**/*"
-        ]
-      },
       {
         "from": "../RustRunner/runtime/env_map.json",
         "to": "env_map.json"

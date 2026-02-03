@@ -1,6 +1,6 @@
 [package]
 name = "rustrunner"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2021"
 authors = ["RustRunner Team"]
 description = "A visual workflow execution engine for bioinformatics pipelines"
