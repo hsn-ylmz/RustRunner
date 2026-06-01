@@ -78,6 +78,21 @@ const electronHandler = {
     onWorkflowError(callback: (error: string) => void) {
       ipcRenderer.on('workflow-error', (_event, error) => callback(error));
     },
+
+    // Auto-update
+    // The payload shape matches the UpdateStatus union in main/updater.ts.
+    // It's typed as `unknown` here so the preload stays a thin pipe; the
+    // renderer narrows via the type defined in preload.d.ts.
+    onUpdateStatus(callback: (payload: unknown) => void) {
+      const subscription = (_event: IpcRendererEvent, payload: unknown) =>
+        callback(payload);
+      ipcRenderer.on('update-status', subscription);
+      return () => ipcRenderer.removeListener('update-status', subscription);
+    },
+
+    installUpdate() {
+      ipcRenderer.send('install-update');
+    },
   },
 };
 

@@ -12,6 +12,8 @@ import {
   MenuItemConstructorOptions,
 } from 'electron';
 
+import { checkForUpdatesManually } from './updater';
+
 interface DarwinMenuItemConstructorOptions extends MenuItemConstructorOptions {
   selector?: string;
   submenu?: DarwinMenuItemConstructorOptions[] | Menu;
@@ -146,6 +148,11 @@ export default class MenuBuilder {
       label: 'Help',
       submenu: [
         {
+          label: 'Check for Updates…',
+          click: () => checkForUpdatesManually(),
+        },
+        { type: 'separator' },
+        {
           label: 'Documentation',
           click() {
             shell.openExternal('https://github.com/rustrunner/rustrunner');
@@ -207,6 +214,11 @@ export default class MenuBuilder {
       {
         label: 'Help',
         submenu: [
+          {
+            label: 'Check for Updates…',
+            click: () => checkForUpdatesManually(),
+          },
+          { type: 'separator' },
           {
             label: 'Documentation',
             click() {

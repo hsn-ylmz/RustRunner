@@ -1,6 +1,6 @@
 {
   "name": "rustrunner-desktop",
-  "version": "0.1.0",
+  "version": "0.11.0",
   "description": "Visual Workflow Execution Engine for Bioinformatics Pipelines",
   "main": "dist/main/main.js",
   "scripts": {
@@ -24,6 +24,7 @@
   "dependencies": {
     "@xyflow/react": "^12.4.4",
     "electron-log": "^5.3.2",
+    "electron-updater": "^6.8.3",
     "js-yaml": "^4.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -51,6 +52,14 @@
     "appId": "com.rustrunner.app",
     "asar": false,
     "icon": "assets/icon_light.png",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "hsn-ylmz",
+        "repo": "RustRunner",
+        "releaseType": "release"
+      }
+    ],
     "files": [
       "dist/**/*",
       "assets/**/*",

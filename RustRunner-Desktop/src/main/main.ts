@@ -21,6 +21,7 @@ import log from 'electron-log';
 import yaml from 'js-yaml';
 
 import MenuBuilder from './menu';
+import { setupAutoUpdater } from './updater';
 import { resolveHtmlPath } from './util';
 
 // =============================================================================
@@ -280,6 +281,11 @@ const createWindow = async (): Promise<void> => {
   mainWindow.on('ready-to-show', () => {
     if (!mainWindow) throw new Error('mainWindow is not defined');
     mainWindow.show();
+
+    // Kick off the silent update check now that the renderer is mounted.
+    // setupAutoUpdater schedules the actual fetch with its own delay,
+    // and no-ops in dev mode.
+    setupAutoUpdater(mainWindow);
   });
 
   mainWindow.on('closed', () => {

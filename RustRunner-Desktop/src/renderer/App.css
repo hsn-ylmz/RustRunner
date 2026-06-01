@@ -916,4 +916,137 @@
     background: #2c3e50;
     color: var(--blue-light);
   }
+
+  .update-banner {
+    background: #23313f;
+    border-bottom-color: #2c3e50;
+    color: var(--panel-text);
+  }
+
+  .update-banner-detail {
+    color: var(--gray-light);
+  }
+
+  .update-banner-progress {
+    background: #2c3e50;
+  }
+
+  .update-banner-dismiss {
+    color: var(--gray-light);
+  }
+
+  .update-banner-dismiss:hover {
+    background: #34495e;
+    color: var(--panel-text);
+  }
+}
+
+/* =============================================================================
+   Auto-Update Banner
+   ============================================================================= */
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 13px;
+  color: #1e293b;
+  position: relative;
+  z-index: 20;
+}
+
+.update-banner-info {
+  /* Default styling — nothing extra needed. */
+}
+
+.update-banner-success {
+  background: #ecfdf5;
+  border-bottom-color: #a7f3d0;
+}
+
+.update-banner-error {
+  background: #fef2f2;
+  border-bottom-color: #fecaca;
+}
+
+.update-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.update-banner-title {
+  font-weight: 600;
+}
+
+.update-banner-detail {
+  font-size: 12px;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Thin progress strip — fixed width so it doesn't push the title around. */
+.update-banner-progress {
+  width: 160px;
+  height: 4px;
+  background: #e2e8f0;
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.update-banner-progress-bar {
+  height: 100%;
+  background: var(--blue-light, #63a7dd);
+  transition: width 200ms ease-out;
+}
+
+.update-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.update-banner-button {
+  background: var(--blue-light, #63a7dd);
+  color: #fff;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.update-banner-button:hover {
+  background: var(--blue-dark, #3d84b3);
+}
+
+.update-banner-dismiss {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.update-banner-dismiss:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: #1e293b;
 }
