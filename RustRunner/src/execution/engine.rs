@@ -134,10 +134,23 @@ impl Engine {
         }
 
         // Load or create state
-        let mut state = WorkflowState::load(&self.workflow_path).unwrap_or_else(|_| {
-            info!("Starting fresh workflow execution");
-            WorkflowState::new(&self.workflow_path)
-        });
+        let mut state = match WorkflowState::load(&self.workflow_path) {
+            Ok(state) => state,
+            Err(e) => {
+                // A file that exists but fails to load is corrupt/incompatible.
+                // Warn loudly so completed steps aren't silently re-run.
+                if WorkflowState::state_file_exists(&self.workflow_path) {
+                    warn!(
+                        "Existing state file could not be read ({}). Starting fresh - \
+                         previously completed steps will re-run.",
+                        e
+                    );
+                } else {
+                    info!("Starting fresh workflow execution");
+                }
+                WorkflowState::new(&self.workflow_path)
+            }
+        };
 
 
         // Verify completed steps still have outputs
@@ -211,6 +224,11 @@ impl Engine {
 
         let mut running_count = 0;
 
+        // Error captured inside the loop. We break out on failure instead of
+        // returning early so the monitor thread is always stopped and joined
+        // below (an early `?` would leak the detached sampling thread).
+        let mut run_error: Option<Box<dyn std::error::Error>> = None;
+
         // Main execution loop
         loop {
             // Schedule ready steps
@@ -273,11 +291,33 @@ impl Engine {
                 break;
             }
 
+            // Deadlock detection: nothing is running, yet work remains and no
+            // step can be scheduled. Without this guard the loop would spin at
+            // 100% CPU forever (e.g. an unschedulable step or a dependency
+            // cycle the validator missed).
+            if running_count == 0 && planner.has_work_remaining() {
+                let (completed, total) = planner.progress();
+                run_error = Some(
+                    format!(
+                        "Workflow deadlocked: {}/{} steps completed but no remaining \
+                         step can be scheduled (check dependencies and thread limits)",
+                        completed, total
+                    )
+                    .into(),
+                );
+                break;
+            }
+
             // Wait for step completion (skip in dry run)
             if running_count > 0 && !self.dry_run {
-                let (step_id, result) = rx.recv().map_err(|e| {
-                    format!("Failed to receive step completion: {}", e)
-                })?;
+                let (step_id, result) = match rx.recv() {
+                    Ok(msg) => msg,
+                    Err(e) => {
+                        run_error =
+                            Some(format!("Failed to receive step completion: {}", e).into());
+                        break;
+                    }
+                };
 
                 running_count -= 1;
 
@@ -287,31 +327,41 @@ impl Engine {
                         planner.mark_step_completed(&step_id);
                         timeline.add_event(step_id.clone(), EventType::Completed);
                         state.mark_completed(&step_id);
-                        state.save()?;
+                        if let Err(e) = state.save() {
+                            run_error = Some(e);
+                            break;
+                        }
                     }
                     Err(e) => {
                         error!("Step '{}' failed: {}", step_id, e);
                         planner.mark_step_failed(&step_id, e.clone());
                         timeline.add_event(step_id.clone(), EventType::Failed);
                         state.mark_failed(&step_id);
-                        state.save()?;
+                        // Best-effort persist; the step failure is the primary error.
+                        if let Err(save_err) = state.save() {
+                            warn!("Failed to persist state after step failure: {}", save_err);
+                        }
 
-                        monitor_running.store(false, Ordering::Relaxed);
-                        return Err(format!(
-                            "Workflow failed at step '{}': {}",
-                            step_id, e
-                        )
-                        .into());
+                        run_error = Some(
+                            format!("Workflow failed at step '{}': {}", step_id, e).into(),
+                        );
+                        break;
                     }
                 }
             }
         }
 
-        // Stop monitoring
+        // Stop monitoring - always run, on both the success and error paths, so
+        // the sampling thread is never left detached.
         monitor_running.store(false, Ordering::Relaxed);
         let final_monitor = monitor_handle
             .join()
             .map_err(|_| "Monitor thread panicked")?;
+
+        // Propagate any error captured in the loop, now that cleanup is done.
+        if let Some(e) = run_error {
+            return Err(e);
+        }
 
         let total_time = start_time.elapsed();
 

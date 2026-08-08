@@ -56,6 +56,16 @@ fn validate_step(step: &Step) -> Vec<ValidationError> {
         return errors; // Can't validate further without ID
     }
 
+    // Warn about step ids that aren't clean identifiers. These are sanitized
+    // when used as a temp-script filename, but a `/` or `..` in an id signals a
+    // likely mistake worth surfacing.
+    if step.id.contains('/') || step.id.contains('\\') || step.id.contains("..") {
+        warn!(
+            "Step '{}': id contains path separators; it will be sanitized for file operations",
+            step.id
+        );
+    }
+
     // Check tool
     if step.tool.trim().is_empty() {
         errors.push(ValidationError::EmptyTool(step.id.clone()));
