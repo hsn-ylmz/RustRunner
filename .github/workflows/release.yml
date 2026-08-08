@@ -59,6 +59,11 @@ jobs:
       # a plain `cargo build --release` would not satisfy it.
       - name: Build engine
         working-directory: RustRunner
+        env:
+          # .cargo/config.toml names the musl linker by its full triple, which
+          # is how the cross toolchains install it locally. Ubuntu's musl-tools
+          # package installs it as plain `musl-gcc`, so override it here.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
         run: cargo build --release --target ${{ matrix.rust_target }}
 
       - uses: actions/setup-node@v4
