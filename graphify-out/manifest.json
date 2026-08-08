@@ -1,0 +1,217 @@
+{
+  ".claude/settings.json": {
+    "mtime": 1783176175.164101,
+    "ast_hash": "8629e8da26739664b1fc343974d62a0e",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/package.json": {
+    "mtime": 1786185619.1316988,
+    "ast_hash": "f4b6f0aa855288be0fa10eeee1c413d2",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/scripts/afterPack.js": {
+    "mtime": 1780327617.393137,
+    "ast_hash": "69801afa97eab61e3aa47a217770684f",
+    "semantic_hash": "69801afa97eab61e3aa47a217770684f"
+  },
+  "RustRunner-Desktop/src/main/main.ts": {
+    "mtime": 1786185696.237591,
+    "ast_hash": "c003bdb251f61e4f274999304abd509b",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/src/main/menu.ts": {
+    "mtime": 1786185743.760822,
+    "ast_hash": "82b97e92009608e0b71a01d7a7b8613b",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/src/main/preload.ts": {
+    "mtime": 1786185771.9163063,
+    "ast_hash": "d6d594d73078661c5eeb4473add855e2",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/src/main/updater.ts": {
+    "mtime": 1780327617.3936956,
+    "ast_hash": "764da8a5e6ad7024d44ca9ed15730325",
+    "semantic_hash": "764da8a5e6ad7024d44ca9ed15730325"
+  },
+  "RustRunner-Desktop/src/main/util.ts": {
+    "mtime": 1780327617.3937802,
+    "ast_hash": "9af00e7e981fabf1e5d987bcab278f00",
+    "semantic_hash": "9af00e7e981fabf1e5d987bcab278f00"
+  },
+  "RustRunner-Desktop/src/renderer/App.tsx": {
+    "mtime": 1786186107.2783217,
+    "ast_hash": "a2eb96b04d8e13e703eaf3e24febfc3d",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/src/renderer/index.tsx": {
+    "mtime": 1780327617.3942907,
+    "ast_hash": "0589f813769936c9966e77736e8ce1d1",
+    "semantic_hash": "0589f813769936c9966e77736e8ce1d1"
+  },
+  "RustRunner-Desktop/src/renderer/preload.d.ts": {
+    "mtime": 1786185787.7973166,
+    "ast_hash": "2832895e2fe97029252f8261f8dbf1b3",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/tsconfig.json": {
+    "mtime": 1780327617.3944664,
+    "ast_hash": "bad8594a0f1443e3630127701e418519",
+    "semantic_hash": "bad8594a0f1443e3630127701e418519"
+  },
+  "RustRunner-Desktop/tsconfig.main.json": {
+    "mtime": 1780327617.3945673,
+    "ast_hash": "823040d95d124de2262baaf953105a0f",
+    "semantic_hash": "823040d95d124de2262baaf953105a0f"
+  },
+  "RustRunner-Desktop/webpack.config.js": {
+    "mtime": 1786185627.0963142,
+    "ast_hash": "7d32ce2f881957e5755db80b5a4e5bb2",
+    "semantic_hash": ""
+  },
+  "RustRunner/runtime/env_map.json": {
+    "mtime": 1780327617.395134,
+    "ast_hash": "dbfe4e7e06a2bac8f126fc14e357a4f5",
+    "semantic_hash": "dbfe4e7e06a2bac8f126fc14e357a4f5"
+  },
+  "RustRunner/src/environment/conda.rs": {
+    "mtime": 1780327617.3953457,
+    "ast_hash": "eef4466ffacc7851b381dd0ae9daf378",
+    "semantic_hash": "eef4466ffacc7851b381dd0ae9daf378"
+  },
+  "RustRunner/src/environment/mod.rs": {
+    "mtime": 1780327617.3954294,
+    "ast_hash": "8cbbc6d7a0bec207ddabc2508343b3e9",
+    "semantic_hash": "8cbbc6d7a0bec207ddabc2508343b3e9"
+  },
+  "RustRunner/src/execution/engine.rs": {
+    "mtime": 1783172811.3386564,
+    "ast_hash": "212e44b06e7c165c8eccd7ac8a2011ec",
+    "semantic_hash": ""
+  },
+  "RustRunner/src/execution/mod.rs": {
+    "mtime": 1780327617.3956847,
+    "ast_hash": "855748931c1320c714d84404366e78c6",
+    "semantic_hash": "855748931c1320c714d84404366e78c6"
+  },
+  "RustRunner/src/execution/step.rs": {
+    "mtime": 1783173082.14582,
+    "ast_hash": "7a2a729933e8ed11f69ad70cefc2f520",
+    "semantic_hash": ""
+  },
+  "RustRunner/src/lib.rs": {
+    "mtime": 1780327617.3959026,
+    "ast_hash": "4c287315740b2104e1dd9621c0498fe2",
+    "semantic_hash": "4c287315740b2104e1dd9621c0498fe2"
+  },
+  "RustRunner/src/main.rs": {
+    "mtime": 1780327617.3960767,
+    "ast_hash": "753bedbee20e6fa24d485814e11c41c9",
+    "semantic_hash": "753bedbee20e6fa24d485814e11c41c9"
+  },
+  "RustRunner/src/monitoring/mod.rs": {
+    "mtime": 1780327617.3962693,
+    "ast_hash": "693aac358c3fd7bf434da63970bfe9d5",
+    "semantic_hash": "693aac358c3fd7bf434da63970bfe9d5"
+  },
+  "RustRunner/src/monitoring/resource.rs": {
+    "mtime": 1780327617.3963978,
+    "ast_hash": "3a6f5aeebb8c3e2eb58146b4c0706755",
+    "semantic_hash": "3a6f5aeebb8c3e2eb58146b4c0706755"
+  },
+  "RustRunner/src/monitoring/timeline.rs": {
+    "mtime": 1780327617.396492,
+    "ast_hash": "645bb96497e7d97856238c603778572e",
+    "semantic_hash": "645bb96497e7d97856238c603778572e"
+  },
+  "RustRunner/src/workflow/mod.rs": {
+    "mtime": 1780327617.396624,
+    "ast_hash": "a7673fbccc4d60d95c521d9ccb2792e5",
+    "semantic_hash": "a7673fbccc4d60d95c521d9ccb2792e5"
+  },
+  "RustRunner/src/workflow/model.rs": {
+    "mtime": 1780327617.3967166,
+    "ast_hash": "2e999fc888e4fc8388112ea72f14ea32",
+    "semantic_hash": "2e999fc888e4fc8388112ea72f14ea32"
+  },
+  "RustRunner/src/workflow/parser.rs": {
+    "mtime": 1780327617.396821,
+    "ast_hash": "dbcfb0654a196384975c6f2541bac167",
+    "semantic_hash": "dbcfb0654a196384975c6f2541bac167"
+  },
+  "RustRunner/src/workflow/planner.rs": {
+    "mtime": 1783172997.5534823,
+    "ast_hash": "ee31f1996310f2c17607b055afd56d46",
+    "semantic_hash": ""
+  },
+  "RustRunner/src/workflow/state.rs": {
+    "mtime": 1783172801.4752057,
+    "ast_hash": "7fd86a3c9e469fc3befd2e21de9eeee6",
+    "semantic_hash": ""
+  },
+  "RustRunner/src/workflow/validator.rs": {
+    "mtime": 1783172823.365783,
+    "ast_hash": "803a3c5842d5a6486063f1fbec4a367c",
+    "semantic_hash": ""
+  },
+  "RustRunner/src/workflow/wildcards.rs": {
+    "mtime": 1780327617.39721,
+    "ast_hash": "02702c0c3cd7398b7df85651349f0180",
+    "semantic_hash": "02702c0c3cd7398b7df85651349f0180"
+  },
+  "CLAUDE.md": {
+    "mtime": 1783177318.370708,
+    "ast_hash": "0f7b920aaec4c1ea231994a88b3b3c35",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1780327617.39084,
+    "ast_hash": "932d53feb9a1a061a607803eab185514",
+    "semantic_hash": "932d53feb9a1a061a607803eab185514"
+  },
+  "RustRunner-Desktop/src/renderer/index.html": {
+    "mtime": 1786185632.337413,
+    "ast_hash": "5333e1359629207b2acf8dc66b9f0c6c",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/assets/icon_dark.png": {
+    "mtime": 1780327617.3915453,
+    "ast_hash": "5faff29beaddef4d5df3298bf5d4d0a2",
+    "semantic_hash": "5faff29beaddef4d5df3298bf5d4d0a2"
+  },
+  "RustRunner-Desktop/assets/icon_light.png": {
+    "mtime": 1780327617.3920958,
+    "ast_hash": "b0737f3de958eccfe4620311503887ea",
+    "semantic_hash": "b0737f3de958eccfe4620311503887ea"
+  },
+  ".claude/hooks/session-report-check.sh": {
+    "mtime": 1783177201.3856356,
+    "ast_hash": "1bf996f1f49feb58028677ce4e7083ea",
+    "semantic_hash": ""
+  },
+  ".claude/settings.local.json": {
+    "mtime": 1783176289.8013766,
+    "ast_hash": "0e38603e85a2c3ff6e7c4513f9034c4f",
+    "semantic_hash": ""
+  },
+  "RustRunner-Desktop/src/renderer/stepEvents.ts": {
+    "mtime": 1786185813.5197563,
+    "ast_hash": "d97bb70f8e127bee6ce2fc6b5afafe4f",
+    "semantic_hash": ""
+  },
+  ".claude/skills/session-report/SKILL.md": {
+    "mtime": 1783177310.4778304,
+    "ast_hash": "522afc65b4c17db3ce684f5058dd64bb",
+    "semantic_hash": ""
+  },
+  "reports/2026-W27.md": {
+    "mtime": 1783177430.8947892,
+    "ast_hash": "01dc29e718e5f368e7c4247eb3ee0d16",
+    "semantic_hash": ""
+  },
+  "reports/_competitive-cache.md": {
+    "mtime": 1783177381.8653278,
+    "ast_hash": "3dad79bdcfd20c0a26f34be5e78c4aa3",
+    "semantic_hash": ""
+  }
+}
