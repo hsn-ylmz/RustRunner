@@ -62,13 +62,8 @@ jobs:
         run: npm run build
 
   lint:
-    name: Rust lint (advisory)
+    name: Rust lint
     runs-on: ubuntu-latest
-    # Advisory for now: this codebase has never been `cargo fmt`'d and carries
-    # known dead-code warnings, so gating on either would fail for reasons
-    # unrelated to the change under review. Promote to blocking once the
-    # existing backlog is cleared.
-    continue-on-error: true
     defaults:
       run:
         working-directory: RustRunner
@@ -86,5 +81,8 @@ jobs:
       - name: Format check
         run: cargo fmt --check
 
+      # Not `-D warnings` yet: the tree still carries a handful of clippy
+      # warnings (unused imports, a dead field, some idiom nits). Clearing
+      # those and then denying warnings is a worthwhile follow-up.
       - name: Clippy
         run: cargo clippy --all-targets
