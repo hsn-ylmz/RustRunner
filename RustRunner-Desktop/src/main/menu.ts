@@ -19,11 +19,74 @@ interface DarwinMenuItemConstructorOptions extends MenuItemConstructorOptions {
   submenu?: DarwinMenuItemConstructorOptions[] | Menu;
 }
 
+/** Repository the Help menu links to. */
+const REPO_URL = 'https://github.com/hsn-ylmz/RustRunner';
+
+/**
+ * Actions the menu forwards to the renderer over the 'menu-action' channel.
+ * These can't be handled in the main process — the workflow lives in renderer
+ * state — so the menu is a thin dispatcher.
+ */
+export type MenuAction =
+  | 'new'
+  | 'open'
+  | 'save'
+  | 'save-as'
+  | 'undo'
+  | 'redo';
+
 export default class MenuBuilder {
   mainWindow: BrowserWindow;
 
   constructor(mainWindow: BrowserWindow) {
     this.mainWindow = mainWindow;
+  }
+
+  /** Forwards a menu selection to the renderer. */
+  private send(action: MenuAction): void {
+    this.mainWindow.webContents.send('menu-action', action);
+  }
+
+  /**
+   * File submenu. Shared by both platform templates so New/Open/Save behave
+   * identically everywhere — previously the Windows/Linux entries declared
+   * accelerators but had no click handler, so Ctrl+N/O/S silently did nothing.
+   */
+  private buildFileSubmenu(isDarwin: boolean): MenuItemConstructorOptions {
+    const mod = isDarwin ? 'Command' : 'Ctrl';
+
+    return {
+      label: isDarwin ? 'File' : '&File',
+      submenu: [
+        {
+          label: 'New Workflow',
+          accelerator: `${mod}+N`,
+          click: () => this.send('new'),
+        },
+        {
+          label: 'Open…',
+          accelerator: `${mod}+O`,
+          click: () => this.send('open'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Save',
+          accelerator: `${mod}+S`,
+          click: () => this.send('save'),
+        },
+        {
+          label: 'Save As…',
+          accelerator: `Shift+${mod}+S`,
+          click: () => this.send('save-as'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Close',
+          accelerator: `${mod}+W`,
+          click: () => this.mainWindow.close(),
+        },
+      ],
+    };
   }
 
   buildMenu(): Menu {
@@ -94,8 +157,20 @@ export default class MenuBuilder {
     const subMenuEdit: DarwinMenuItemConstructorOptions = {
       label: 'Edit',
       submenu: [
-        { label: 'Undo', accelerator: 'Command+Z', selector: 'undo:' },
-        { label: 'Redo', accelerator: 'Shift+Command+Z', selector: 'redo:' },
+        // Routed to the renderer rather than the native `undo:` selector,
+        // which only ever reached text fields and left canvas edits
+        // (add / delete / connect / clear) with no undo at all. The renderer
+        // falls back to text-field undo when a field has focus.
+        {
+          label: 'Undo',
+          accelerator: 'Command+Z',
+          click: () => this.send('undo'),
+        },
+        {
+          label: 'Redo',
+          accelerator: 'Shift+Command+Z',
+          click: () => this.send('redo'),
+        },
         { type: 'separator' },
         { label: 'Cut', accelerator: 'Command+X', selector: 'cut:' },
         { label: 'Copy', accelerator: 'Command+C', selector: 'copy:' },
@@ -155,35 +230,45 @@ export default class MenuBuilder {
         {
           label: 'Documentation',
           click() {
-            shell.openExternal('https://github.com/rustrunner/rustrunner');
+            shell.openExternal(REPO_URL);
           },
         },
         {
           label: 'Report Issue',
           click() {
-            shell.openExternal('https://github.com/rustrunner/rustrunner/issues');
+            shell.openExternal(`${REPO_URL}/issues`);
           },
         },
       ],
     };
 
-    return [subMenuAbout, subMenuEdit, subMenuView, subMenuWindow, subMenuHelp];
+    return [
+      subMenuAbout,
+      this.buildFileSubmenu(true),
+      subMenuEdit,
+      subMenuView,
+      subMenuWindow,
+      subMenuHelp,
+    ];
   }
 
   buildDefaultTemplate(): MenuItemConstructorOptions[] {
     return [
+      this.buildFileSubmenu(false),
       {
-        label: '&File',
+        label: '&Edit',
         submenu: [
-          { label: '&New', accelerator: 'Ctrl+N' },
-          { label: '&Open', accelerator: 'Ctrl+O' },
-          { label: '&Save', accelerator: 'Ctrl+S' },
-          { type: 'separator' },
+          { label: '&Undo', accelerator: 'Ctrl+Z', click: () => this.send('undo') },
           {
-            label: '&Close',
-            accelerator: 'Ctrl+W',
-            click: () => this.mainWindow.close(),
+            label: '&Redo',
+            accelerator: 'Shift+Ctrl+Z',
+            click: () => this.send('redo'),
           },
+          { type: 'separator' },
+          { role: 'cut' },
+          { role: 'copy' },
+          { role: 'paste' },
+          { role: 'selectAll' },
         ],
       },
       {
@@ -222,7 +307,13 @@ export default class MenuBuilder {
           {
             label: 'Documentation',
             click() {
-              shell.openExternal('https://github.com/rustrunner/rustrunner');
+              shell.openExternal(REPO_URL);
+            },
+          },
+          {
+            label: 'Report Issue',
+            click() {
+              shell.openExternal(`${REPO_URL}/issues`);
             },
           },
         ],

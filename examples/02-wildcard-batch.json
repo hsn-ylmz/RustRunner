@@ -1,0 +1,49 @@
+{
+  "nodes": [
+    {
+      "id": "node_1",
+      "position": { "x": 260, "y": 110 },
+      "data": {
+        "label": "normalize",
+        "tool": "bash",
+        "command": "mkdir -p out && tr 'a-z' 'A-Z' < {input} > {output}",
+        "input": "data/{sample}.txt",
+        "output": "out/{sample}.upper",
+        "threads": 1,
+        "color": "#a8e6cf"
+      },
+      "type": "custom"
+    },
+    {
+      "id": "node_2",
+      "position": { "x": 260, "y": 330 },
+      "data": {
+        "label": "count",
+        "tool": "bash",
+        "command": "wc -l < {input} > {output}",
+        "input": "out/{sample}.upper",
+        "output": "out/{sample}.count",
+        "threads": 2,
+        "color": "#88c5f7"
+      },
+      "type": "custom"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1-2",
+      "source": "node_1",
+      "target": "node_2",
+      "animated": true
+    }
+  ],
+  "wildcardFiles": {
+    "node_1": ["data/s1.txt", "data/s2.txt", "data/s3.txt"],
+    "node_2": ["data/s1.txt", "data/s2.txt", "data/s3.txt"]
+  },
+  "metadata": {
+    "name": "Wildcard Batch",
+    "version": "1.1.0",
+    "createdAt": "2026-08-08T00:00:00.000Z"
+  }
+}

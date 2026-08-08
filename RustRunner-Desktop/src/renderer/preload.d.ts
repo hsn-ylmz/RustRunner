@@ -11,8 +11,21 @@ interface WorkflowData {
     output: string[];
     previous: string[];
     next: string[];
+    threads?: number;
+    /**
+     * Per-step wildcard mappings (wildcard name -> concrete files). snake_case
+     * on purpose: this is serialized straight to YAML and read by the Rust
+     * `Step::wildcard_files` field, which load_workflow() expands.
+     */
+    wildcard_files?: Record<string, string[]>;
   }>;
 }
+
+/** Menu selections forwarded from the main process over 'menu-action'. */
+export type MenuAction = 'new' | 'open' | 'save' | 'save-as' | 'undo' | 'redo';
+
+/** How a run ended, so the renderer can style a user-stop distinctly. */
+export type WorkflowOutcome = 'success' | 'failed' | 'stopped';
 
 /**
  * Payloads pushed from the main process over the 'update-status' channel.
@@ -51,11 +64,33 @@ interface ElectronAPI {
     runWorkflow(workflowData: WorkflowData, dryRun?: boolean, workingDir?: string): void;
     pauseWorkflow(): void;
     resumeWorkflow(): void;
+    stopWorkflow(): void;
     selectDirectory(): Promise<string | null>;
     selectFiles(): Promise<string[] | null>;
-    onWorkflowOutput(callback: (output: string) => void): void;
-    onWorkflowComplete(callback: (success: boolean, message: string) => void): void;
-    onWorkflowError(callback: (error: string) => void): void;
+
+    // Workflow persistence. filePath = null prompts for a location;
+    // resolves to the path written, or null if the user cancelled.
+    saveWorkflow(
+      contents: string,
+      filePath: string | null,
+      suggestedName: string
+    ): Promise<string | null>;
+    openWorkflow(): Promise<{ path: string; contents: string } | null>;
+    confirmDiscard(message: string): Promise<boolean>;
+    setDirty(dirty: boolean): void;
+
+    // Event listeners. All return an unsubscribe function so React effects
+    // can clean up on unmount.
+    onWorkflowOutput(callback: (output: string) => void): () => void;
+    onWorkflowComplete(
+      callback: (
+        success: boolean,
+        message: string,
+        outcome?: WorkflowOutcome
+      ) => void
+    ): () => void;
+    onWorkflowError(callback: (error: string) => void): () => void;
+    onMenuAction(callback: (action: MenuAction) => void): () => void;
 
     // Auto-update API. Returns an unsubscribe function so React effects
     // can clean up the listener on unmount.

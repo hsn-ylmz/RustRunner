@@ -19,7 +19,30 @@ interface WorkflowData {
     output: string[];
     previous: string[];
     next: string[];
+    threads?: number;
+    /** Per-step wildcard mappings; serialized straight into the workflow YAML. */
+    wildcard_files?: Record<string, string[]>;
   }>;
+}
+
+/** Menu selections forwarded from the main process. */
+type MenuAction = 'new' | 'open' | 'save' | 'save-as' | 'undo' | 'redo';
+
+/**
+ * Subscribes to `channel` and returns an unsubscribe function.
+ *
+ * Every event-style API below goes through this so React effects can always
+ * clean up — previously onWorkflowOutput/Complete/Error returned void, leaving
+ * listeners stacked on every remount.
+ */
+function subscribe(
+  channel: string,
+  handler: (...args: any[]) => void
+): () => void {
+  const subscription = (_event: IpcRendererEvent, ...args: any[]) =>
+    handler(...args);
+  ipcRenderer.on(channel, subscription);
+  return () => ipcRenderer.removeListener(channel, subscription);
 }
 
 // API exposed to renderer
@@ -54,6 +77,10 @@ const electronHandler = {
       ipcRenderer.send('resume-workflow');
     },
 
+    stopWorkflow() {
+      ipcRenderer.send('stop-workflow');
+    },
+
     // Directory selection
     selectDirectory(): Promise<string | null> {
       return ipcRenderer.invoke('select-directory');
@@ -64,19 +91,49 @@ const electronHandler = {
       return ipcRenderer.invoke('select-files');
     },
 
-    // Event listeners
-    onWorkflowOutput(callback: (output: string) => void) {
-      ipcRenderer.on('workflow-output', (_event, output) => callback(output));
+    // Workflow file persistence. Pass filePath = null to prompt for a
+    // location; resolves to the path actually written, or null if cancelled.
+    saveWorkflow(
+      contents: string,
+      filePath: string | null,
+      suggestedName: string
+    ): Promise<string | null> {
+      return ipcRenderer.invoke('save-workflow', contents, filePath, suggestedName);
     },
 
-    onWorkflowComplete(callback: (success: boolean, message: string) => void) {
-      ipcRenderer.on('workflow-complete', (_event, success, message) =>
-        callback(success, message)
-      );
+    openWorkflow(): Promise<{ path: string; contents: string } | null> {
+      return ipcRenderer.invoke('open-workflow');
+    },
+
+    confirmDiscard(message: string): Promise<boolean> {
+      return ipcRenderer.invoke('confirm-discard', message);
+    },
+
+    setDirty(dirty: boolean) {
+      ipcRenderer.send('set-dirty', dirty);
+    },
+
+    // Event listeners. All return an unsubscribe function.
+    onWorkflowOutput(callback: (output: string) => void) {
+      return subscribe('workflow-output', callback);
+    },
+
+    onWorkflowComplete(
+      callback: (
+        success: boolean,
+        message: string,
+        outcome?: 'success' | 'failed' | 'stopped'
+      ) => void
+    ) {
+      return subscribe('workflow-complete', callback);
     },
 
     onWorkflowError(callback: (error: string) => void) {
-      ipcRenderer.on('workflow-error', (_event, error) => callback(error));
+      return subscribe('workflow-error', callback);
+    },
+
+    onMenuAction(callback: (action: MenuAction) => void) {
+      return subscribe('menu-action', callback);
     },
 
     // Auto-update
@@ -84,10 +141,7 @@ const electronHandler = {
     // It's typed as `unknown` here so the preload stays a thin pipe; the
     // renderer narrows via the type defined in preload.d.ts.
     onUpdateStatus(callback: (payload: unknown) => void) {
-      const subscription = (_event: IpcRendererEvent, payload: unknown) =>
-        callback(payload);
-      ipcRenderer.on('update-status', subscription);
-      return () => ipcRenderer.removeListener('update-status', subscription);
+      return subscribe('update-status', callback);
     },
 
     installUpdate() {

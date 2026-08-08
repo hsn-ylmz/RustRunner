@@ -1,0 +1,66 @@
+{
+  "nodes": [
+    {
+      "id": "node_1",
+      "position": { "x": 260, "y": 90 },
+      "data": {
+        "label": "prepare",
+        "tool": "bash",
+        "command": "mkdir -p out && printf 'alpha\\nbeta\\ngamma\\n' > {output}",
+        "input": "",
+        "output": "out/greeting.txt",
+        "threads": 1,
+        "color": "#a8e6cf"
+      },
+      "type": "custom"
+    },
+    {
+      "id": "node_2",
+      "position": { "x": 260, "y": 290 },
+      "data": {
+        "label": "shout",
+        "tool": "bash",
+        "command": "tr 'a-z' 'A-Z' < {input} > {output}",
+        "input": "out/greeting.txt",
+        "output": "out/greeting.upper.txt",
+        "threads": 1,
+        "color": "#88c5f7"
+      },
+      "type": "custom"
+    },
+    {
+      "id": "node_3",
+      "position": { "x": 260, "y": 490 },
+      "data": {
+        "label": "report",
+        "tool": "bash",
+        "command": "wc -l < {input} > {output} && echo \"lines: $(cat {output})\"",
+        "input": "out/greeting.upper.txt",
+        "output": "out/report.txt",
+        "threads": 1,
+        "color": "#d4a5f7"
+      },
+      "type": "custom"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1-2",
+      "source": "node_1",
+      "target": "node_2",
+      "animated": true
+    },
+    {
+      "id": "e2-3",
+      "source": "node_2",
+      "target": "node_3",
+      "animated": true
+    }
+  ],
+  "wildcardFiles": {},
+  "metadata": {
+    "name": "Basic Chain",
+    "version": "1.1.0",
+    "createdAt": "2026-08-08T00:00:00.000Z"
+  }
+}
