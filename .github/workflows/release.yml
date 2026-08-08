@@ -1,0 +1,96 @@
+name: Release
+
+# Fires on a version tag, e.g. `git tag v0.11.1 && git push origin v0.11.1`.
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Needed for electron-builder to create/update the GitHub release.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Keep other platforms going if one leg fails, so a partial draft is
+      # still inspectable rather than losing everything.
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-14
+            rust_target: aarch64-apple-darwin
+            builder_args: --mac --arm64
+          - name: macOS x64
+            os: macos-13
+            rust_target: x86_64-apple-darwin
+            builder_args: --mac --x64
+          - name: Windows x64
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            builder_args: --win --x64
+          - name: Linux x64
+            os: ubuntu-latest
+            rust_target: x86_64-unknown-linux-musl
+            builder_args: --linux --x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: RustRunner
+          key: ${{ matrix.rust_target }}
+
+      # musl is a cross-compile even on x86_64 Linux and needs its own linker.
+      - name: Install musl toolchain
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      # afterPack.js copies the engine from
+      # RustRunner/target/<triple>/release/, so the target must be explicit —
+      # a plain `cargo build --release` would not satisfy it.
+      - name: Build engine
+        working-directory: RustRunner
+        env:
+          # .cargo/config.toml names the musl linker by its full triple, which
+          # is how the cross toolchains install it locally. Ubuntu's musl-tools
+          # package installs it as plain `musl-gcc`, so override it here.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: cargo build --release --target ${{ matrix.rust_target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: RustRunner-Desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: RustRunner-Desktop
+        run: npm ci
+
+      - name: Build renderer and main process
+        working-directory: RustRunner-Desktop
+        run: npm run build
+
+      # The package:* scripts pass `--publish never`, so electron-builder is
+      # invoked directly here in order to publish. Artifacts land on a draft
+      # release (build.publish[0].releaseType) that you publish by hand once
+      # every platform has uploaded.
+      - name: Package and publish
+        working-directory: RustRunner-Desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Builds are unsigned; without this electron-builder tries to
+          # discover a signing identity and fails on the macOS runners.
+          # Quoted: Actions requires env values to be strings, and an unquoted
+          # false parses as a YAML boolean.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder ${{ matrix.builder_args }} --publish always

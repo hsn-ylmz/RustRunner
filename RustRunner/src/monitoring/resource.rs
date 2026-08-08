@@ -74,9 +74,7 @@ impl ResourceMonitor {
         let now = Instant::now();
 
         // Create refresh kind for CPU and memory
-        let refresh_kind = ProcessRefreshKind::new()
-            .with_cpu()
-            .with_memory();
+        let refresh_kind = ProcessRefreshKind::new().with_cpu().with_memory();
 
         // First call: warmup
         if !self.warmup_done {
@@ -183,8 +181,7 @@ mod tests {
 
     #[test]
     fn test_monitor_with_min_interval() {
-        let mut monitor = ResourceMonitor::new()
-            .with_min_interval(Duration::from_millis(200));
+        let mut monitor = ResourceMonitor::new().with_min_interval(Duration::from_millis(200));
 
         // First sample is warmup
         monitor.sample();

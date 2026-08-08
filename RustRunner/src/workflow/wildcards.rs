@@ -5,9 +5,9 @@
 //! - Expands `{sample}` patterns into concrete file paths
 //! - Generates multiple steps from one wildcard step
 
+use log::{debug, info};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use log::{debug, info};
 
 use crate::workflow::Workflow;
 
@@ -268,7 +268,10 @@ pub fn expand_workflow_wildcards(
     }
 
     workflow.steps = expanded_steps;
-    info!("Wildcard expansion complete: {} total steps", workflow.steps.len());
+    info!(
+        "Wildcard expansion complete: {} total steps",
+        workflow.steps.len()
+    );
 
     Ok(())
 }

@@ -15,15 +15,15 @@ use std::process::Command;
 
 use log::{debug, error, warn};
 
-use crate::environment::conda::{MICROMAMBA_PATH, MAMBA_ROOT_PREFIX};
+use crate::environment::conda::{MAMBA_ROOT_PREFIX, MICROMAMBA_PATH};
 use crate::workflow::Step;
 
 /// Tools available in standard system PATH that don't require conda.
 const SYSTEM_TOOLS: &[&str] = &[
     "bash", "sh", "echo", "cat", "cp", "mv", "rm", "mkdir", "sleep", "touch", "ls", "grep", "sed",
-    "awk", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "tee", "curl", "wget", "gzip", 
-    "gunzip", "tar", "zip", "unzip", "bc", "date", "find", "xargs", "diff", "comm", "paste",
-    "rev", "fold", "printf", "test", "true", "false",
+    "awk", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "tee", "curl", "wget", "gzip",
+    "gunzip", "tar", "zip", "unzip", "bc", "date", "find", "xargs", "diff", "comm", "paste", "rev",
+    "fold", "printf", "test", "true", "false",
 ];
 
 /// Executes a single workflow step.
@@ -65,9 +65,12 @@ pub fn execute_step(
     // Create output directories
     ensure_output_directories(&output_files, working_dir)?;
 
-    // Resolve placeholders
-    let inputs_str = input_files.join(" ");
-    let outputs_str = output_files.join(" ");
+    // Resolve placeholders. Each file is shell-quoted individually so paths
+    // containing spaces or shell metacharacters (e.g. a filename picked from
+    // disk like `my sample; rm -rf ~.fastq`) are passed as literal arguments
+    // rather than being interpreted by bash.
+    let inputs_str = shell_join(&input_files);
+    let outputs_str = shell_join(&output_files);
 
     let command_text = step
         .command
@@ -122,6 +125,24 @@ pub fn execute_step(
     }
 }
 
+/// Quotes a single string for safe use as one POSIX shell word.
+///
+/// Wraps the value in single quotes and escapes any embedded single quote as
+/// `'\''`, which is the standard way to make an arbitrary string a single
+/// shell argument.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Shell-quotes each file and joins them with spaces for command substitution.
+fn shell_join(files: &[String]) -> String {
+    files
+        .iter()
+        .map(|f| shell_quote(f))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Parses comma-separated file strings into a vector.
 fn parse_file_list(files: &[String]) -> Vec<String> {
     files
@@ -161,10 +182,27 @@ fn create_execution_script(
     step_id: &str,
     command_text: &str,
 ) -> Result<PathBuf, Box<dyn Error + Send + Sync>> {
-    let script_dir = std::env::temp_dir().join("rustrunner_scripts");
+    // Scope the script directory to this process so two concurrent runs (e.g.
+    // two app windows) can't collide on a fixed path and delete or overwrite
+    // each other's scripts mid-execution.
+    let script_dir =
+        std::env::temp_dir().join(format!("rustrunner_scripts_{}", std::process::id()));
     fs::create_dir_all(&script_dir)?;
 
-    let script_path = script_dir.join(format!("step_{}.sh", step_id));
+    // Sanitize the step id so it can't escape the script directory via `/` or
+    // `..` (path traversal) when used as a filename.
+    let safe_id: String = step_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    let script_path = script_dir.join(format!("step_{}.sh", safe_id));
     let mut file = File::create(&script_path)?;
 
     writeln!(file, "#!/bin/bash")?;
@@ -218,7 +256,11 @@ fn execute_with_conda(
 
     let mut cmd = Command::new(&*MICROMAMBA_PATH);
     cmd.env("MAMBA_ROOT_PREFIX", &*MAMBA_ROOT_PREFIX);
-    cmd.arg("run").arg("-n").arg(env_name).arg("bash").arg(script_path);
+    cmd.arg("run")
+        .arg("-n")
+        .arg(env_name)
+        .arg("bash")
+        .arg(script_path);
 
     if let Some(dir) = working_dir {
         cmd.current_dir(dir);
@@ -241,6 +283,49 @@ mod tests {
         let input = vec!["file1.txt, file2.txt".to_string()];
         let result = parse_file_list(&input);
         assert_eq!(result, vec!["file1.txt", "file2.txt"]);
+    }
+
+    #[test]
+    fn test_shell_quote_plain() {
+        assert_eq!(shell_quote("file.txt"), "'file.txt'");
+    }
+
+    #[test]
+    fn test_shell_quote_spaces_and_metachars() {
+        // Spaces and shell metacharacters must stay inside one quoted word.
+        assert_eq!(shell_quote("my file; rm -rf ~"), "'my file; rm -rf ~'");
+        assert_eq!(shell_quote("$(whoami).txt"), "'$(whoami).txt'");
+    }
+
+    #[test]
+    fn test_shell_quote_embedded_single_quote() {
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+    }
+
+    #[test]
+    fn test_shell_join_quotes_each_file() {
+        let files = vec!["a b.txt".to_string(), "c.txt".to_string()];
+        assert_eq!(shell_join(&files), "'a b.txt' 'c.txt'");
+    }
+
+    #[test]
+    fn test_create_execution_script_sanitizes_step_id() {
+        // A step id with path separators must not escape the script directory.
+        let script = create_execution_script("../evil/step", "echo hi").unwrap();
+        let parent = script.parent().unwrap();
+        assert!(parent
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("rustrunner_scripts_"));
+        // Every non-alphanumeric char (including '.') is replaced with '_',
+        // so "../evil/step" -> "___evil_step".
+        assert_eq!(
+            script.file_name().unwrap().to_str().unwrap(),
+            "step____evil_step.sh"
+        );
+        std::fs::remove_file(script).unwrap();
     }
 
     #[test]
@@ -285,10 +370,7 @@ mod tests {
 
     #[test]
     fn test_parse_file_list_multiple_vec_entries() {
-        let input = vec![
-            "file1.txt".to_string(),
-            "file2.txt,file3.txt".to_string(),
-        ];
+        let input = vec!["file1.txt".to_string(), "file2.txt,file3.txt".to_string()];
         let result = parse_file_list(&input);
 
         assert_eq!(result.len(), 3);
@@ -349,7 +431,7 @@ mod tests {
 
         let result = ensure_output_directories(
             &vec![nested_file.to_string()],
-            &Some(temp_dir.path().to_path_buf())
+            &Some(temp_dir.path().to_path_buf()),
         );
 
         assert!(result.is_ok());
@@ -358,10 +440,7 @@ mod tests {
 
     #[test]
     fn test_ensure_output_directories_empty() {
-        let result = ensure_output_directories(
-            &vec!["".to_string()],
-            &None
-        );
+        let result = ensure_output_directories(&vec!["".to_string()], &None);
 
         assert!(result.is_ok());
     }
@@ -373,10 +452,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let output = temp_dir.path().join("newdir/output.txt");
 
-        let result = ensure_output_directories(
-            &vec![output.to_str().unwrap().to_string()],
-            &None
-        );
+        let result = ensure_output_directories(&vec![output.to_str().unwrap().to_string()], &None);
 
         assert!(result.is_ok());
         assert!(temp_dir.path().join("newdir").exists());
@@ -389,8 +465,12 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let output_file = temp_dir.path().join("out.txt");
 
-        let step = Step::new("test_exec", "bash", &format!("echo hello > {}", output_file.display()))
-            .with_output(output_file.to_str().unwrap());
+        let step = Step::new(
+            "test_exec",
+            "bash",
+            &format!("echo hello > {}", output_file.display()),
+        )
+        .with_output(output_file.to_str().unwrap());
 
         let env_map = HashMap::new();
         let result = execute_step(&step, &env_map, &None);

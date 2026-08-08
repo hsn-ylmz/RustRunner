@@ -85,7 +85,10 @@ mod tests {
         let parts: Vec<&str> = VERSION.split('.').collect();
         assert!(parts.len() >= 2, "Version should have at least major.minor");
         for part in parts {
-            assert!(part.parse::<u32>().is_ok(), "Version components should be numeric");
+            assert!(
+                part.parse::<u32>().is_ok(),
+                "Version components should be numeric"
+            );
         }
     }
 }

@@ -11,7 +11,7 @@ use super::wildcards::expand_workflow_wildcards;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use log::{debug, info};
+use log::{debug, info, warn};
 use num_cpus;
 
 use super::model::{Step, Workflow};
@@ -190,13 +190,26 @@ impl ExecutionPlanner {
             if self.current_threads_used + threads_to_allocate + step_threads
                 > self.max_system_threads
             {
-                debug!(
-                    "Step '{}' needs {} threads but only {} available",
-                    step.id,
-                    step_threads,
-                    self.max_system_threads - self.current_threads_used - threads_to_allocate
+                // If nothing is running or already queued this round, allow the
+                // step to run alone even though it exceeds the thread budget.
+                // Otherwise a step whose `threads` is larger than the whole
+                // system could never be scheduled and the engine would spin
+                // forever with no work in flight.
+                let nothing_in_flight = self.current_threads_used == 0 && threads_to_allocate == 0;
+                if !nothing_in_flight {
+                    debug!(
+                        "Step '{}' needs {} threads but only {} available",
+                        step.id,
+                        step_threads,
+                        self.max_system_threads
+                            .saturating_sub(self.current_threads_used + threads_to_allocate)
+                    );
+                    continue;
+                }
+                warn!(
+                    "Step '{}' requests {} threads, more than the {} available - running it alone",
+                    step.id, step_threads, self.max_system_threads
                 );
-                continue;
             }
 
             ready_steps.push(step.clone());
@@ -287,6 +300,11 @@ impl ExecutionPlanner {
     pub fn is_dry_run(&self) -> bool {
         self.dry_run
     }
+
+    #[cfg(test)]
+    fn set_max_system_threads(&mut self, threads: usize) {
+        self.max_system_threads = threads;
+    }
 }
 
 #[cfg(test)]
@@ -295,16 +313,17 @@ mod tests {
 
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new();
-        workflow.add_step(
-            Step::new("step1", "bash", "echo 1")
-                .with_output("out1.txt")
-        ).unwrap();
-        workflow.add_step(
-            Step::new("step2", "bash", "echo 2")
-                .with_input("out1.txt")
-                .with_output("out2.txt")
-                .depends_on("step1")
-        ).unwrap();
+        workflow
+            .add_step(Step::new("step1", "bash", "echo 1").with_output("out1.txt"))
+            .unwrap();
+        workflow
+            .add_step(
+                Step::new("step2", "bash", "echo 2")
+                    .with_input("out1.txt")
+                    .with_output("out2.txt")
+                    .depends_on("step1"),
+            )
+            .unwrap();
 
         if let Some(s1) = workflow.get_step_mut("step1") {
             s1.next.push("step2".to_string());
@@ -340,6 +359,47 @@ mod tests {
         // Only step1 should be ready (step2 depends on step1)
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].id, "step1");
+    }
+
+    #[test]
+    fn test_over_threaded_step_runs_alone_not_starved() {
+        // A step requesting more threads than the system has must still be
+        // schedulable when nothing else is running, otherwise the engine would
+        // spin forever with no work in flight.
+        let mut workflow = Workflow::new();
+        let mut big = Step::new("big", "bash", "echo hi");
+        big.threads = 999;
+        workflow.add_step(big).unwrap();
+
+        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        planner.set_max_system_threads(4);
+
+        let ready = planner.get_ready_steps();
+        assert_eq!(ready.len(), 1, "over-threaded step should run alone");
+        assert_eq!(ready[0].id, "big");
+    }
+
+    #[test]
+    fn test_over_threaded_step_waits_when_something_running() {
+        // The same over-budget step must NOT be co-scheduled alongside other
+        // in-flight work - it only runs alone.
+        let mut workflow = Workflow::new();
+        workflow
+            .add_step(Step::new("small", "bash", "echo a"))
+            .unwrap();
+        let mut big = Step::new("big", "bash", "echo b");
+        big.threads = 999;
+        workflow.add_step(big).unwrap();
+
+        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        planner.set_max_system_threads(4);
+
+        planner.mark_step_running("small");
+        let ready = planner.get_ready_steps();
+        assert!(
+            ready.iter().all(|s| s.id != "big"),
+            "over-threaded step must wait while other steps run"
+        );
     }
 
     #[test]

@@ -37,10 +37,17 @@ impl std::fmt::Display for ValidationError {
                 write!(f, "Step '{}' references unknown step '{}'", step, reference)
             }
             Self::CyclicDependency => {
-                write!(f, "Workflow contains cyclic dependencies (steps depend on each other in a loop)")
+                write!(
+                    f,
+                    "Workflow contains cyclic dependencies (steps depend on each other in a loop)"
+                )
             }
             Self::UnusedPlaceholder { step, placeholder } => {
-                write!(f, "Step '{}': command uses {} but no file specified", step, placeholder)
+                write!(
+                    f,
+                    "Step '{}': command uses {} but no file specified",
+                    step, placeholder
+                )
             }
         }
     }
@@ -54,6 +61,16 @@ fn validate_step(step: &Step) -> Vec<ValidationError> {
     if step.id.trim().is_empty() {
         errors.push(ValidationError::EmptyStepId);
         return errors; // Can't validate further without ID
+    }
+
+    // Warn about step ids that aren't clean identifiers. These are sanitized
+    // when used as a temp-script filename, but a `/` or `..` in an id signals a
+    // likely mistake worth surfacing.
+    if step.id.contains('/') || step.id.contains('\\') || step.id.contains("..") {
+        warn!(
+            "Step '{}': id contains path separators; it will be sanitized for file operations",
+            step.id
+        );
     }
 
     // Check tool
@@ -339,7 +356,9 @@ mod tests {
         let errors = validate_step(&step);
 
         assert!(!errors.is_empty());
-        assert!(errors.iter().any(|e| matches!(e, ValidationError::EmptyTool(_))));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyTool(_))));
     }
 
     #[test]
@@ -348,7 +367,9 @@ mod tests {
         let errors = validate_step(&step);
 
         assert!(!errors.is_empty());
-        assert!(errors.iter().any(|e| matches!(e, ValidationError::EmptyCommand(_))));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyCommand(_))));
     }
 
     #[test]
@@ -357,7 +378,9 @@ mod tests {
         let errors = validate_step(&step);
 
         assert!(!errors.is_empty());
-        assert!(errors.iter().any(|e| matches!(e, ValidationError::EmptyStepId)));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, ValidationError::EmptyStepId)));
     }
 
     #[test]
@@ -382,7 +405,9 @@ mod tests {
     #[test]
     fn test_quick_validate_missing_tool() {
         let mut workflow = Workflow::new();
-        workflow.add_step(Step::new("test", "", "echo test")).unwrap();
+        workflow
+            .add_step(Step::new("test", "", "echo test"))
+            .unwrap();
 
         let errors = quick_validate(&workflow);
         assert!(errors.iter().any(|e| e.contains("missing tool")));
@@ -391,9 +416,9 @@ mod tests {
     #[test]
     fn test_quick_validate_placeholder_mismatch_input() {
         let mut workflow = Workflow::new();
-        workflow.add_step(
-            Step::new("test", "bash", "cat {input}")
-        ).unwrap();
+        workflow
+            .add_step(Step::new("test", "bash", "cat {input}"))
+            .unwrap();
 
         let errors = quick_validate(&workflow);
         assert!(errors.iter().any(|e| e.contains("no input specified")));
@@ -402,9 +427,9 @@ mod tests {
     #[test]
     fn test_quick_validate_placeholder_mismatch_output() {
         let mut workflow = Workflow::new();
-        workflow.add_step(
-            Step::new("test", "bash", "echo hello > {output}")
-        ).unwrap();
+        workflow
+            .add_step(Step::new("test", "bash", "echo hello > {output}"))
+            .unwrap();
 
         let errors = quick_validate(&workflow);
         assert!(errors.iter().any(|e| e.contains("no output specified")));
@@ -413,11 +438,13 @@ mod tests {
     #[test]
     fn test_quick_validate_valid() {
         let mut workflow = Workflow::new();
-        workflow.add_step(
-            Step::new("test", "bash", "cat {input} > {output}")
-                .with_input("in.txt")
-                .with_output("out.txt")
-        ).unwrap();
+        workflow
+            .add_step(
+                Step::new("test", "bash", "cat {input} > {output}")
+                    .with_input("in.txt")
+                    .with_output("out.txt"),
+            )
+            .unwrap();
 
         let errors = quick_validate(&workflow);
         assert!(errors.is_empty());
@@ -426,9 +453,9 @@ mod tests {
     #[test]
     fn test_quick_validate_unknown_reference() {
         let mut workflow = Workflow::new();
-        workflow.add_step(
-            Step::new("test", "bash", "echo test").depends_on("nonexistent")
-        ).unwrap();
+        workflow
+            .add_step(Step::new("test", "bash", "echo test").depends_on("nonexistent"))
+            .unwrap();
 
         let errors = quick_validate(&workflow);
         assert!(errors.iter().any(|e| e.contains("unknown step")));
@@ -469,7 +496,7 @@ mod tests {
     #[test]
     fn test_validate_invalid_reference() {
         let mut workflow = Workflow::from_steps(vec![
-            Step::new("step1", "bash", "echo test").depends_on("ghost"),
+            Step::new("step1", "bash", "echo test").depends_on("ghost")
         ]);
 
         let result = validate_workflow(&mut workflow);

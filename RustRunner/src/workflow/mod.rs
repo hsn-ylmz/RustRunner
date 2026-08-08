@@ -22,8 +22,5 @@ pub use parser::load_workflow;
 pub use planner::ExecutionPlanner;
 pub use state::WorkflowState;
 pub use wildcards::{
-    expand_workflow_wildcards,
-    extract_wildcard_values,
-    generate_pattern,
-    has_wildcards
+    expand_workflow_wildcards, extract_wildcard_values, generate_pattern, has_wildcards,
 };

@@ -1,7 +1,15 @@
-[target.x86_64-unknown-linux-musl]
-linker = "x86_64-linux-musl-gcc"
+# Cross-linkers for the static musl targets used by release builds.
+#
+# Note there is deliberately no entry for x86_64-unknown-linux-gnu: that is the
+# native target on Linux and must use the default system linker. Pointing it at
+# the musl cross-linker broke every plain `cargo build` on Linux, which went
+# unnoticed because the maintainer builds on macOS.
+#
+# CI overrides these via CARGO_TARGET_<TRIPLE>_LINKER, since Ubuntu's
+# musl-tools package installs the linker as `musl-gcc` rather than under its
+# full triple name.
 
-[target.x86_64-unknown-linux-gnu]
+[target.x86_64-unknown-linux-musl]
 linker = "x86_64-linux-musl-gcc"
 
 [target.aarch64-unknown-linux-musl]

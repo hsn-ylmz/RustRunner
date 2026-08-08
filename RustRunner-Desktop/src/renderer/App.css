@@ -83,6 +83,15 @@
   color: #333;
 }
 
+/* Unsaved-changes dot next to the workflow name. */
+.dirty-marker {
+  margin-left: 6px;
+  color: var(--red-dark);
+  font-size: 18px;
+  line-height: 1;
+  vertical-align: middle;
+}
+
 .working-directory {
   font-size: 11px;
   color: #666;
@@ -156,6 +165,18 @@
   gap: 12px;
 }
 
+/* Live "N / M steps" counter under the execution buttons. */
+.execution-progress {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .execution-button {
   padding: 14px 28px;
   font-size: 16px;
@@ -218,6 +239,16 @@
   background: var(--blue-dark);
 }
 
+/* Stop: neutral dark so it reads as distinct from the red Pause button. */
+.stop-button {
+  background: #4a4a52;
+  color: white;
+}
+
+.stop-button:hover:not(:disabled) {
+  background: #33333a;
+}
+
 @keyframes pulse {
   0%,
   100% {
@@ -259,6 +290,99 @@
   text-align: center;
   font-size: 12px;
   color: #666;
+}
+
+/* -----------------------------------------------------------------------------
+   Live execution status
+   Applied from engine log events while a workflow runs. `pending` is the
+   pre-run state; `idle` (no run yet) carries no styling at all.
+   -------------------------------------------------------------------------- */
+
+.custom-node.node-state-pending {
+  opacity: 0.55;
+}
+
+.custom-node.node-state-running {
+  border-color: var(--blue-dark);
+  box-shadow: 0 0 0 3px rgba(61, 132, 179, 0.35);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.custom-node.node-state-done {
+  border-color: var(--green-dark);
+}
+
+.custom-node.node-state-failed {
+  border-color: var(--red-dark);
+  box-shadow: 0 0 0 3px rgba(179, 61, 92, 0.3);
+}
+
+.node-status-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1;
+  color: white;
+  border: 2px solid white;
+}
+
+.node-status-running {
+  background: var(--blue-dark);
+}
+
+.node-status-done {
+  background: var(--green-dark);
+}
+
+.node-status-failed {
+  background: var(--red-dark);
+}
+
+.node-progress {
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #555;
+  margin-top: 4px;
+}
+
+/* Invalid step id (duplicate or empty after slugification). */
+.custom-node.node-invalid {
+  border-color: #e0a800;
+  border-style: dashed;
+}
+
+.node-invalid-badge {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: bold;
+  line-height: 1;
+  color: #4a3800;
+  background: #ffc107;
+  border: 2px solid white;
+  cursor: help;
+}
+
+/* Reduced-motion users get the ring without the pulse. */
+@media (prefers-reduced-motion: reduce) {
+  .custom-node.node-state-running {
+    animation: none;
+  }
 }
 
 /* Color Picker */
@@ -367,6 +491,14 @@
   color: #666;
   font-style: italic;
   font-family: monospace;
+}
+
+/* Validation message under a property field (e.g. duplicate step id). */
+.property-error {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b33d5c;
 }
 
 /* =============================================================================
@@ -881,6 +1013,25 @@
 
   .node-tool {
     color: #4a5568;
+  }
+
+  /* Node bodies keep their light fill in dark mode, so badges need a
+     dark ring to separate from the canvas rather than a white one. */
+  .node-status-badge,
+  .node-invalid-badge {
+    border-color: #1a1a2e;
+  }
+
+  .node-progress {
+    color: #4a5568;
+  }
+
+  .property-error {
+    color: #ff8fa3;
+  }
+
+  .execution-progress {
+    background: rgba(255, 255, 255, 0.15);
   }
 
   /* Dark mode wildcard styles */

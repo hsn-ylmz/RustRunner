@@ -3,9 +3,10 @@
 # =============================================================================
 
 # Rust
+# Cargo.lock is intentionally tracked: rustrunner ships as a binary, so the
+# lockfile is what makes CI and release builds reproducible.
 /RustRunner/target/
 **/*.rs.bk
-Cargo.lock
 
 # Node
 node_modules/
@@ -42,3 +43,20 @@ Thumbs.db
 *.AppImage
 *.deb
 *.rpm
+
+# Personal notes (not user-facing)
+/ROADMAP.md
+
+# Example workflow outputs
+examples/out/
+
+# Local agent tooling and generated analysis (never published)
+/.claude/
+/CLAUDE.md
+/reports/
+
+# graphify: publish the graph itself, not the machine-local cache or the
+# dated backup snapshots it writes on every update.
+/graphify-out/cache/
+/graphify-out/.graphify_python
+/graphify-out/20*/

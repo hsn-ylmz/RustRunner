@@ -75,6 +75,14 @@ impl WorkflowState {
         Ok(state)
     }
 
+    /// Returns true if a persisted state file exists for the given workflow.
+    ///
+    /// Lets callers distinguish "no prior run" (fresh start, expected) from
+    /// "a state file exists but failed to load" (corrupt - worth a warning).
+    pub fn state_file_exists(workflow_path: &str) -> bool {
+        Path::new(&Self::state_file_path_for(workflow_path)).exists()
+    }
+
     /// Returns the path to the state file.
     fn state_file_path(&self) -> String {
         Self::state_file_path_for(&self.workflow_path)
