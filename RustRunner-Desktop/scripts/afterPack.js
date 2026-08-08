@@ -44,8 +44,11 @@ function getRustTarget(platform, arch) {
   const targets = {
     'darwin-x64': 'x86_64-apple-darwin',
     'darwin-arm64': 'aarch64-apple-darwin',
-    'win32-x64': 'x86_64-pc-windows-gnu',
-    'win32-ia32': 'i686-pc-windows-gnu',
+    // MSVC rather than GNU: it is the default Rust target on Windows and needs
+    // no extra toolchain, so it works out of the box both locally and on the
+    // GitHub windows-latest runner (which ships no mingw).
+    'win32-x64': 'x86_64-pc-windows-msvc',
+    'win32-ia32': 'i686-pc-windows-msvc',
     'linux-x64': 'x86_64-unknown-linux-musl',
     'linux-arm64': 'aarch64-unknown-linux-musl',
   };

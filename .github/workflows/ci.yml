@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust engine
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: RustRunner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: RustRunner
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Test
+        run: cargo test --all --verbose
+
+  desktop:
+    name: Desktop app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: RustRunner-Desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: RustRunner-Desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # webpack builds the renderer with transpileOnly, so type errors only
+      # surface if we typecheck both projects explicitly.
+      - name: Typecheck main process
+        run: npx tsc -p tsconfig.main.json --noEmit
+
+      - name: Typecheck renderer
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Build
+        run: npm run build
+
+  lint:
+    name: Rust lint (advisory)
+    runs-on: ubuntu-latest
+    # Advisory for now: this codebase has never been `cargo fmt`'d and carries
+    # known dead-code warnings, so gating on either would fail for reasons
+    # unrelated to the change under review. Promote to blocking once the
+    # existing backlog is cleared.
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: RustRunner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: RustRunner
+
+      - name: Format check
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets
