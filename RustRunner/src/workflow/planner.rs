@@ -195,8 +195,7 @@ impl ExecutionPlanner {
                 // Otherwise a step whose `threads` is larger than the whole
                 // system could never be scheduled and the engine would spin
                 // forever with no work in flight.
-                let nothing_in_flight =
-                    self.current_threads_used == 0 && threads_to_allocate == 0;
+                let nothing_in_flight = self.current_threads_used == 0 && threads_to_allocate == 0;
                 if !nothing_in_flight {
                     debug!(
                         "Step '{}' needs {} threads but only {} available",
@@ -314,16 +313,17 @@ mod tests {
 
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new();
-        workflow.add_step(
-            Step::new("step1", "bash", "echo 1")
-                .with_output("out1.txt")
-        ).unwrap();
-        workflow.add_step(
-            Step::new("step2", "bash", "echo 2")
-                .with_input("out1.txt")
-                .with_output("out2.txt")
-                .depends_on("step1")
-        ).unwrap();
+        workflow
+            .add_step(Step::new("step1", "bash", "echo 1").with_output("out1.txt"))
+            .unwrap();
+        workflow
+            .add_step(
+                Step::new("step2", "bash", "echo 2")
+                    .with_input("out1.txt")
+                    .with_output("out2.txt")
+                    .depends_on("step1"),
+            )
+            .unwrap();
 
         if let Some(s1) = workflow.get_step_mut("step1") {
             s1.next.push("step2".to_string());
@@ -384,7 +384,9 @@ mod tests {
         // The same over-budget step must NOT be co-scheduled alongside other
         // in-flight work - it only runs alone.
         let mut workflow = Workflow::new();
-        workflow.add_step(Step::new("small", "bash", "echo a")).unwrap();
+        workflow
+            .add_step(Step::new("small", "bash", "echo a"))
+            .unwrap();
         let mut big = Step::new("big", "bash", "echo b");
         big.threads = 999;
         workflow.add_step(big).unwrap();

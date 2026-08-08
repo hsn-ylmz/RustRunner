@@ -10,15 +10,15 @@ use std::fs;
 
 use log::{debug, info, warn};
 
-use super::model::Workflow;
 #[cfg(test)]
 use super::model::Step;
+use super::model::Workflow;
 use super::validator::validate_workflow;
 
 /// Expands wildcard steps in a workflow into concrete steps.
 fn expand_wildcards_in_workflow(workflow: &mut Workflow) -> Result<(), String> {
-    use std::collections::HashMap;
     use crate::workflow::wildcards;
+    use std::collections::HashMap;
 
     // Check if any steps have wildcards
     let has_wildcards = workflow.steps.iter().any(|step| {
@@ -297,8 +297,7 @@ mod tests {
     #[test]
     fn test_derive_dependencies() {
         let mut workflow = Workflow::from_steps(vec![
-            Step::new("step1", "bash", "echo test")
-                .with_output("intermediate.txt"),
+            Step::new("step1", "bash", "echo test").with_output("intermediate.txt"),
             Step::new("step2", "bash", "cat {input}")
                 .with_input("intermediate.txt")
                 .with_output("final.txt"),
@@ -319,10 +318,8 @@ mod tests {
 
     #[test]
     fn test_derive_dependencies_no_matches() {
-        let step1 = Step::new("step1", "bash", "echo test")
-            .with_output("file1.txt");
-        let step2 = Step::new("step2", "bash", "echo test")
-            .with_input("file2.txt");
+        let step1 = Step::new("step1", "bash", "echo test").with_output("file1.txt");
+        let step2 = Step::new("step2", "bash", "echo test").with_input("file2.txt");
 
         let mut workflow = Workflow::from_steps(vec![step1, step2]);
         derive_dependencies_from_files(&mut workflow).unwrap();
@@ -334,8 +331,7 @@ mod tests {
     #[test]
     fn test_derive_dependencies_chain() {
         let mut workflow = Workflow::from_steps(vec![
-            Step::new("step1", "bash", "echo test")
-                .with_output("file_a.txt"),
+            Step::new("step1", "bash", "echo test").with_output("file_a.txt"),
             Step::new("step2", "bash", "cat {input}")
                 .with_input("file_a.txt")
                 .with_output("file_b.txt"),
@@ -384,9 +380,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let workflow_path = temp_dir.path().join("test.yaml");
 
-        let workflow = Workflow::from_steps(vec![
-            Step::new("step1", "bash", "echo test"),
-        ]);
+        let workflow = Workflow::from_steps(vec![Step::new("step1", "bash", "echo test")]);
 
         let result = save_workflow(&workflow, workflow_path.to_str().unwrap());
         assert!(result.is_ok());
@@ -442,9 +436,7 @@ steps:
 
     #[test]
     fn test_expand_wildcards_no_wildcards() {
-        let mut workflow = Workflow::from_steps(vec![
-            Step::new("step1", "bash", "echo test"),
-        ]);
+        let mut workflow = Workflow::from_steps(vec![Step::new("step1", "bash", "echo test")]);
 
         let result = expand_wildcards_in_workflow(&mut workflow);
         assert!(result.is_ok());

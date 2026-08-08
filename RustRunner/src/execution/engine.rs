@@ -7,7 +7,7 @@
 //! - State persistence for crash recovery
 //! - Automatic conda environment setup for tools
 
-use std::collections::{HashMap,HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -30,7 +30,11 @@ const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 const MONITOR_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 
 /// System tools that don't require conda environments
-const SYSTEM_TOOLS: &[&str] = &["bash", "sh", "echo", "cat", "cp", "mv", "rm", "mkdir", "sleep", "curl", "wget", "grep", "awk", "sed", "sort", "uniq", "head", "tail", "wc", "tr", "cut", "bc", "gzip", "gunzip", "tar", "zip", "unzip"];
+const SYSTEM_TOOLS: &[&str] = &[
+    "bash", "sh", "echo", "cat", "cp", "mv", "rm", "mkdir", "sleep", "curl", "wget", "grep", "awk",
+    "sed", "sort", "uniq", "head", "tail", "wc", "tr", "cut", "bc", "gzip", "gunzip", "tar", "zip",
+    "unzip",
+];
 
 /// Workflow execution engine.
 ///
@@ -60,7 +64,7 @@ pub struct Engine {
     dry_run: bool,
     pause_flag_path: Option<String>,
     working_dir: Option<PathBuf>,
-    wildcard_files: Option<HashMap<String, Vec<String>>>
+    wildcard_files: Option<HashMap<String, Vec<String>>>,
 }
 
 impl Engine {
@@ -73,7 +77,7 @@ impl Engine {
             dry_run: false,
             pause_flag_path: None,
             working_dir: None,
-            wildcard_files: None
+            wildcard_files: None,
         }
     }
 
@@ -152,20 +156,14 @@ impl Engine {
             }
         };
 
-
         // Verify completed steps still have outputs
         let steps_to_rerun: Vec<String> = self
             .workflow
             .steps
             .iter()
-            .filter(|step| {
-                state.completed_steps.contains(&step.id) && !step.outputs_exist()
-            })
+            .filter(|step| state.completed_steps.contains(&step.id) && !step.outputs_exist())
             .map(|step| {
-                info!(
-                    "Step '{}' outputs missing - scheduling rerun",
-                    step.id
-                );
+                info!("Step '{}' outputs missing - scheduling rerun", step.id);
                 step.id.clone()
             })
             .collect();
@@ -189,14 +187,14 @@ impl Engine {
                 state.clone(),
                 self.dry_run,
                 self.max_parallel,
-                self.wildcard_files.clone(),  // Pass wildcards
+                self.wildcard_files.clone(), // Pass wildcards
             )?
         } else {
             ExecutionPlanner::new(
                 self.workflow.clone(),
                 self.dry_run,
                 self.max_parallel,
-                self.wildcard_files.clone(),  // Pass wildcards
+                self.wildcard_files.clone(), // Pass wildcards
             )?
         };
 
@@ -342,9 +340,8 @@ impl Engine {
                             warn!("Failed to persist state after step failure: {}", save_err);
                         }
 
-                        run_error = Some(
-                            format!("Workflow failed at step '{}': {}", step_id, e).into(),
-                        );
+                        run_error =
+                            Some(format!("Workflow failed at step '{}': {}", step_id, e).into());
                         break;
                     }
                 }
@@ -417,7 +414,11 @@ impl Engine {
             return Ok(());
         }
 
-        info!("Setting up environments for {} tools: {:?}", conda_tools.len(), conda_tools);
+        info!(
+            "Setting up environments for {} tools: {:?}",
+            conda_tools.len(),
+            conda_tools
+        );
 
         // Load existing env_map
         let mut env_map = ToolEnvMap::load();
@@ -470,16 +471,19 @@ mod tests {
 
     fn create_test_workflow() -> Workflow {
         let mut workflow = Workflow::new();
-        workflow.add_step(
-            Step::new("step1", "bash", "echo 'test1' > output1.txt")
-                .with_output("output1.txt")
-        ).unwrap();
-        workflow.add_step(
-            Step::new("step2", "bash", "cat {input} > output2.txt")
-                .with_input("output1.txt")
-                .with_output("output2.txt")
-                .depends_on("step1")
-        ).unwrap();
+        workflow
+            .add_step(
+                Step::new("step1", "bash", "echo 'test1' > output1.txt").with_output("output1.txt"),
+            )
+            .unwrap();
+        workflow
+            .add_step(
+                Step::new("step2", "bash", "cat {input} > output2.txt")
+                    .with_input("output1.txt")
+                    .with_output("output2.txt")
+                    .depends_on("step1"),
+            )
+            .unwrap();
 
         // Add next reference
         if let Some(step1) = workflow.get_step_mut("step1") {
@@ -540,7 +544,10 @@ mod tests {
         let mut engine = Engine::new(workflow);
 
         let mut wf = HashMap::new();
-        wf.insert("sample".to_string(), vec!["s1.txt".to_string(), "s2.txt".to_string()]);
+        wf.insert(
+            "sample".to_string(),
+            vec!["s1.txt".to_string(), "s2.txt".to_string()],
+        );
         engine.set_wildcard_files(wf.clone());
 
         assert!(engine.wildcard_files.is_some());
@@ -587,7 +594,9 @@ mod tests {
     #[test]
     fn test_engine_default_workflow_path() {
         let mut workflow = Workflow::new();
-        workflow.add_step(Step::new("s1", "bash", "echo hello")).unwrap();
+        workflow
+            .add_step(Step::new("s1", "bash", "echo hello"))
+            .unwrap();
         let mut engine = Engine::new(workflow);
         engine.set_dry_run(true);
 
@@ -600,9 +609,9 @@ mod tests {
     #[test]
     fn test_setup_environments_system_tools_only() {
         let mut workflow = Workflow::new();
-        workflow.add_step(
-            Step::new("bash_step", "bash", "echo test")
-        ).unwrap();
+        workflow
+            .add_step(Step::new("bash_step", "bash", "echo test"))
+            .unwrap();
 
         let engine = Engine::new(workflow);
 

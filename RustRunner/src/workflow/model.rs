@@ -351,7 +351,10 @@ impl Workflow {
 
     /// Returns steps with no dependencies (entry points).
     pub fn root_steps(&self) -> Vec<&Step> {
-        self.steps.iter().filter(|s| s.previous.is_empty()).collect()
+        self.steps
+            .iter()
+            .filter(|s| s.previous.is_empty())
+            .collect()
     }
 
     /// Returns steps with no dependents (exit points).
@@ -440,16 +443,15 @@ mod tests {
         let output_file = temp_dir.path().join("output.txt");
         std::fs::write(&output_file, "test").unwrap();
 
-        let step = Step::new("test", "bash", "echo test")
-            .with_output(output_file.to_str().unwrap());
+        let step =
+            Step::new("test", "bash", "echo test").with_output(output_file.to_str().unwrap());
 
         assert!(step.outputs_exist());
     }
 
     #[test]
     fn test_step_outputs_not_exist() {
-        let step = Step::new("test", "bash", "echo test")
-            .with_output("/nonexistent/path/file.txt");
+        let step = Step::new("test", "bash", "echo test").with_output("/nonexistent/path/file.txt");
 
         assert!(!step.outputs_exist());
     }
@@ -462,9 +464,9 @@ mod tests {
 
     #[test]
     fn test_step_outputs_outdated() {
-        use tempfile::tempdir;
         use std::thread;
         use std::time::Duration;
+        use tempfile::tempdir;
 
         let temp_dir = tempdir().unwrap();
         let input_file = temp_dir.path().join("input.txt");
@@ -492,8 +494,7 @@ mod tests {
 
     #[test]
     fn test_step_should_run_no_outputs() {
-        let step = Step::new("test", "bash", "echo test")
-            .with_output("/nonexistent/file.txt");
+        let step = Step::new("test", "bash", "echo test").with_output("/nonexistent/file.txt");
         assert!(step.should_run(false));
     }
 
@@ -528,7 +529,9 @@ mod tests {
     #[test]
     fn test_workflow_not_empty() {
         let mut workflow = Workflow::new();
-        workflow.add_step(Step::new("test", "bash", "echo test")).unwrap();
+        workflow
+            .add_step(Step::new("test", "bash", "echo test"))
+            .unwrap();
 
         assert!(!workflow.is_empty());
         assert_eq!(workflow.len(), 1);
@@ -537,7 +540,9 @@ mod tests {
     #[test]
     fn test_workflow_get_step_mut() {
         let mut workflow = Workflow::new();
-        workflow.add_step(Step::new("test", "bash", "echo test")).unwrap();
+        workflow
+            .add_step(Step::new("test", "bash", "echo test"))
+            .unwrap();
 
         let step_mut = workflow.get_step_mut("test");
         assert!(step_mut.is_some());
@@ -568,8 +573,12 @@ mod tests {
     #[test]
     fn test_workflow_remove_step() {
         let mut workflow = Workflow::new();
-        workflow.add_step(Step::new("step1", "bash", "echo 1")).unwrap();
-        workflow.add_step(Step::new("step2", "bash", "echo 2")).unwrap();
+        workflow
+            .add_step(Step::new("step1", "bash", "echo 1"))
+            .unwrap();
+        workflow
+            .add_step(Step::new("step2", "bash", "echo 2"))
+            .unwrap();
 
         assert!(workflow.remove_step("step1").is_ok());
         assert_eq!(workflow.len(), 1);
@@ -620,12 +629,10 @@ mod tests {
 
     #[test]
     fn test_step_has_wildcards() {
-        let step = Step::new("test", "bash", "cat {sample}.fastq")
-            .with_input("{sample}.fastq");
+        let step = Step::new("test", "bash", "cat {sample}.fastq").with_input("{sample}.fastq");
         assert!(step.has_wildcards());
 
-        let step2 = Step::new("test2", "bash", "echo hello")
-            .with_input("regular.txt");
+        let step2 = Step::new("test2", "bash", "echo hello").with_input("regular.txt");
         assert!(!step2.has_wildcards());
     }
 

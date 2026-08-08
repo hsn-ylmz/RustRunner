@@ -56,7 +56,9 @@ pub static MICROMAMBA_PATH: Lazy<PathBuf> = Lazy::new(|| {
     // Priority 1: Production environment (next to executable)
     // Check this first to ensure packaged apps use their bundled micromamba
     let exe_path = std::env::current_exe().expect("Failed to get current executable path");
-    let exe_dir = exe_path.parent().expect("Executable must be in a directory");
+    let exe_dir = exe_path
+        .parent()
+        .expect("Executable must be in a directory");
     let prod_path = exe_dir.join("micromamba");
 
     if prod_path.exists() {
@@ -105,9 +107,7 @@ pub static MAMBA_ROOT_PREFIX: Lazy<PathBuf> = Lazy::new(|| {
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
 
-    let prefix = PathBuf::from(home)
-        .join(".rustrunner")
-        .join("micromamba");
+    let prefix = PathBuf::from(home).join(".rustrunner").join("micromamba");
 
     // Create the directory if it doesn't exist
     if !prefix.exists() {
@@ -185,10 +185,7 @@ impl Default for ToolEnvMap {
 
 /// Checks whether a micromamba environment exists.
 fn check_env(env_name: &str) -> Result<bool, Box<dyn Error>> {
-    let output = micromamba_command()
-        .arg("env")
-        .arg("list")
-        .output()?;
+    let output = micromamba_command().arg("env").arg("list").output()?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -197,9 +194,9 @@ fn check_env(env_name: &str) -> Result<bool, Box<dyn Error>> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let exists = stdout.lines().any(|line| {
-        matches!(line.split_whitespace().next(), Some(name) if name == env_name)
-    });
+    let exists = stdout
+        .lines()
+        .any(|line| matches!(line.split_whitespace().next(), Some(name) if name == env_name));
 
     Ok(exists)
 }

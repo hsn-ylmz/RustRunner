@@ -98,7 +98,10 @@ fn print_usage() {
     println!("Options:");
     println!("  --dry-run           Preview commands without execution");
     println!("  --working-dir PATH  Set working directory for file operations");
-    println!("  --parallel N        Maximum parallel jobs (default: {})", DEFAULT_MAX_PARALLEL);
+    println!(
+        "  --parallel N        Maximum parallel jobs (default: {})",
+        DEFAULT_MAX_PARALLEL
+    );
     println!("  --verbose           Enable debug logging");
     println!("  --help              Show this help message");
     println!("  --version           Show version information");

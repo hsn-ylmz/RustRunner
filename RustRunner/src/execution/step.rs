@@ -15,15 +15,15 @@ use std::process::Command;
 
 use log::{debug, error, warn};
 
-use crate::environment::conda::{MICROMAMBA_PATH, MAMBA_ROOT_PREFIX};
+use crate::environment::conda::{MAMBA_ROOT_PREFIX, MICROMAMBA_PATH};
 use crate::workflow::Step;
 
 /// Tools available in standard system PATH that don't require conda.
 const SYSTEM_TOOLS: &[&str] = &[
     "bash", "sh", "echo", "cat", "cp", "mv", "rm", "mkdir", "sleep", "touch", "ls", "grep", "sed",
-    "awk", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "tee", "curl", "wget", "gzip", 
-    "gunzip", "tar", "zip", "unzip", "bc", "date", "find", "xargs", "diff", "comm", "paste",
-    "rev", "fold", "printf", "test", "true", "false",
+    "awk", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "tee", "curl", "wget", "gzip",
+    "gunzip", "tar", "zip", "unzip", "bc", "date", "find", "xargs", "diff", "comm", "paste", "rev",
+    "fold", "printf", "test", "true", "false",
 ];
 
 /// Executes a single workflow step.
@@ -193,7 +193,13 @@ fn create_execution_script(
     // `..` (path traversal) when used as a filename.
     let safe_id: String = step_id
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
 
     let script_path = script_dir.join(format!("step_{}.sh", safe_id));
@@ -250,7 +256,11 @@ fn execute_with_conda(
 
     let mut cmd = Command::new(&*MICROMAMBA_PATH);
     cmd.env("MAMBA_ROOT_PREFIX", &*MAMBA_ROOT_PREFIX);
-    cmd.arg("run").arg("-n").arg(env_name).arg("bash").arg(script_path);
+    cmd.arg("run")
+        .arg("-n")
+        .arg(env_name)
+        .arg("bash")
+        .arg(script_path);
 
     if let Some(dir) = working_dir {
         cmd.current_dir(dir);
@@ -303,7 +313,11 @@ mod tests {
         // A step id with path separators must not escape the script directory.
         let script = create_execution_script("../evil/step", "echo hi").unwrap();
         let parent = script.parent().unwrap();
-        assert!(parent.file_name().unwrap().to_str().unwrap()
+        assert!(parent
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
             .starts_with("rustrunner_scripts_"));
         // Every non-alphanumeric char (including '.') is replaced with '_',
         // so "../evil/step" -> "___evil_step".
@@ -356,10 +370,7 @@ mod tests {
 
     #[test]
     fn test_parse_file_list_multiple_vec_entries() {
-        let input = vec![
-            "file1.txt".to_string(),
-            "file2.txt,file3.txt".to_string(),
-        ];
+        let input = vec!["file1.txt".to_string(), "file2.txt,file3.txt".to_string()];
         let result = parse_file_list(&input);
 
         assert_eq!(result.len(), 3);
@@ -420,7 +431,7 @@ mod tests {
 
         let result = ensure_output_directories(
             &vec![nested_file.to_string()],
-            &Some(temp_dir.path().to_path_buf())
+            &Some(temp_dir.path().to_path_buf()),
         );
 
         assert!(result.is_ok());
@@ -429,10 +440,7 @@ mod tests {
 
     #[test]
     fn test_ensure_output_directories_empty() {
-        let result = ensure_output_directories(
-            &vec!["".to_string()],
-            &None
-        );
+        let result = ensure_output_directories(&vec!["".to_string()], &None);
 
         assert!(result.is_ok());
     }
@@ -444,10 +452,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let output = temp_dir.path().join("newdir/output.txt");
 
-        let result = ensure_output_directories(
-            &vec![output.to_str().unwrap().to_string()],
-            &None
-        );
+        let result = ensure_output_directories(&vec![output.to_str().unwrap().to_string()], &None);
 
         assert!(result.is_ok());
         assert!(temp_dir.path().join("newdir").exists());
@@ -460,8 +465,12 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let output_file = temp_dir.path().join("out.txt");
 
-        let step = Step::new("test_exec", "bash", &format!("echo hello > {}", output_file.display()))
-            .with_output(output_file.to_str().unwrap());
+        let step = Step::new(
+            "test_exec",
+            "bash",
+            &format!("echo hello > {}", output_file.display()),
+        )
+        .with_output(output_file.to_str().unwrap());
 
         let env_map = HashMap::new();
         let result = execute_step(&step, &env_map, &None);
