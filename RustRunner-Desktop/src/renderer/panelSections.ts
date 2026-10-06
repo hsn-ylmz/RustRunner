@@ -99,11 +99,26 @@ function clip(text: string, max = 28): string {
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 }
 
+/** A catalog step whose command is generated: its files are all named slots. */
+function usesOnlySlots(data: Record<string, any>): boolean {
+  return Boolean(findTool(data.catalogId)) && data.catalogCommandCustom !== true && !data.input && !data.output;
+}
+
+/** What the summary of a section needs besides the node's data. */
+export interface SummaryExtra {
+  fileCount?: number;
+  upstreamCount?: number;
+  slotCount?: number;
+  slotsToFill?: number;
+  /** The step makes something to check: its main output or a named output. */
+  hasOutput?: boolean;
+}
+
 /** The one-line summary of a section, shown while it is collapsed. */
 export function sectionSummary(
   section: SectionId,
   data: Record<string, any>,
-  extra: { fileCount?: number; upstreamCount?: number; slotCount?: number; slotsToFill?: number } = {}
+  extra: SummaryExtra = {}
 ): string {
   switch (section) {
     case 'basics': {
@@ -115,6 +130,13 @@ export function sectionSummary(
       const parts: string[] = [];
       if (extra.upstreamCount) {
         parts.push(`after ${extra.upstreamCount} step${extra.upstreamCount === 1 ? '' : 's'}`);
+      }
+      // A step made from the catalog names every file in a slot: it has no main input or output to quote.
+      if (extra.slotCount && usesOnlySlots(data)) {
+        if (extra.fileCount) parts.push(`${extra.fileCount} file${extra.fileCount === 1 ? '' : 's'}`);
+        parts.push(`${extra.slotCount} file${extra.slotCount === 1 ? '' : 's'} named`);
+        parts.push(extra.slotsToFill ? `${extra.slotsToFill} to choose` : 'all chosen');
+        return parts.join(', ');
       }
       if (extra.fileCount) parts.push(`${extra.fileCount} file${extra.fileCount === 1 ? '' : 's'}`);
       else if (data.input) parts.push(`in: ${clip(String(data.input))}`);
@@ -144,7 +166,7 @@ export function sectionSummary(
       return `${r}, ${t}`;
     }
     case 'checks': {
-      if (!data.output) return 'Needs an output';
+      if (!data.output && !extra.hasOutput) return 'Needs an output';
       const on: string[] = [];
       if (isOn(data.checkExists)) on.push('exists');
       if (isOn(data.checkNonEmpty)) on.push('non-empty');

@@ -118,6 +118,10 @@ const electronHandler = {
       return ipcRenderer.invoke('open-run-report', workingDir, reportRef);
     },
 
+    openDocs(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('open-docs', url);
+    },
+
     pauseWorkflow() {
       ipcRenderer.send('pause-workflow');
     },

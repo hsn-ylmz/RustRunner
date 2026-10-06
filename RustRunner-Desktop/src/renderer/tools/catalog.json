@@ -1,14 +1,46 @@
 {
-  "schemaVersion": 1,
-  "version": "2026.10.0",
-  "fileTypes": ["fastq", "fasta", "sam", "bam", "bai", "vcf", "gtf", "tsv", "txt", "html", "zip"],
+  "schema_version": 2,
+  "version": "2026.11.0",
+  "file_types": [
+    "fastq",
+    "fasta",
+    "sam",
+    "bam",
+    "bai",
+    "vcf",
+    "gtf",
+    "tsv",
+    "txt",
+    "html",
+    "zip",
+    "json",
+    "index"
+  ],
   "categories": {
-    "qc": { "label": "Quality control", "color": "mint" },
-    "trimming": { "label": "Trimming", "color": "sand" },
-    "alignment": { "label": "Alignment", "color": "sky" },
-    "processing": { "label": "BAM processing", "color": "lilac" },
-    "variant_calling": { "label": "Variant calling", "color": "peach" },
-    "quantification": { "label": "Quantification", "color": "lemon" }
+    "qc": {
+      "label": "Quality control",
+      "color": "mint"
+    },
+    "trimming": {
+      "label": "Trimming",
+      "color": "sand"
+    },
+    "alignment": {
+      "label": "Alignment",
+      "color": "sky"
+    },
+    "processing": {
+      "label": "BAM processing",
+      "color": "lilac"
+    },
+    "variant_calling": {
+      "label": "Variant calling",
+      "color": "peach"
+    },
+    "quantification": {
+      "label": "Quantification",
+      "color": "lemon"
+    }
   },
   "tools": [
     {
@@ -16,159 +48,317 @@
       "name": "FastQC",
       "description": "Quality report for raw sequencing reads.",
       "category": "qc",
-      "conda": { "package": "fastqc" },
-      "command": "mkdir -p {outdir} && fastqc -t {threads} --outdir {outdir} {input}",
-      "defaultThreads": 2,
-      "inputTypes": ["fastq"],
-      "outputTypes": ["html", "zip"],
-      "defaultInput": "reads.fastq.gz",
-      "defaultOutput": "qc/reads_fastqc.html",
-      "params": [
+      "subcategory": "Read quality",
+      "install": {
+        "kind": "conda",
+        "package": "fastqc",
+        "channel": "bioconda",
+        "version": "0.13.0"
+      },
+      "inputs": [
         {
-          "id": "outdir",
-          "label": "Report folder",
-          "type": "string",
-          "default": "qc",
-          "description": "Folder FastQC writes into. Keep it the same as the folder of the Output path."
+          "name": "reads",
+          "label": "Reads",
+          "description": "One or more FASTQ files (plain or .gz). Each gets its own report.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "reads.fastq.gz"
         }
-      ]
+      ],
+      "outputs": [
+        {
+          "name": "report_dir",
+          "label": "Report folder",
+          "description": "FastQC writes one HTML report and one zip per input file here.",
+          "types": [
+            "html",
+            "zip"
+          ],
+          "pattern": "qc/",
+          "is_dir": true
+        }
+      ],
+      "params": [],
+      "command": "fastqc -t {threads} --outdir {report_dir} {reads}",
+      "threads": 2,
+      "docs": "https://www.bioinformatics.babraham.ac.uk/projects/fastqc/"
     },
     {
       "id": "multiqc",
       "name": "MultiQC",
       "description": "Combines the reports of many tools into one HTML page.",
       "category": "qc",
-      "conda": { "package": "multiqc" },
-      "command": "multiqc --force -o {outdir} -n {report_name} {input}",
-      "defaultThreads": 1,
-      "inputTypes": ["zip", "txt", "tsv"],
-      "outputTypes": ["html"],
-      "defaultInput": "qc/reads_fastqc.zip",
-      "defaultOutput": "multiqc/multiqc_report.html",
-      "params": [
+      "subcategory": "Report summaries",
+      "install": {
+        "kind": "conda",
+        "package": "multiqc",
+        "channel": "bioconda",
+        "version": "1.35"
+      },
+      "inputs": [
         {
-          "id": "outdir",
+          "name": "reports",
+          "label": "Reports to combine",
+          "description": "Any results MultiQC understands: FastQC, fastp, Cutadapt, samtools, STAR, Salmon, featureCounts. Connect as many steps as you like.",
+          "types": [
+            "any"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "qc/"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report_dir",
           "label": "Report folder",
-          "type": "string",
-          "default": "multiqc",
-          "description": "Folder for the combined report. Keep it the same as the folder of the Output path."
+          "description": "Folder for the combined report and its data.",
+          "types": [
+            "html"
+          ],
+          "pattern": "multiqc/",
+          "is_dir": true
         },
         {
-          "id": "report_name",
-          "label": "Report name",
-          "type": "string",
-          "default": "multiqc_report",
-          "description": "File name without .html. Keep it the same as the Output file name."
+          "name": "report",
+          "label": "Combined report",
+          "description": "The HTML page. It is always called multiqc_report.html inside the report folder.",
+          "types": [
+            "html"
+          ],
+          "derived": {
+            "from": "report_dir",
+            "suffix": "multiqc_report.html"
+          },
+          "is_dir": false
         }
-      ]
+      ],
+      "params": [],
+      "command": "multiqc --force -o {report_dir} -n multiqc_report {reports}",
+      "threads": 1,
+      "docs": "https://docs.seqera.io/multiqc"
     },
     {
       "id": "fastp",
       "name": "fastp",
       "description": "Fast adapter and quality trimming for FASTQ reads.",
       "category": "trimming",
-      "conda": { "package": "fastp" },
-      "command": "fastp -i {input} -o {output} -w {threads} -q {min_quality} -l {min_length} --html {html_report} --json {json_report}",
-      "defaultThreads": 4,
-      "inputTypes": ["fastq"],
-      "outputTypes": ["fastq"],
-      "defaultInput": "reads.fastq.gz",
-      "defaultOutput": "trimmed.fastq.gz",
+      "subcategory": "Trim and filter reads",
+      "install": {
+        "kind": "conda",
+        "package": "fastp",
+        "channel": "bioconda",
+        "version": "1.3.7"
+      },
+      "inputs": [
+        {
+          "name": "reads",
+          "label": "Reads",
+          "description": "Sequencing reads in FASTQ format (plain or .gz).",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "trimmed",
+          "label": "Trimmed reads",
+          "description": "Reads after trimming and filtering.",
+          "types": [
+            "fastq"
+          ],
+          "pattern": "trimmed.fastq.gz",
+          "is_dir": false
+        },
+        {
+          "name": "html_report",
+          "label": "HTML report",
+          "description": "Before and after statistics, for people.",
+          "types": [
+            "html"
+          ],
+          "pattern": "fastp.html",
+          "is_dir": false
+        },
+        {
+          "name": "json_report",
+          "label": "JSON report",
+          "description": "The same statistics for MultiQC.",
+          "types": [
+            "json"
+          ],
+          "pattern": "fastp.json",
+          "is_dir": false
+        }
+      ],
       "params": [
         {
           "id": "min_quality",
           "label": "Minimum base quality",
           "type": "number",
           "default": 15,
+          "description": "Bases below this Phred quality count as unqualified.",
           "min": 0,
-          "max": 60,
-          "description": "Bases below this Phred quality count as unqualified."
+          "max": 60
         },
         {
           "id": "min_length",
           "label": "Minimum read length",
           "type": "number",
           "default": 15,
-          "min": 0,
-          "description": "Reads shorter than this after trimming are dropped."
-        },
-        {
-          "id": "html_report",
-          "label": "HTML report",
-          "type": "string",
-          "default": "fastp.html",
-          "description": "Where fastp writes its HTML report."
-        },
-        {
-          "id": "json_report",
-          "label": "JSON report",
-          "type": "string",
-          "default": "fastp.json",
-          "description": "Where fastp writes its JSON report."
+          "description": "Reads shorter than this after trimming are dropped.",
+          "min": 0
         }
-      ]
+      ],
+      "command": "fastp -i {reads} -o {trimmed} -w {threads} -q {min_quality} -l {min_length} --html {html_report} --json {json_report}",
+      "threads": 4,
+      "docs": "https://github.com/OpenGene/fastp"
     },
     {
       "id": "cutadapt",
       "name": "Cutadapt",
       "description": "Removes adapter sequences and low-quality ends from reads.",
       "category": "trimming",
-      "conda": { "package": "cutadapt" },
-      "command": "cutadapt -j {threads} -a {adapter} -m {min_length} -q {quality_cutoff} -o {output} {input}",
-      "defaultThreads": 4,
-      "inputTypes": ["fastq"],
-      "outputTypes": ["fastq"],
-      "defaultInput": "reads.fastq.gz",
-      "defaultOutput": "trimmed.fastq.gz",
+      "subcategory": "Trim and filter reads",
+      "install": {
+        "kind": "conda",
+        "package": "cutadapt",
+        "channel": "bioconda",
+        "version": "5.2"
+      },
+      "inputs": [
+        {
+          "name": "reads",
+          "label": "Reads",
+          "description": "Sequencing reads in FASTQ format (plain or .gz).",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "trimmed",
+          "label": "Trimmed reads",
+          "description": "Reads after adapter removal.",
+          "types": [
+            "fastq"
+          ],
+          "pattern": "trimmed.fastq.gz",
+          "is_dir": false
+        },
+        {
+          "name": "report",
+          "label": "Trimming report",
+          "description": "Cutadapt's summary of what it removed. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "cutadapt.txt",
+          "is_dir": false
+        }
+      ],
       "params": [
         {
           "id": "adapter",
           "label": "3' adapter sequence",
           "type": "string",
           "default": "AGATCGGAAGAGC",
-          "required": true,
-          "description": "Adapter to cut from the 3' end. The default is the Illumina universal adapter."
+          "description": "Adapter to cut from the 3' end. The default is the Illumina universal adapter.",
+          "required": true
         },
         {
           "id": "min_length",
           "label": "Minimum read length",
           "type": "number",
           "default": 20,
-          "min": 0,
-          "description": "Reads shorter than this after trimming are discarded."
+          "description": "Reads shorter than this after trimming are discarded.",
+          "min": 0
         },
         {
           "id": "quality_cutoff",
           "label": "Quality cutoff",
           "type": "number",
           "default": 20,
+          "description": "Trim low-quality bases from the 3' end below this Phred score.",
           "min": 0,
-          "max": 60,
-          "description": "Trim low-quality bases from the 3' end below this Phred score."
+          "max": 60
         }
-      ]
+      ],
+      "command": "cutadapt -j {threads} -a {adapter} -m {min_length} -q {quality_cutoff} -o {trimmed} {reads} > {report}",
+      "threads": 4,
+      "docs": "https://cutadapt.readthedocs.io/"
     },
     {
       "id": "bwa-mem",
       "name": "BWA MEM",
       "description": "Aligns reads to a reference genome. Writes SAM.",
       "category": "alignment",
-      "conda": { "package": "bwa" },
-      "command": "bwa mem -t {threads} {mark_secondary} -k {min_seed_length} {ref} {input} > {output}",
-      "defaultThreads": 4,
-      "inputTypes": ["fastq"],
-      "outputTypes": ["sam"],
-      "defaultInput": "reads.fastq.gz",
-      "defaultOutput": "aligned.sam",
-      "params": [
+      "subcategory": "DNA aligners",
+      "install": {
+        "kind": "conda",
+        "package": "bwa",
+        "channel": "bioconda",
+        "version": "0.7.19"
+      },
+      "inputs": [
         {
-          "id": "ref",
-          "label": "Reference FASTA",
-          "type": "string",
-          "default": "",
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The reference FASTA the reads are aligned to. Index it first with `bwa index`; the index files sit next to it.",
+          "types": [
+            "fasta"
+          ],
           "required": true,
-          "description": "Reference genome. It must be indexed first with `bwa index`."
+          "multiple": false,
+          "example": "genome.fa"
         },
+        {
+          "name": "reads1",
+          "label": "Reads (first of the pair)",
+          "description": "FASTQ with the reads, or the first file of a pair.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads_R1.fastq.gz"
+        },
+        {
+          "name": "reads2",
+          "label": "Reads (second of the pair)",
+          "description": "Leave empty for single-end reads.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reads_R2.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "sam",
+          "label": "Alignments",
+          "description": "The alignments in SAM format.",
+          "types": [
+            "sam"
+          ],
+          "pattern": "aligned.sam",
+          "is_dir": false
+        }
+      ],
+      "params": [
         {
           "id": "mark_secondary",
           "label": "Mark shorter split hits as secondary",
@@ -182,84 +372,200 @@
           "label": "Minimum seed length",
           "type": "number",
           "default": 19,
-          "min": 1,
-          "description": "Matches shorter than this are dropped. Smaller is more sensitive and slower."
+          "description": "Matches shorter than this are dropped. Smaller is more sensitive and slower.",
+          "min": 1
         }
-      ]
+      ],
+      "command": "bwa mem -t {threads} {mark_secondary} -k {min_seed_length} {ref} {reads1} {reads2} > {sam}",
+      "threads": 4,
+      "docs": "https://bio-bwa.sourceforge.net/bwa.shtml"
     },
     {
       "id": "bowtie2",
       "name": "Bowtie2",
       "description": "Aligns single-end reads to an indexed genome. Writes SAM.",
       "category": "alignment",
-      "conda": { "package": "bowtie2" },
-      "command": "bowtie2 -p {threads} --{preset} -x {index} -U {input} -S {output}",
-      "defaultThreads": 4,
-      "inputTypes": ["fastq"],
-      "outputTypes": ["sam"],
-      "defaultInput": "reads.fastq.gz",
-      "defaultOutput": "aligned.sam",
-      "params": [
+      "subcategory": "DNA aligners",
+      "install": {
+        "kind": "conda",
+        "package": "bowtie2",
+        "channel": "bioconda",
+        "version": "2.5.5"
+      },
+      "inputs": [
         {
-          "id": "index",
-          "label": "Index prefix",
-          "type": "string",
-          "default": "",
+          "name": "index",
+          "label": "Genome index",
+          "description": "The index made with `bowtie2-build`. Give its prefix: the path without .1.bt2 and the rest.",
+          "types": [
+            "index"
+          ],
           "required": true,
-          "description": "Path prefix of the index made with `bowtie2-build`."
+          "multiple": false,
+          "example": "genome_index"
         },
+        {
+          "name": "reads",
+          "label": "Reads",
+          "description": "Sequencing reads in FASTQ format (plain or .gz).",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "sam",
+          "label": "Alignments",
+          "description": "The alignments in SAM format.",
+          "types": [
+            "sam"
+          ],
+          "pattern": "aligned.sam",
+          "is_dir": false
+        }
+      ],
+      "params": [
         {
           "id": "preset",
           "label": "Preset",
           "type": "select",
           "default": "sensitive",
-          "options": ["very-fast", "fast", "sensitive", "very-sensitive"],
+          "options": [
+            "very-fast",
+            "fast",
+            "sensitive",
+            "very-sensitive"
+          ],
           "description": "Speed against sensitivity."
         }
-      ]
+      ],
+      "command": "bowtie2 -p {threads} --{preset} -x {index} -U {reads} -S {sam}",
+      "threads": 4,
+      "docs": "https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml"
     },
     {
       "id": "star",
       "name": "STAR",
       "description": "Splice-aware RNA-seq aligner. Writes a coordinate-sorted BAM.",
       "category": "alignment",
-      "conda": { "package": "star" },
-      "command": "STAR --runThreadN {threads} --genomeDir {genome_dir} --readFilesIn {input} --readFilesCommand gzip -cdf --outSAMtype BAM SortedByCoordinate --outFileNamePrefix {prefix}",
-      "defaultThreads": 8,
-      "inputTypes": ["fastq"],
-      "outputTypes": ["bam"],
-      "defaultInput": "reads.fastq.gz",
-      "defaultOutput": "star/Aligned.sortedByCoord.out.bam",
-      "params": [
+      "subcategory": "RNA-seq aligners",
+      "install": {
+        "kind": "conda",
+        "package": "star",
+        "channel": "bioconda",
+        "version": "2.7.10b",
+        "osx64": true
+      },
+      "inputs": [
         {
-          "id": "genome_dir",
+          "name": "index",
           "label": "Genome index folder",
-          "type": "string",
-          "default": "",
+          "description": "The folder made with `STAR --runMode genomeGenerate`.",
+          "types": [
+            "index"
+          ],
           "required": true,
-          "description": "Folder made with `STAR --runMode genomeGenerate`."
+          "multiple": false,
+          "example": "star_index/"
         },
         {
-          "id": "prefix",
-          "label": "Output prefix",
-          "type": "string",
-          "default": "star/",
-          "description": "STAR adds Aligned.sortedByCoord.out.bam to this. Keep it the same as the Output path."
+          "name": "reads",
+          "label": "Reads",
+          "description": "Sequencing reads in FASTQ format (plain or .gz).",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
         }
-      ]
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Output folder",
+          "description": "STAR writes the BAM and its logs into this folder.",
+          "types": [
+            "bam",
+            "txt"
+          ],
+          "pattern": "star/",
+          "is_dir": true
+        },
+        {
+          "name": "bam",
+          "label": "Alignments",
+          "description": "The sorted BAM. It is always called Aligned.sortedByCoord.out.bam inside the output folder.",
+          "types": [
+            "bam"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "Aligned.sortedByCoord.out.bam"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "log",
+          "label": "Mapping summary",
+          "description": "STAR's mapping statistics. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "Log.final.out"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "STAR --runThreadN {threads} --genomeDir {index} --readFilesIn {reads} --readFilesCommand gzip -cdf --outSAMtype BAM SortedByCoordinate --outFileNamePrefix {out_dir}",
+      "threads": 8,
+      "docs": "https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf"
     },
     {
       "id": "samtools-sort",
       "name": "samtools sort",
       "description": "Sorts alignments by coordinate (or by read name).",
       "category": "processing",
-      "conda": { "package": "samtools" },
-      "command": "samtools sort -@ {threads} {by_name} -m {memory_per_thread} -o {output} {input}",
-      "defaultThreads": 4,
-      "inputTypes": ["sam", "bam"],
-      "outputTypes": ["bam"],
-      "defaultInput": "aligned.sam",
-      "defaultOutput": "sorted.bam",
+      "subcategory": "Alignment files",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "alignments",
+          "label": "Alignments",
+          "description": "A SAM or BAM file.",
+          "types": [
+            "sam",
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "aligned.sam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "bam",
+          "label": "Sorted alignments",
+          "description": "The sorted BAM.",
+          "types": [
+            "bam"
+          ],
+          "pattern": "sorted.bam",
+          "is_dir": false
+        }
+      ],
       "params": [
         {
           "id": "by_name",
@@ -276,43 +582,100 @@
           "default": "768M",
           "description": "For example 768M or 2G."
         }
-      ]
+      ],
+      "command": "samtools sort -@ {threads} {by_name} -m {memory_per_thread} -o {bam} {alignments}",
+      "threads": 4,
+      "docs": "https://www.htslib.org/doc/samtools-sort.html"
     },
     {
       "id": "samtools-index",
       "name": "samtools index",
       "description": "Builds the .bai index of a coordinate-sorted BAM.",
       "category": "processing",
-      "conda": { "package": "samtools" },
-      "command": "samtools index -@ {threads} {input} {output}",
-      "defaultThreads": 2,
-      "inputTypes": ["bam"],
-      "outputTypes": ["bai"],
-      "defaultInput": "sorted.bam",
-      "defaultOutput": "sorted.bam.bai",
-      "params": []
+      "subcategory": "Alignment files",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM file.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "bai",
+          "label": "BAM index",
+          "description": "The .bai file.",
+          "types": [
+            "bai"
+          ],
+          "pattern": "sorted.bam.bai",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "samtools index -@ {threads} {bam} {bai}",
+      "threads": 2,
+      "docs": "https://www.htslib.org/doc/samtools-index.html"
     },
     {
       "id": "samtools-view",
       "name": "samtools view",
       "description": "Filters alignments and converts them to BAM.",
       "category": "processing",
-      "conda": { "package": "samtools" },
-      "command": "samtools view -@ {threads} -b -q {min_mapq} {mapped_only} -o {output} {input}",
-      "defaultThreads": 2,
-      "inputTypes": ["sam", "bam"],
-      "outputTypes": ["bam"],
-      "defaultInput": "sorted.bam",
-      "defaultOutput": "filtered.bam",
+      "subcategory": "Alignment files",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "alignments",
+          "label": "Alignments",
+          "description": "A SAM or BAM file.",
+          "types": [
+            "sam",
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "aligned.sam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filtered",
+          "label": "Filtered alignments",
+          "description": "The alignments that passed the filters, as BAM.",
+          "types": [
+            "bam"
+          ],
+          "pattern": "filtered.bam",
+          "is_dir": false
+        }
+      ],
       "params": [
         {
           "id": "min_mapq",
           "label": "Minimum mapping quality",
           "type": "number",
           "default": 20,
+          "description": "Alignments below this MAPQ are dropped.",
           "min": 0,
-          "max": 255,
-          "description": "Alignments below this MAPQ are dropped."
+          "max": 255
         },
         {
           "id": "mapped_only",
@@ -322,113 +685,260 @@
           "flag": "-F 4",
           "description": "Drops reads that did not align."
         }
-      ]
+      ],
+      "command": "samtools view -@ {threads} -b -q {min_mapq} {mapped_only} -o {filtered} {alignments}",
+      "threads": 2,
+      "docs": "https://www.htslib.org/doc/samtools-view.html"
     },
     {
       "id": "samtools-flagstat",
       "name": "samtools flagstat",
       "description": "Counts reads by alignment flag. Writes a text summary.",
       "category": "processing",
-      "conda": { "package": "samtools" },
-      "command": "samtools flagstat -@ {threads} {input} > {output}",
-      "defaultThreads": 2,
-      "inputTypes": ["sam", "bam"],
-      "outputTypes": ["txt"],
-      "defaultInput": "sorted.bam",
-      "defaultOutput": "flagstat.txt",
-      "params": []
+      "subcategory": "Alignment files",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "alignments",
+          "label": "Alignments",
+          "description": "A SAM or BAM file.",
+          "types": [
+            "sam",
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "aligned.sam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report",
+          "label": "Summary",
+          "description": "Counts of mapped, paired and duplicate reads, as text.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "flagstat.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "samtools flagstat -@ {threads} {alignments} > {report}",
+      "threads": 2,
+      "docs": "https://www.htslib.org/doc/samtools-flagstat.html"
     },
     {
       "id": "bcftools-call",
       "name": "bcftools call",
       "description": "Calls SNPs and indels from a sorted BAM (mpileup then call).",
       "category": "variant_calling",
-      "conda": { "package": "bcftools" },
-      "command": "set -o pipefail; bcftools mpileup --threads {threads} -Ou -f {ref} -q {min_mapq} {input} | bcftools call --threads {threads} -mv -Ov -o {output}",
-      "defaultThreads": 2,
-      "inputTypes": ["bam"],
-      "outputTypes": ["vcf"],
-      "defaultInput": "sorted.bam",
-      "defaultOutput": "variants.vcf",
-      "params": [
+      "subcategory": "SNPs and small indels",
+      "install": {
+        "kind": "conda",
+        "package": "bcftools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
         {
-          "id": "ref",
-          "label": "Reference FASTA",
-          "type": "string",
-          "default": "",
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The reference the reads were aligned to. It needs a .fai index (made with `samtools faidx`).",
+          "types": [
+            "fasta"
+          ],
           "required": true,
-          "description": "The reference the reads were aligned to. It needs a .fai index (samtools faidx)."
+          "multiple": false,
+          "example": "genome.fa"
         },
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A coordinate-sorted BAM.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "vcf",
+          "label": "Variants",
+          "description": "The called variants in VCF format.",
+          "types": [
+            "vcf"
+          ],
+          "pattern": "variants.vcf",
+          "is_dir": false
+        }
+      ],
+      "params": [
         {
           "id": "min_mapq",
           "label": "Minimum mapping quality",
           "type": "number",
           "default": 20,
+          "description": "Alignments below this MAPQ are ignored.",
           "min": 0,
-          "max": 255,
-          "description": "Alignments below this MAPQ are ignored."
+          "max": 255
         }
-      ]
+      ],
+      "command": "set -o pipefail; bcftools mpileup --threads {threads} -Ou -f {ref} -q {min_mapq} {bam} | bcftools call --threads {threads} -mv -Ov -o {vcf}",
+      "threads": 2,
+      "docs": "https://samtools.github.io/bcftools/bcftools.html"
     },
     {
       "id": "salmon-quant",
       "name": "Salmon quant",
       "description": "Quantifies transcript abundance from single-end reads.",
       "category": "quantification",
-      "conda": { "package": "salmon" },
-      "command": "salmon quant -i {index} -l {libtype} -r {input} -p {threads} -o {outdir}",
-      "defaultThreads": 4,
-      "inputTypes": ["fastq"],
-      "outputTypes": ["tsv"],
-      "defaultInput": "reads.fastq.gz",
-      "defaultOutput": "salmon_out/quant.sf",
-      "params": [
+      "subcategory": "Transcript abundance",
+      "install": {
+        "kind": "conda",
+        "package": "salmon",
+        "channel": "bioconda",
+        "version": "2.8.0"
+      },
+      "inputs": [
         {
-          "id": "index",
-          "label": "Salmon index folder",
-          "type": "string",
-          "default": "",
+          "name": "index",
+          "label": "Salmon index",
+          "description": "The folder made with `salmon index`.",
+          "types": [
+            "index"
+          ],
           "required": true,
-          "description": "Folder made with `salmon index`."
+          "multiple": false,
+          "example": "salmon_index/"
         },
+        {
+          "name": "reads",
+          "label": "Reads",
+          "description": "Sequencing reads in FASTQ format (plain or .gz).",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Result folder",
+          "description": "Salmon writes its results here.",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "salmon_out/",
+          "is_dir": true
+        },
+        {
+          "name": "quant",
+          "label": "Abundances",
+          "description": "The table of transcript abundances. It is always called quant.sf inside the result folder.",
+          "types": [
+            "tsv"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "quant.sf"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
         {
           "id": "libtype",
           "label": "Library type",
           "type": "select",
           "default": "A",
-          "options": ["A", "U", "SF", "SR"],
+          "options": [
+            "A",
+            "U",
+            "SF",
+            "SR"
+          ],
           "description": "A detects the type automatically."
-        },
-        {
-          "id": "outdir",
-          "label": "Result folder",
-          "type": "string",
-          "default": "salmon_out",
-          "description": "Salmon writes quant.sf here. Keep it the same as the folder of the Output path."
         }
-      ]
+      ],
+      "command": "salmon quant -i {index} -l {libtype} -r {reads} -p {threads} -o {out_dir}",
+      "threads": 4,
+      "docs": "https://salmon.readthedocs.io/"
     },
     {
       "id": "featurecounts",
       "name": "featureCounts",
       "description": "Counts reads per gene from alignments and an annotation.",
       "category": "quantification",
-      "conda": { "package": "subread" },
-      "command": "featureCounts -T {threads} -a {annotation} -t {feature_type} -g {attribute} {paired} -o {output} {input}",
-      "defaultThreads": 4,
-      "inputTypes": ["bam", "sam"],
-      "outputTypes": ["tsv"],
-      "defaultInput": "sorted.bam",
-      "defaultOutput": "counts.tsv",
-      "params": [
+      "subcategory": "Gene counts",
+      "install": {
+        "kind": "conda",
+        "package": "subread",
+        "channel": "bioconda",
+        "version": "2.1.1"
+      },
+      "inputs": [
         {
-          "id": "annotation",
-          "label": "Annotation (GTF)",
-          "type": "string",
-          "default": "",
+          "name": "bams",
+          "label": "Alignments",
+          "description": "One or more BAM or SAM files. They are counted into one table, one column per file.",
+          "types": [
+            "bam",
+            "sam"
+          ],
           "required": true,
-          "description": "Gene annotation file in GTF format."
+          "multiple": true,
+          "example": "sorted.bam"
         },
+        {
+          "name": "annotation",
+          "label": "Gene annotation",
+          "description": "Gene annotation in GTF format.",
+          "types": [
+            "gtf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.gtf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "counts",
+          "label": "Count table",
+          "description": "One row per gene, one column per input file.",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "counts.tsv",
+          "is_dir": false
+        },
+        {
+          "name": "summary",
+          "label": "Counting summary",
+          "description": "How many reads were assigned or not. MultiQC reads it. Always the count table's name plus .summary.",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "counts",
+            "suffix": ".summary"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
         {
           "id": "feature_type",
           "label": "Feature type",
@@ -451,7 +961,10 @@
           "flag": "-p --countReadPairs",
           "description": "Count read pairs (fragments) instead of single reads."
         }
-      ]
+      ],
+      "command": "featureCounts -T {threads} -a {annotation} -t {feature_type} -g {attribute} {paired} -o {counts} {bams}",
+      "threads": 4,
+      "docs": "https://subread.sourceforge.net/SubreadUsersGuide.pdf"
     }
   ]
 }

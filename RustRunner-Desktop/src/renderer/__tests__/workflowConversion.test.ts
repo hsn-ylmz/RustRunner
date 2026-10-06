@@ -187,6 +187,20 @@ describe('user-named wildcards', () => {
     expect(validateWorkflow({ steps: [ok] })).toEqual([]);
   });
 
+  it('validateWorkflow lets an optional slot stay empty, but not a required one', () => {
+    const step = {
+      id: 's',
+      tool: 'bash',
+      command: 'x {ref} {mate} > {out}',
+      named_inputs: { ref: ['g.fa'], mate: [] as string[] },
+      named_outputs: { out: ['o.txt'] },
+      optional_slots: ['mate'],
+    };
+    expect(validateWorkflow({ steps: [step] })).toEqual([]);
+    const required = { ...step, optional_slots: [] as string[] };
+    expect(validateWorkflow({ steps: [required] })).toEqual(['Step s: "mate" has no file yet']);
+  });
+
   it('validateWorkflow checks named slots', () => {
     const step = {
       id: 's',

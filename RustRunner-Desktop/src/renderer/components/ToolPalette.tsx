@@ -4,7 +4,14 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CATALOG, categoryLabel, searchTools, type CatalogTool } from '../tools/catalog';
+import {
+  CATALOG,
+  categoryLabel,
+  inputTypesOf,
+  outputTypesOf,
+  searchTools,
+  type CatalogTool,
+} from '../tools/catalog';
 import { nodeColorVar } from '../nodeColors';
 import { Button, Icon, IconButton, Panel, Select, TextField } from '../ui';
 
@@ -53,7 +60,7 @@ export function ToolPalette({
         label="Search tools"
         hideLabel
         type="search"
-        placeholder="Search by name or category"
+        placeholder="Search by name, category or job"
         value={query}
         data-testid="palette-search"
         onChange={(e) => setQuery(e.target.value)}
@@ -118,10 +125,12 @@ export function ToolPalette({
             />
             <span className="tool-palette-text">
               <span className="tool-palette-name">{tool.name}</span>
-              <span className="tool-palette-category">{categoryLabel(tool.category)}</span>
+              <span className="tool-palette-category">
+                {categoryLabel(tool.category)} · {tool.subcategory}
+              </span>
               <span className="tool-palette-description">{tool.description}</span>
               <span className="tool-palette-types">
-                {tool.inputTypes.join(', ')} {'→'} {tool.outputTypes.join(', ')}
+                {inputTypesOf(tool).join(', ')} {'→'} {outputTypesOf(tool).join(', ')}
               </span>
             </span>
           </button>

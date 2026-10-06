@@ -1,5 +1,7 @@
+import fs from 'fs';
+import path from 'path';
 import type { Page } from '@playwright/test';
-import { test, expect, connect, nodes, openSection, selectNode } from './fixtures';
+import { test, expect, connect, nodes, openSection, openStepStatus, selectNode, stepRow } from './fixtures';
 
 /** Opens the palette, searches and adds the tool with `id`. */
 async function addFromPalette(page: Page, query: string, id: string): Promise<void> {
@@ -23,12 +25,18 @@ test('adding fastqc from the palette gives a prefilled node', async ({ page, con
   await openSection(page, 'advanced');
   await expect(page.getByTestId('prop-tool')).toHaveValue('fastqc');
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'mkdir -p qc && fastqc -t 2 --outdir qc {input}'
+    'fastqc -t 2 --outdir {report_dir} {reads}'
   );
   await expect(page.getByTestId('prop-threads')).toHaveValue('2');
-  await expect(page.getByTestId('prop-input')).toHaveValue('reads.fastq.gz');
-  await expect(page.getByTestId('prop-output')).toHaveValue('qc/reads_fastqc.html');
-  await expect(page.getByTestId('catalog-param-outdir')).toHaveValue('qc');
+  // Every file is a named field; the single Input and Output fields are not shown.
+  await expect(page.getByTestId('prop-input')).toHaveCount(0);
+  await expect(page.getByTestId('prop-output')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-reads')).toHaveValue('');
+  await expect(page.getByTestId('prop-slot-reads')).toHaveAttribute('placeholder', 'e.g. reads.fastq.gz');
+  await expect(page.getByTestId('prop-slot-report_dir')).toHaveValue('qc/');
+  // Where the tool comes from, and its manual.
+  await expect(page.getByTestId('catalog-types')).toContainText('fastqc 0.13.0');
+  await expect(page.getByTestId('catalog-docs')).toBeVisible();
   await expect(nodes(page).first()).toContainText('fastqc');
   await expect(page.locator('.dirty-marker')).toBeVisible();
   expect(consoleErrors).toEqual([]);
@@ -67,23 +75,23 @@ test('editing options re-renders the command until it is edited by hand', async 
   await addFromPalette(page, 'sort', 'samtools-sort');
   await openSection(page, 'advanced');
   const command = page.getByTestId('prop-command');
-  await expect(command).toHaveValue('samtools sort -@ 4 -m 768M -o {output} {input}');
+  await expect(command).toHaveValue('samtools sort -@ 4 -m 768M -o {bam} {alignments}');
 
   await page.getByTestId('catalog-param-by_name').check();
-  await expect(command).toHaveValue('samtools sort -@ 4 -n -m 768M -o {output} {input}');
+  await expect(command).toHaveValue('samtools sort -@ 4 -n -m 768M -o {bam} {alignments}');
   await page.getByTestId('catalog-param-memory_per_thread').fill('2G');
-  await expect(command).toHaveValue('samtools sort -@ 4 -n -m 2G -o {output} {input}');
+  await expect(command).toHaveValue('samtools sort -@ 4 -n -m 2G -o {bam} {alignments}');
   await page.getByTestId('prop-threads').fill('8');
-  await expect(command).toHaveValue('samtools sort -@ 8 -n -m 2G -o {output} {input}');
+  await expect(command).toHaveValue('samtools sort -@ 8 -n -m 2G -o {bam} {alignments}');
 
   // Typing in the command takes over: options stop rewriting it.
-  await command.fill('samtools sort -T /tmp/x -o {output} {input}');
+  await command.fill('samtools sort -T /tmp/x -o {bam} {alignments}');
   await expect(page.getByTestId('catalog-custom-note')).toBeVisible();
   await page.getByTestId('catalog-param-by_name').uncheck();
-  await expect(command).toHaveValue('samtools sort -T /tmp/x -o {output} {input}');
+  await expect(command).toHaveValue('samtools sort -T /tmp/x -o {bam} {alignments}');
 
   await page.getByTestId('catalog-regenerate').click();
-  await expect(command).toHaveValue('samtools sort -@ 8 -m 2G -o {output} {input}');
+  await expect(command).toHaveValue('samtools sort -@ 8 -m 2G -o {bam} {alignments}');
   await expect(page.getByTestId('catalog-custom-note')).toHaveCount(0);
 
   // Options survive selecting another node and coming back.
@@ -98,16 +106,22 @@ test('editing options re-renders the command until it is edited by hand', async 
 test('a required option is flagged until it is filled in, and a free-form node stays possible', async ({
   page,
 }) => {
-  await addFromPalette(page, 'bwa', 'bwa-mem');
+  await addFromPalette(page, 'cutadapt', 'cutadapt');
   await openSection(page, 'advanced');
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'bwa mem -t 4 -M -k 19 {ref} {input} > {output}'
+    'cutadapt -j 4 -a AGATCGGAAGAGC -m 20 -q 20 -o {trimmed} {reads} > {report}'
   );
-  await expect(page.getByTestId('catalog-missing')).toContainText('Reference FASTA');
+  await expect(page.getByTestId('catalog-missing')).toHaveCount(0);
 
-  await page.getByTestId('catalog-param-ref').fill('genome/hg38.fa');
+  await page.getByTestId('catalog-param-adapter').fill('');
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'bwa mem -t 4 -M -k 19 genome/hg38.fa {input} > {output}'
+    'cutadapt -j 4 -a {adapter} -m 20 -q 20 -o {trimmed} {reads} > {report}'
+  );
+  await expect(page.getByTestId('catalog-missing')).toContainText("3' adapter sequence");
+
+  await page.getByTestId('catalog-param-adapter').fill('CTGTCTCTTATA');
+  await expect(page.getByTestId('prop-command')).toHaveValue(
+    'cutadapt -j 4 -a CTGTCTCTTATA -m 20 -q 20 -o {trimmed} {reads} > {report}'
   );
   await expect(page.getByTestId('catalog-missing')).toHaveCount(0);
 
@@ -115,7 +129,7 @@ test('a required option is flagged until it is filled in, and a free-form node s
   await page.getByTestId('prop-tool').fill('bash');
   await expect(page.getByTestId('catalog-params')).toHaveCount(0);
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'bwa mem -t 4 -M -k 19 genome/hg38.fa {input} > {output}'
+    'cutadapt -j 4 -a CTGTCTCTTATA -m 20 -q 20 -o {trimmed} {reads} > {report}'
   );
 
   // The plain button still adds an empty custom node.
@@ -183,4 +197,154 @@ test('connecting bwa to samtools sort shows a green edge; a mismatch is orange',
   await expect(neutral.getByTestId('typed-edge-label')).toHaveCount(0);
   await expect(page.locator('.react-flow__edge')).toHaveCount(3);
   await expect(green).toHaveCount(1);
+});
+
+test('a tool with a reference and optional reads shows each file as a field and says what is missing', async ({
+  page,
+}) => {
+  await addFromPalette(page, 'bwa', 'bwa-mem');
+
+  // Three input files and one output, each its own labelled field; the second reads file is optional.
+  await expect(page.getByTestId('prop-slot-ref-row')).toBeVisible();
+  await expect(page.getByTestId('prop-slot-reads1-row')).toBeVisible();
+  await expect(page.getByTestId('prop-slot-reads2-row')).toContainText('optional');
+  await expect(page.getByTestId('prop-slot-sam')).toHaveValue('aligned.sam');
+  await expect(page.getByTestId('prop-input')).toHaveCount(0);
+
+  // Run says why it cannot start: the reference and the first reads file are missing.
+  await expect(page.getByTestId('run')).toHaveAttribute('aria-disabled', 'true');
+  // "What will run" (in Advanced) marks the parts that have no file yet.
+  await openSection(page, 'advanced');
+  await expect(page.getByTestId('command-preview-missing')).toContainText('{ref}');
+
+  await page.getByTestId('prop-slot-ref').fill('genome/hg38.fa');
+  await page.getByTestId('prop-slot-reads1').fill('reads_R1.fastq.gz');
+  // Nothing is missing any more, although the second reads file is empty.
+  await expect(page.getByTestId('command-preview-missing')).toHaveCount(0);
+  await expect(page.getByTestId('command-preview')).toContainText(
+    'bwa mem -t 4 -M -k 19 genome/hg38.fa reads_R1.fastq.gz  > aligned.sam'
+  );
+  await expect(page.getByTestId('run')).not.toHaveAttribute('aria-disabled', 'true');
+});
+
+test('a folder output has a derived file that follows it, and is offered to the next step', async ({ page }) => {
+  await addFromPalette(page, 'star', 'star');
+  await expect(page.getByTestId('prop-slot-out_dir')).toHaveValue('star/');
+  // The BAM has no field to type in: it is the folder plus its fixed name.
+  await expect(page.getByTestId('prop-slot-bam')).toHaveText('star/Aligned.sortedByCoord.out.bam');
+  await page.getByTestId('prop-slot-out_dir').fill('results/lane1/');
+  await expect(page.getByTestId('prop-slot-bam')).toHaveText('results/lane1/Aligned.sortedByCoord.out.bam');
+
+  // Connecting featureCounts picks the BAM, not the folder, without asking.
+  await addFromPalette(page, 'featurecounts', 'featurecounts');
+  await connect(page, 'STAR', 'featureCounts');
+  await selectNode(page, 'featureCounts');
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-bams-from-badge')).toContainText('from STAR');
+  await expect(page.getByTestId('prop-slot-bams')).toHaveText('results/lane1/Aligned.sortedByCoord.out.bam');
+});
+
+test('MultiQC follows several steps at once, and asks which of a step\'s files to use', async ({ page }) => {
+  await addFromPalette(page, 'fastqc', 'fastqc');
+  await addFromPalette(page, 'cutadapt', 'cutadapt');
+  await addFromPalette(page, 'multiqc', 'multiqc');
+
+  // FastQC makes one thing (its report folder): bound without a question.
+  await connect(page, 'FastQC', 'MultiQC');
+  await selectNode(page, 'MultiQC');
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-reports')).toHaveText('qc/');
+
+  // Cutadapt makes reads and a report: the person chooses, and both stay linked.
+  await connect(page, 'Cutadapt', 'MultiQC');
+  await selectNode(page, 'MultiQC');
+  await expect(page.getByTestId('binding-prompt')).toBeVisible();
+  await page.getByTestId('binding-option-reports-report').click();
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-reports')).toHaveText('qc/');
+  await expect(page.getByTestId('prop-slot-reports-2')).toHaveText('cutadapt.txt');
+  await expect(page.getByTestId('prop-slot-reports-from-badge')).toContainText('from FastQC');
+  await expect(page.getByTestId('prop-slot-reports-from-badge-2')).toContainText('from Cutadapt');
+
+  // Letting go of one keeps the other.
+  await page.getByTestId('prop-slot-reports-unlink-2').click();
+  await expect(page.getByTestId('prop-slot-reports-from-badge-2')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-reports-from-badge')).toContainText('from FastQC');
+  await expect(page.getByTestId('prop-slot-reports-typed')).toHaveValue('cutadapt.txt');
+});
+
+test('a catalog step runs through the real engine with its install block (mocked, so nothing is installed)', async ({
+  page,
+  sandbox,
+}) => {
+  await addFromPalette(page, 'sort', 'samtools-sort');
+  await page.getByTestId('set-directory').click();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
+  await page.getByTestId('prop-slot-alignments').fill('in.sam');
+  await openSection(page, 'advanced');
+  await page.getByTestId('prop-mock').check();
+  await page.getByTestId('run').click();
+  await openStepStatus(page);
+  await expect(stepRow(page, 'samtools_sort')).toHaveAttribute('data-state', 'succeeded');
+  // The mocked step made its named output.
+  expect(fs.existsSync(path.join(sandbox.workDir, 'sorted.bam'))).toBe(true);
+});
+
+test('opening a workflow saved with the version 1 catalog updates its steps', async ({ page, app, sandbox }) => {
+  const v1Node = (id: string, label: string, catalogId: string, data: Record<string, unknown>, x: number) => ({
+    id,
+    type: 'custom',
+    position: { x, y: 100 },
+    data: { label, threads: 4, color: 'sky', catalogId, ...data },
+  });
+  const file = path.join(sandbox.workDir, 'old-workflow.json');
+  fs.writeFileSync(
+    file,
+    JSON.stringify({
+      nodes: [
+        v1Node('n1', 'Align', 'bwa-mem', {
+          tool: 'bwa',
+          command: 'bwa mem -t 4 -M -k 19 genome.fa {input} > {output}',
+          input: 'reads_R1.fastq.gz, reads_R2.fastq.gz',
+          output: 'aligned.sam',
+          catalogParams: { ref: 'genome.fa', mark_secondary: true, min_seed_length: 19 },
+        }, 100),
+        v1Node('n2', 'Sort', 'samtools-sort', {
+          tool: 'samtools',
+          command: 'samtools sort -@ 4 -m 768M -o {output} {input}',
+          input: 'aligned.sam',
+          output: 'sorted.bam',
+          catalogParams: { by_name: false, memory_per_thread: '768M' },
+        }, 400),
+      ],
+      edges: [{ id: 'e1', source: 'n1', target: 'n2' }],
+      wildcardFiles: {},
+      metadata: { name: 'Old workflow' },
+    })
+  );
+  await app.evaluate(({ dialog }, target) => {
+    dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [target] })) as any;
+  }, file);
+
+  await page.getByRole('button', { name: 'Open', exact: true }).click();
+  await expect(nodes(page)).toHaveCount(2);
+  await expect(page.getByTestId('toast').first()).toContainText('2 steps were updated to the new tool catalog');
+
+  // The files the old steps named are now in their fields, and the command is the new one.
+  await selectNode(page, 'Align');
+  await expect(page.getByTestId('prop-slot-ref')).toHaveValue('genome.fa');
+  await expect(page.getByTestId('prop-slot-reads1')).toHaveValue('reads_R1.fastq.gz');
+  await expect(page.getByTestId('prop-slot-reads2')).toHaveValue('reads_R2.fastq.gz');
+  await expect(page.getByTestId('prop-slot-sam')).toHaveValue('aligned.sam');
+  await expect(page.getByTestId('prop-input')).toHaveCount(0);
+  await openSection(page, 'advanced');
+  await expect(page.getByTestId('prop-command')).toHaveValue(
+    'bwa mem -t 4 -M -k 19 {ref} {reads1} {reads2} > {sam}'
+  );
+  // The unsaved marker shows: saving keeps the update.
+  await expect(page.locator('.dirty-marker')).toBeVisible();
+
+  // Sort reads the file the old step named.
+  await selectNode(page, 'Sort');
+  await expect(page.getByTestId('prop-slot-alignments')).toHaveValue('aligned.sam');
 });

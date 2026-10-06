@@ -82,6 +82,7 @@ import {
   validateCatalogNodes,
   type CatalogTool,
 } from './tools/catalog';
+import { migrateNodes } from './tools/migrate';
 import {
   DEFAULT_EDGE_OPTIONS,
   WorkflowCanvas,
@@ -866,7 +867,9 @@ function WorkflowEditorInner() {
         return;
       }
 
-      setNodes(data.nodes);
+      // Steps saved with the version 1 tool catalog are brought up to date.
+      const { nodes: openedNodes, migrated } = migrateNodes(data.nodes);
+      setNodes(openedNodes);
       setEdges(data.edges);
       setSelectedNodeId(null);
       setStepRuns({});
@@ -884,7 +887,7 @@ function WorkflowEditorInner() {
       const hasId = isValidWorkflowId(fileId);
       setWorkflowId(hasId ? fileId : generateWorkflowId());
       setCurrentFilePath(result.path);
-      setIsDirty(!hasId);
+      setIsDirty(!hasId || migrated > 0);
       resetHistory();
       setRunOutcome(null);
       setProblemsOpen(false);
@@ -893,6 +896,15 @@ function WorkflowEditorInner() {
       addLog(
         `Workflow opened: ${data.nodes.length} nodes, ${data.edges.length} edges — ${result.path}`
       );
+      if (migrated > 0) {
+        addLog(`Updated ${migrated} catalog step(s) to the new tool catalog.`);
+        notify(
+          'info',
+          migrated === 1
+            ? 'One step was updated to the new tool catalog. Save to keep the change.'
+            : `${migrated} steps were updated to the new tool catalog. Save to keep the changes.`
+        );
+      }
     } catch (error) {
       addLog(`Failed to open workflow: ${error}`);
       notify('danger', 'Could not open that workflow file.');
@@ -1810,8 +1822,18 @@ function WorkflowEditorInner() {
             onSlotLink={(slotId: string, nodeId: string, outputKey: string) =>
               onNodePatch(selectedNode.id, linkPatch(selectedNode.data, slotId, nodeId, outputKey))
             }
-            onSlotUnlink={(slotId: string) =>
-              onNodePatch(selectedNode.id, unlinkPatch(selectedNode, nodes, edges, slotId))
+            onSlotUnlink={(slotId: string, fromNodeId?: string) =>
+              onNodePatch(
+                selectedNode.id,
+                unlinkPatch(
+                  selectedNode,
+                  nodes,
+                  edges,
+                  slotId,
+                  undefined,
+                  fromNodeId ? { nodeId: fromNodeId } : undefined
+                )
+              )
             }
             bindingPrompt={bindingPrompt}
             onChooseBinding={chooseBinding}

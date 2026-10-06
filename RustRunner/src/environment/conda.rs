@@ -221,6 +221,23 @@ fn check_env(env_name: &str) -> Result<bool, Box<dyn Error>> {
 /// }
 /// ```
 pub fn create_env(env_name: &str, tools: &[String]) -> Result<(), Box<dyn Error>> {
+    create_env_with(
+        env_name,
+        tools,
+        &["bioconda".to_string(), "conda-forge".to_string()],
+        None,
+    )
+}
+
+/// Like [`create_env`], with the channels to search (in order) and an optional
+/// `CONDA_SUBDIR` (for example `osx-64` to install the Intel build on Apple
+/// silicon, which then runs under Rosetta).
+pub fn create_env_with(
+    env_name: &str,
+    specs: &[String],
+    channels: &[String],
+    subdir: Option<&str>,
+) -> Result<(), Box<dyn Error>> {
     debug!("Checking for environment: {}", env_name);
 
     if check_env(env_name)? {
@@ -229,21 +246,25 @@ pub fn create_env(env_name: &str, tools: &[String]) -> Result<(), Box<dyn Error>
     }
 
     info!(
-        "Creating environment '{}' with tools: {:?}",
-        env_name, tools
+        "Creating environment '{}' with: {:?} (channels {:?}{})",
+        env_name,
+        specs,
+        channels,
+        subdir
+            .map(|s| format!(", platform {}", s))
+            .unwrap_or_default()
     );
 
-    let output = micromamba_command()
-        .arg("create")
-        .arg("-y")
-        .arg("-n")
-        .arg(env_name)
-        .arg("-c")
-        .arg("bioconda")
-        .arg("-c")
-        .arg("conda-forge")
-        .args(tools)
-        .output()?;
+    let mut cmd = micromamba_command();
+    cmd.arg("create").arg("-y").arg("-n").arg(env_name);
+    for channel in channels {
+        cmd.arg("-c").arg(channel);
+    }
+    cmd.args(specs);
+    if let Some(subdir) = subdir {
+        cmd.env("CONDA_SUBDIR", subdir);
+    }
+    let output = cmd.output()?;
 
     if output.status.success() {
         info!("Successfully created environment '{}'", env_name);
@@ -251,7 +272,12 @@ pub fn create_env(env_name: &str, tools: &[String]) -> Result<(), Box<dyn Error>
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("Failed to create environment '{}': {}", env_name, stderr);
-        Err(format!("Failed to create environment '{}'", env_name).into())
+        Err(format!(
+            "Failed to create environment '{}': {}",
+            env_name,
+            stderr.trim().lines().last().unwrap_or("unknown error")
+        )
+        .into())
     }
 }
 

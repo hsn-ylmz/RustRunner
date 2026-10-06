@@ -26,6 +26,7 @@ import { resolveHtmlPath } from './util';
 import { readResumeInfoFor, workflowFileStem } from './resumeState';
 import { readRunHistory, resolveReportPath, type RunHistoryEntry } from './runHistory';
 import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
+import { safeDocsUrl } from './docsUrl';
 
 // =============================================================================
 // Types
@@ -453,6 +454,28 @@ ipcMain.handle(
       return { ok: false, error: failure };
     }
     return { ok: true, path: target };
+  }
+);
+
+/**
+ * Opens a tool's documentation page in the default browser. Only plain https
+ * addresses are opened (see docsUrl.ts), so this cannot start a program.
+ */
+ipcMain.handle(
+  'open-docs',
+  async (_event, url: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const safe = safeDocsUrl(url);
+    if (!safe) {
+      log.warn('Refused to open a documentation link', url);
+      return { ok: false, error: 'Only https:// links can be opened.' };
+    }
+    try {
+      await shell.openExternal(safe);
+      return { ok: true };
+    } catch (error) {
+      log.error('Could not open documentation', error);
+      return { ok: false, error: String(error) };
+    }
   }
 );
 

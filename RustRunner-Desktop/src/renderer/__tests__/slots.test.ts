@@ -13,6 +13,7 @@ import {
   scanCommand,
   slotDefsFor,
   slotIssues,
+  slotLinksOf,
   slotStates,
   slotYaml,
   typedPatch,
@@ -31,11 +32,11 @@ const node = (id: string, label: string, data: Record<string, unknown> = {}) => 
 });
 const edge = (source: string, target: string) => ({ id: `e-${source}-${target}`, source, target });
 
-/** A catalog with a tool that declares file slots, so catalog behaviour is tested without touching catalog.json. */
+/** A catalog with tools that declare file slots, so catalog behaviour is tested without touching catalog.json. */
 const CATALOG: Catalog = {
-  schemaVersion: 1,
+  schema_version: 2,
   version: '2099.0.0',
-  fileTypes: ['fastq', 'fasta', 'bam', 'bai'],
+  file_types: ['fastq', 'fasta', 'bam', 'bai', 'txt'],
   categories: { alignment: { label: 'Alignment', color: 'sky' } },
   tools: [
     {
@@ -43,35 +44,55 @@ const CATALOG: Catalog = {
       name: 'Aligner',
       description: 'Aligns reads.',
       category: 'alignment',
-      conda: { package: 'aligner' },
+      subcategory: 'Test aligners',
+      docs: 'https://example.org/aligner',
+      install: { kind: 'conda', package: 'aligner', channel: 'bioconda', version: '1.0' },
       command: 'aligner {ref} {reads1} {reads2} -o {bam}',
-      defaultThreads: 1,
-      inputTypes: ['fastq'],
-      outputTypes: ['bam'],
-      defaultInput: '',
-      defaultOutput: '',
+      threads: 1,
       params: [],
-      inputSlots: [
-        { id: 'ref', label: 'Reference genome', types: ['fasta'], description: 'The genome to align to.' },
-        { id: 'reads1', label: 'First reads file', types: ['fastq'], description: 'Forward reads.' },
-        { id: 'reads2', label: 'Second reads file', types: ['fastq'], description: 'Reverse reads.' },
+      inputs: [
+        { name: 'ref', label: 'Reference genome', types: ['fasta'], description: 'The genome to align to.', required: true, multiple: false },
+        { name: 'reads1', label: 'First reads file', types: ['fastq'], description: 'Forward reads.', required: true, multiple: false, example: 'r1.fq' },
+        { name: 'reads2', label: 'Second reads file', types: ['fastq'], description: 'Reverse reads.', required: false, multiple: false },
       ],
-      outputSlots: [{ id: 'bam', label: 'Alignments', types: ['bam'], description: 'Sorted BAM.' }],
+      outputs: [
+        { name: 'bam', label: 'Alignments', types: ['bam'], description: 'Sorted BAM.', pattern: 'out.bam', is_dir: false },
+      ],
     },
     {
       id: 'indexer',
       name: 'Indexer',
       description: 'Indexes a BAM.',
       category: 'alignment',
-      conda: { package: 'indexer' },
+      subcategory: 'Test indexers',
+      docs: 'https://example.org/indexer',
+      install: { kind: 'conda', package: 'indexer', channel: 'bioconda', version: '1.0' },
       command: 'indexer {input} {bai}',
-      defaultThreads: 1,
-      inputTypes: ['bam'],
-      outputTypes: ['bam'],
-      defaultInput: '',
-      defaultOutput: '',
+      threads: 1,
       params: [],
-      outputSlots: [{ id: 'bai', label: 'Index', types: ['bai'], description: 'The .bai file.' }],
+      inputs: [],
+      outputs: [
+        { name: 'bai', label: 'Index', types: ['bai'], description: 'The .bai file.', pattern: 'x.bai', is_dir: false },
+      ],
+    },
+    {
+      id: 'summarizer',
+      name: 'Summarizer',
+      description: 'Combines results.',
+      category: 'alignment',
+      subcategory: 'Test reports',
+      docs: 'https://example.org/summarizer',
+      install: { kind: 'system', binary: 'summarize' },
+      command: 'summarize -o {out_dir} {reports}',
+      threads: 1,
+      params: [],
+      inputs: [
+        { name: 'reports', label: 'Reports', types: ['any'], description: 'Anything.', required: true, multiple: true },
+      ],
+      outputs: [
+        { name: 'out_dir', label: 'Result folder', types: ['txt'], description: 'Where results go.', pattern: 'sum/', is_dir: true },
+        { name: 'table', label: 'Table', types: ['txt'], description: 'The table.', is_dir: false, derived: { from: 'out_dir', suffix: 'table.txt' } },
+      ],
     },
   ],
 };
@@ -165,6 +186,8 @@ describe('slotDefsFor', () => {
     ]);
     expect(defs[0]).toMatchObject({ label: 'Reference genome', fromCatalog: true, types: ['fasta'] });
     expect(defs[0].hint).toContain('The genome to align to.');
+    expect(defs.map((d) => d.required)).toEqual([true, true, false, true]);
+    expect(defs[1].example).toBe('r1.fq');
   });
 
   it('follows the command once it is edited by hand, keeping what the tool knows', () => {
@@ -188,7 +211,7 @@ describe('slot values and links', () => {
 
   it('shows what was typed', () => {
     const states = slotStates(nodes[1], nodes, []);
-    expect(states.find((s) => s.def.id === 'ref')).toMatchObject({ value: 'genome.fa', link: null, files: ['genome.fa'] });
+    expect(states.find((s) => s.def.id === 'ref')).toMatchObject({ value: 'genome.fa', links: [], files: ['genome.fa'] });
     expect(states.find((s) => s.def.id === 'reads')).toMatchObject({ value: '', files: [] });
   });
 
@@ -204,7 +227,9 @@ describe('slot values and links', () => {
     };
     const all = [nodes[0], linked];
     const state = slotStates(linked, all, [edge('t', 'a')]).find((s) => s.def.id === 'reads')!;
-    expect(state.link).toEqual({ nodeId: 't', stepLabel: 'Trim', outputLabel: 'Output file' });
+    expect(state.links).toEqual([
+      { nodeId: 't', stepLabel: 'Trim', outputLabel: 'Output file', files: ['trimmed.fastq'] },
+    ]);
     expect(state.files).toEqual(['trimmed.fastq']);
 
     // The source changes its output: the slot follows.
@@ -213,7 +238,7 @@ describe('slot values and links', () => {
 
     // The connection is gone: the typed value (none) is what is left.
     const gone = slotStates(linked, all, []).find((s) => s.def.id === 'reads')!;
-    expect(gone.link).toBeNull();
+    expect(gone.links).toEqual([]);
     expect(gone.files).toEqual([]);
   });
 
@@ -221,7 +246,7 @@ describe('slot values and links', () => {
     const empty = node('t', 'Trim', { output: '' });
     const linked = { ...nodes[1], data: { ...nodes[1].data, ...linkPatch(nodes[1].data, 'reads', 't', '') } };
     const state = slotStates(linked, [empty, linked], [edge('t', 'a')]).find((s) => s.def.id === 'reads')!;
-    expect(state.link?.stepLabel).toBe('Trim');
+    expect(state.links[0]?.stepLabel).toBe('Trim');
     expect(state.files).toEqual([]);
   });
 
@@ -238,7 +263,7 @@ describe('slot values and links', () => {
 
   it('ignores malformed slot data in an old or damaged file', () => {
     const n = node('a', 'A', { command: 'x {f}', slotFiles: 'nope', slotLinks: { f: { from: 5 } }, slotKinds: [] });
-    expect(slotStates(n, [n], [])[0]).toMatchObject({ value: '', link: null, files: [] });
+    expect(slotStates(n, [n], [])[0]).toMatchObject({ value: '', links: [], files: [] });
   });
 });
 
@@ -257,12 +282,14 @@ describe('outputs a step offers', () => {
     expect(outputItems(n, undefined, true).map((o) => o.key)).toEqual(['', 'bam', 'bai']);
   });
 
-  it('knows the types: from the tool, the slot or the extension', () => {
+  it('knows the types: from the slot or the extension', () => {
     const catalogNode = node('c', 'Aligner', { catalogId: 'aligner', command: 'aligner', output: 'x.out', slotFiles: { bam: 'a.bam' } });
+    // The main output has no declared type: it comes from the file name. A slot's type is the tool's.
     expect(outputItems(catalogNode, CATALOG).map((o) => [o.key, o.types])).toEqual([
-      ['', ['bam']],
+      ['', []],
       ['bam', ['bam']],
     ]);
+    expect(outputItems(node('y', 'Y', { output: 'x.bam' }))[0].types).toEqual(['bam']);
     expect(outputItems(node('x', 'X', { output: 'r.fq.gz' }))[0].types).toEqual(['fastq']);
   });
 });
@@ -547,5 +574,236 @@ describe('problems', () => {
     const long = 'x'.repeat(41);
     const a = node('a', 'A', { command: `run {${long}}`, slotFiles: { [long]: 'f' } });
     expect(slotIssues(a, [a], []).map((i) => i.kind)).toEqual(['name']);
+  });
+});
+
+describe('slots that take several files', () => {
+  const trim = node('t', 'Trim', { command: 'trim {input} > {output}', output: 'trimmed.fastq' });
+  const flag = node('f', 'Flagstat', { command: 'flagstat {input} > {output}', output: 'flagstat.txt' });
+  const summarizer = () => node('s', 'Summary', { catalogId: 'summarizer', command: 'summarize' });
+  const withPatch = (n: ReturnType<typeof node>, patch: Record<string, unknown>) => ({
+    ...n,
+    data: { ...n.data, ...patch },
+  });
+
+  it('adds a link instead of replacing the one it has', () => {
+    let s = summarizer();
+    s = withPatch(s, linkPatch(s.data, 'reports', 't', '', CATALOG));
+    s = withPatch(s, linkPatch(s.data, 'reports', 'f', '', CATALOG));
+    expect(s.data.slotLinks.reports).toEqual([
+      { from: 't', output: '' },
+      { from: 'f', output: '' },
+    ]);
+    // The same output linked twice is still one link.
+    s = withPatch(s, linkPatch(s.data, 'reports', 'f', '', CATALOG));
+    expect(slotLinksOf(s.data).reports).toHaveLength(2);
+  });
+
+  it('replaces the link of a slot that takes one file', () => {
+    let a = node('a', 'Align', { catalogId: 'aligner', command: 'aligner' });
+    a = withPatch(a, linkPatch(a.data, 'reads1', 't', '', CATALOG));
+    a = withPatch(a, linkPatch(a.data, 'reads1', 'f', '', CATALOG));
+    expect(a.data.slotLinks.reads1).toEqual({ from: 'f', output: '' });
+  });
+
+  it('reads the older single-link spelling and drops repeats and junk', () => {
+    expect(slotLinksOf({ slotLinks: { a: { from: 'x', output: '' } } })).toEqual({ a: [{ from: 'x', output: '' }] });
+    expect(
+      slotLinksOf({
+        slotLinks: {
+          a: [
+            { from: 'x', output: '' },
+            { from: 'x', output: '' },
+            { from: 5 },
+            'text',
+          ],
+          b: [],
+        },
+      })
+    ).toEqual({ a: [{ from: 'x', output: '' }] });
+  });
+
+  it('takes the files of every linked step, then the ones typed by name', () => {
+    let s = summarizer();
+    s = withPatch(s, linkPatch(s.data, 'reports', 't', '', CATALOG));
+    s = withPatch(s, linkPatch(s.data, 'reports', 'f', '', CATALOG));
+    s = withPatch(s, typedPatch(s.data, 'reports', 'extra/qc.txt'));
+    const state = slotStates(s, [trim, flag, s], [edge('t', 's'), edge('f', 's')], CATALOG).find(
+      (x) => x.def.id === 'reports'
+    )!;
+    expect(state.links.map((l) => l.stepLabel)).toEqual(['Trim', 'Flagstat']);
+    expect(state.files).toEqual(['trimmed.fastq', 'flagstat.txt', 'extra/qc.txt']);
+  });
+
+  it('lets go of one linked step and keeps the others', () => {
+    let s = summarizer();
+    s = withPatch(s, linkPatch(s.data, 'reports', 't', '', CATALOG));
+    s = withPatch(s, linkPatch(s.data, 'reports', 'f', '', CATALOG));
+    const patch = unlinkPatch(s, [trim, flag, s], [edge('t', 's'), edge('f', 's')], 'reports', CATALOG, {
+      nodeId: 't',
+    });
+    expect(patch).toEqual({
+      slotLinks: { reports: { from: 'f', output: '' } },
+      slotFiles: { reports: 'trimmed.fastq' },
+    });
+    // Letting go of the last one removes the entry.
+    const rest = withPatch(s, patch);
+    const patch2 = unlinkPatch(rest, [trim, flag, rest], [edge('f', 's')], 'reports', CATALOG, { nodeId: 'f' });
+    expect(patch2).toEqual({ slotLinks: {}, slotFiles: { reports: 'trimmed.fastq, flagstat.txt' } });
+  });
+
+  it('keeps taking more connections: each new step is bound to the same slot', () => {
+    const nodes = [trim, flag, summarizer()];
+    const first = connectWithBinding(nodes, [], [edge('t', 's')], 't', 's', CATALOG);
+    expect(first.plan.kind).toBe('auto');
+    const second = connectWithBinding(
+      first.nodes,
+      [edge('t', 's')],
+      [edge('t', 's'), edge('f', 's')],
+      'f',
+      's',
+      CATALOG
+    );
+    expect(second.plan.kind).toBe('auto');
+    const target = second.nodes.find((n) => n.id === 's')!;
+    expect(slotLinksOf(target.data).reports.map((l) => l.from)).toEqual(['t', 'f']);
+  });
+
+  it('forgets only the links whose connection was removed', () => {
+    let s = summarizer();
+    s = withPatch(s, linkPatch(s.data, 'reports', 't', '', CATALOG));
+    s = withPatch(s, linkPatch(s.data, 'reports', 'f', '', CATALOG));
+    const another = node('x', 'Other', { output: 'o.txt' });
+    const { nodes } = connectWithBinding(
+      [trim, flag, another, s],
+      [edge('t', 's')],
+      [edge('t', 's'), edge('x', 's')],
+      'x',
+      's',
+      CATALOG
+    );
+    const target = nodes.find((n) => n.id === 's')!;
+    // 'f' lost its connection and is gone; 't' stays; 'x' was bound.
+    expect(slotLinksOf(target.data).reports.map((l) => l.from)).toEqual(['t', 'x']);
+  });
+
+  it('accepts any file type in a slot that says any, and prefers a file to a folder', () => {
+    const source = node('p', 'Pack', { catalogId: 'summarizer', command: 'summarize', slotFiles: { out_dir: 'sum/' } });
+    const plan = planBinding([source, summarizer()], [edge('p', 's')], 'p', 's', CATALOG);
+    expect(plan).toMatchObject({ kind: 'auto', option: { slot: 'reports', outputKey: 'table', typeMatch: true } });
+    // A plain file of any type is bound as well.
+    expect(planBinding([trim, summarizer()], [edge('t', 's')], 't', 's', CATALOG).kind).toBe('auto');
+  });
+});
+
+describe('derived outputs', () => {
+  const pack = (files: Record<string, string>) =>
+    node('p', 'Pack', { catalogId: 'summarizer', command: 'summarize', slotFiles: files });
+
+  it('is the folder plus the suffix, and follows when the folder changes', () => {
+    const n = pack({ out_dir: 'results/' });
+    const states = slotStates(n, [n], [], CATALOG);
+    expect(states.find((s) => s.def.id === 'table')!.files).toEqual(['results/table.txt']);
+    const moved = pack({ out_dir: 'other/' });
+    expect(slotStates(moved, [moved], [], CATALOG).find((s) => s.def.id === 'table')!.files).toEqual(['other/table.txt']);
+  });
+
+  it('is offered to later steps like any other output, with the folder flagged as one', () => {
+    const items = outputItems(pack({ out_dir: 'results/' }), CATALOG);
+    expect(items.map((i) => [i.key, i.files, i.isDir])).toEqual([
+      ['out_dir', ['results/'], true],
+      ['table', ['results/table.txt'], false],
+    ]);
+  });
+
+  it('is written to the engine as a named output, so freshness and checks see it', () => {
+    const n = pack({ out_dir: 'results/' });
+    expect(slotYaml(n, [n], [], CATALOG).named_outputs).toEqual({
+      out_dir: ['results/'],
+      table: ['results/table.txt'],
+    });
+  });
+
+  it('follows each folder of a batch pattern', () => {
+    const n = pack({ out_dir: 'out/{sample}/' });
+    expect(slotStates(n, [n], [], CATALOG).find((s) => s.def.id === 'table')!.files).toEqual(['out/{sample}/table.txt']);
+  });
+
+  it('is not a problem by itself: only the folder it follows is', () => {
+    const n = pack({});
+    const issues = slotIssues(n, [n], [], CATALOG).map((i) => i.slot);
+    expect(issues).toContain('out_dir');
+    expect(issues).not.toContain('table');
+  });
+});
+
+describe('optional slots', () => {
+  const aligner = (files: Record<string, string>) =>
+    node('a', 'Align', { catalogId: 'aligner', command: 'aligner {ref} {reads1} {reads2} -o {bam}', slotFiles: files });
+  const filled = { ref: 'g.fa', reads1: 'a.fq', bam: 'o.bam' };
+
+  it('does not stop a run when empty', () => {
+    const n = aligner(filled);
+    expect(slotIssues(n, [n], [], CATALOG)).toEqual([]);
+  });
+
+  it('is listed for the engine, which then fills it with nothing', () => {
+    const n = aligner(filled);
+    const yaml = slotYaml(n, [n], [], CATALOG);
+    expect(yaml.optional_slots).toEqual(['reads2']);
+    expect(yaml.named_inputs).toMatchObject({ reads1: ['a.fq'], reads2: [] });
+  });
+
+  it('shows nothing in the command preview where it is empty, and is not marked missing', () => {
+    const n = aligner(filled);
+    const preview = previewForNode(n, [n], [], CATALOG);
+    expect(preview.missing).toEqual([]);
+    expect(preview.text).toBe('aligner g.fa a.fq  -o o.bam');
+    const both = aligner({ ...filled, reads2: 'b.fq' });
+    expect(previewForNode(both, [both], [], CATALOG).text).toBe('aligner g.fa a.fq b.fq -o o.bam');
+  });
+
+  it('is a problem when it is linked to a step that has no file yet', () => {
+    const empty = node('t', 'Trim', { output: '' });
+    let n = aligner(filled);
+    n = { ...n, data: { ...n.data, ...linkPatch(n.data, 'reads2', 't', '', CATALOG) } };
+    const issues = slotIssues(n, [empty, n], [edge('t', 'a')], CATALOG);
+    expect(issues.map((i) => i.slot)).toEqual(['reads2']);
+    expect(issues[0].message).toContain('Trim');
+  });
+
+  it('is still required for a required slot', () => {
+    const n = aligner({ bam: 'o.bam' });
+    expect(slotIssues(n, [n], [], CATALOG).map((i) => i.slot).sort()).toEqual(['reads1', 'ref']);
+  });
+});
+
+describe('binding and optional slots', () => {
+  const aligner = (files: Record<string, string> = {}) =>
+    node('a', 'Align', { catalogId: 'aligner', command: 'aligner', slotFiles: files });
+
+  it('binds reads to the first read file, not to the optional second one, without asking', () => {
+    const trim = node('t', 'Trim', { command: 'trim', output: 'trimmed.fastq.gz' });
+    const plan = planBinding([trim, aligner({ ref: 'g.fa' })], [edge('t', 'a')], 't', 'a', CATALOG);
+    expect(plan).toMatchObject({ kind: 'auto', option: { slot: 'reads1' } });
+  });
+
+  it('offers the optional slot once the required one is taken', () => {
+    const trim = node('t', 'Trim', { command: 'trim', output: 'trimmed.fastq.gz' });
+    const plan = planBinding([trim, aligner({ ref: 'g.fa', reads1: 'a.fq' })], [edge('t', 'a')], 't', 'a', CATALOG);
+    expect(plan).toMatchObject({ kind: 'auto', option: { slot: 'reads2' } });
+  });
+
+  it('never guesses a file of unknown type into an optional slot', () => {
+    // The output has no known type and every required slot is filled: leave the optional one empty.
+    const index = node('i', 'Index', { command: 'index', output: 'ref.fa.bwt' });
+    const full = aligner({ ref: 'g.fa', reads1: 'a.fq' });
+    expect(planBinding([index, full], [edge('i', 'a')], 'i', 'a', CATALOG)).toEqual({ kind: 'none' });
+    // With a required slot still free, the guess goes there.
+    const open = aligner({ reads1: 'a.fq' });
+    expect(planBinding([index, open], [edge('i', 'a')], 'i', 'a', CATALOG)).toMatchObject({
+      kind: 'auto',
+      option: { slot: 'ref' },
+    });
   });
 });

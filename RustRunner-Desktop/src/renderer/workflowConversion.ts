@@ -14,6 +14,7 @@ import {
   wildcardNameError,
 } from './stepNames';
 import { slotYaml, unescapeBraces } from './slots';
+import { catalogToolName, findTool, installYaml } from './tools/catalog';
 
 // Re-exported: these live in stepNames.ts so the tool catalog can use them
 // without importing this module (which imports the catalog through slots).
@@ -80,6 +81,14 @@ export function convertNodesToWorkflow(
       threads: normalizeThreads(node.data.threads),
       ...slotInfo,
     };
+
+    // A step made from the catalog says where its tool comes from, so the
+    // engine installs the pinned version. A step whose Tool field was edited
+    // away from the catalog's tool is a free-form step and carries nothing.
+    const catalogTool = findTool(node.data.catalogId);
+    if (catalogTool && node.data.tool === catalogToolName(catalogTool)) {
+      step.install = installYaml(catalogTool.install);
+    }
 
     // Retry / timeout settings are emitted only when they change behaviour so
     // YAML for plain steps stays exactly as it was. Keys are snake_case: they
@@ -389,12 +398,14 @@ export function validateWorkflow(workflow: any): string[] {
       }
     }
 
-    // A slot with no file would reach the engine as an unbound placeholder.
+    // A slot with no file would reach the engine as an unbound placeholder,
+    // unless the step says it is optional (then the engine fills it with nothing).
+    const optional: string[] = step.optional_slots ?? [];
     for (const [slot, files] of [
       ...Object.entries((step.named_inputs ?? {}) as Record<string, string[]>),
       ...Object.entries(namedOutputs),
     ]) {
-      if (files.length === 0) {
+      if (files.length === 0 && !optional.includes(slot)) {
         errors.push(`Step ${step.id}: "${slot}" has no file yet`);
       }
     }

@@ -116,6 +116,8 @@ interface ElectronAPI {
       workingDir: string,
       reportRef: string
     ): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+    /** Opens a tool's documentation page (https links only) in the default browser. */
+    openDocs(url: string): Promise<{ ok: true } | { ok: false; error: string }>;
     pauseWorkflow(): void;
     resumeWorkflow(): void;
     stopWorkflow(): void;

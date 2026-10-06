@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use log::{debug, error, info, warn};
 
 use crate::environment::conda::{MAMBA_ROOT_PREFIX, MICROMAMBA_PATH};
+use crate::environment::install::{current_platform, path_with_first, tools_root, Install};
 use crate::workflow::slots::render_command;
 use crate::workflow::Step;
 
@@ -302,11 +303,16 @@ fn run_attempt(
     let script_path = create_execution_script(step_name, command_text)
         .map_err(|e| AttemptError::Fatal(e.to_string()))?;
 
-    // Execute based on tool type
-    let tracked = if is_system_tool(&step.tool) {
-        execute_with_bash(&script_path, working_dir, timeout)
-    } else {
-        execute_with_conda(&script_path, &step.tool, tool_env_map, working_dir, timeout)
+    // Execute based on where the tool comes from
+    let tracked = match launch_for(step, tool_env_map) {
+        Ok(Launch::Bash) => execute_with_bash(&script_path, working_dir, timeout, None),
+        Ok(Launch::BashWithPath(dir)) => {
+            execute_with_bash(&script_path, working_dir, timeout, Some(&dir))
+        }
+        Ok(Launch::Conda(env_name)) => {
+            execute_with_conda(&script_path, &env_name, working_dir, timeout)
+        }
+        Err(e) => Err(e.into()),
     };
 
     // Clean up script
@@ -370,7 +376,9 @@ fn run_attempt(
     }
 }
 
-/// Creates parent directories for output files.
+/// Creates parent directories for output files. An output that names a folder
+/// (a path ending in `/`) is created itself, so a tool that writes into it
+/// finds it there.
 fn ensure_output_directories(
     output_files: &[String],
     working_dir: &Option<PathBuf>,
@@ -384,6 +392,14 @@ fn ensure_output_directories(
             Some(dir) => dir.join(output_file),
             None => PathBuf::from(output_file),
         };
+
+        if output_file.ends_with('/') || output_file.ends_with('\\') {
+            if !output_path.exists() {
+                fs::create_dir_all(&output_path)?;
+                debug!("Created output folder: {}", output_path.display());
+            }
+            continue;
+        }
 
         if let Some(parent) = output_path.parent() {
             if !parent.exists() {
@@ -479,9 +495,15 @@ fn execute_with_bash(
     script_path: &PathBuf,
     working_dir: &Option<PathBuf>,
     timeout: Option<Duration>,
+    path_first: Option<&Path>,
 ) -> Result<TrackedOutput, Box<dyn Error + Send + Sync>> {
     let mut cmd = Command::new("bash");
     cmd.arg(script_path);
+    if let Some(dir) = path_first {
+        if let Some(path) = path_with_first(dir) {
+            cmd.env("PATH", path);
+        }
+    }
 
     if let Some(dir) = working_dir {
         cmd.current_dir(dir);
@@ -491,22 +513,68 @@ fn execute_with_bash(
     Ok(run_tracked_with_timeout(cmd, timeout)?)
 }
 
+/// How a step's script is started.
+#[derive(Debug, PartialEq, Eq)]
+enum Launch {
+    /// `bash script`: a system tool, or a program already on the `PATH`.
+    Bash,
+    /// `bash script` with this folder first on the `PATH` (a downloaded tool).
+    BashWithPath(PathBuf),
+    /// `micromamba run -n <env> bash script`.
+    Conda(String),
+}
+
+/// The conda environment the step runs in, if it runs in one: the one its
+/// `install` block names (version included), else the environment
+/// `env_map.json` maps its tool to. Used for launching and, as a label, for
+/// the step's definition hash.
+pub fn environment_label(step: &Step, tool_env_map: &HashMap<String, String>) -> Option<String> {
+    match &step.install {
+        Some(install) => install.hash_label(current_platform()),
+        None => tool_env_map.get(&step.tool).cloned(),
+    }
+}
+
+fn launch_for(step: &Step, tool_env_map: &HashMap<String, String>) -> Result<Launch, String> {
+    match &step.install {
+        Some(Install::System { .. }) => Ok(Launch::Bash),
+        Some(install @ Install::External { binary, .. }) => install
+            .installed_path_dir(&tools_root(), current_platform())
+            .map(Launch::BashWithPath)
+            .ok_or_else(|| {
+                format!(
+                    "The tool '{}' has not been downloaded (or the download was not verified). \
+                     Run the workflow again to download it.",
+                    binary
+                )
+            }),
+        Some(install @ Install::Conda { package, .. }) => {
+            let name = install
+                .conda_env_name(current_platform())
+                .ok_or_else(|| format!("No conda environment can be named for '{}'", package))?;
+            Ok(Launch::Conda(name))
+        }
+        None if is_system_tool(&step.tool) => Ok(Launch::Bash),
+        None => tool_env_map
+            .get(&step.tool)
+            .map(|name| Launch::Conda(name.clone()))
+            .ok_or_else(|| {
+                format!(
+                    "No conda environment configured for tool '{}'. \
+                     Create one with: micromamba create -n {} {} -c bioconda -c conda-forge",
+                    step.tool, step.tool, step.tool
+                )
+            }),
+    }
+}
+
 /// Executes a script within a conda environment.
 fn execute_with_conda(
     script_path: &PathBuf,
-    tool: &str,
-    tool_env_map: &HashMap<String, String>,
+    env_name: &str,
     working_dir: &Option<PathBuf>,
     timeout: Option<Duration>,
 ) -> Result<TrackedOutput, Box<dyn Error + Send + Sync>> {
-    let env_name = tool_env_map.get(tool).ok_or_else(|| {
-        format!(
-            "No conda environment configured for tool '{}'. \
-             Create one with: micromamba create -n {} {} -c bioconda -c conda-forge",
-            tool, tool, tool
-        )
-    })?;
-
     let mut cmd = Command::new(&*MICROMAMBA_PATH);
     cmd.env("MAMBA_ROOT_PREFIX", &*MAMBA_ROOT_PREFIX);
     cmd.arg("run")
@@ -991,5 +1059,103 @@ mod tests {
         assert!(run.result.is_ok(), "{:?}", run.result);
         assert!(dir.path().join("out/deep/a.bam").exists());
         assert!(dir.path().join("plain.txt").exists());
+    }
+
+    // ---- where the tool comes from ----
+
+    fn conda_install(version: Option<&str>) -> Install {
+        Install::Conda {
+            package: "samtools".into(),
+            version: version.map(String::from),
+            channel: None,
+            osx64: false,
+        }
+    }
+
+    #[test]
+    fn test_launch_follows_the_install_block() {
+        let map = HashMap::new();
+        let plain = Step::new("a", "bash", "true");
+        assert_eq!(launch_for(&plain, &map), Ok(Launch::Bash));
+
+        let pinned = Step::new("a", "samtools", "true").with_install(conda_install(Some("1.24")));
+        assert_eq!(
+            launch_for(&pinned, &map),
+            Ok(Launch::Conda("samtools-1.24".to_string()))
+        );
+
+        let system = Step::new("a", "minimap2", "true").with_install(Install::System {
+            binary: "minimap2".into(),
+        });
+        assert_eq!(launch_for(&system, &map), Ok(Launch::Bash));
+    }
+
+    #[test]
+    fn test_launch_without_install_uses_the_env_map_as_before() {
+        let mut map = HashMap::new();
+        map.insert("samtools".to_string(), "my_env".to_string());
+        let step = Step::new("a", "samtools", "true");
+        assert_eq!(
+            launch_for(&step, &map),
+            Ok(Launch::Conda("my_env".to_string()))
+        );
+        let unmapped = Step::new("a", "bowtie2", "true");
+        let error = launch_for(&unmapped, &map).unwrap_err();
+        assert!(
+            error.contains("No conda environment configured for tool 'bowtie2'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn test_an_external_tool_that_was_never_downloaded_says_so() {
+        let mut url = std::collections::BTreeMap::new();
+        let mut sha = std::collections::BTreeMap::new();
+        for platform in crate::environment::install::PLATFORMS {
+            url.insert(platform.to_string(), "https://example.org/t".to_string());
+            sha.insert(platform.to_string(), "a".repeat(64));
+        }
+        let step = Step::new("a", "t", "t").with_install(Install::External {
+            binary: "t".into(),
+            version: None,
+            url,
+            sha256: sha,
+            license: None,
+        });
+        let error = launch_for(&step, &HashMap::new()).unwrap_err();
+        assert!(error.contains("has not been downloaded"), "{error}");
+    }
+
+    #[test]
+    fn test_environment_label_makes_a_pin_part_of_the_definition() {
+        let mut map = HashMap::new();
+        map.insert("samtools".to_string(), "samtools".to_string());
+        let old = Step::new("a", "samtools", "true");
+        assert_eq!(environment_label(&old, &map), Some("samtools".to_string()));
+        let a = Step::new("a", "samtools", "true").with_install(conda_install(Some("1.20")));
+        let b = Step::new("a", "samtools", "true").with_install(conda_install(Some("1.24")));
+        assert_ne!(environment_label(&a, &map), environment_label(&b, &map));
+        let system =
+            Step::new("a", "x", "true").with_install(Install::System { binary: "x".into() });
+        assert_eq!(environment_label(&system, &map), None);
+    }
+
+    #[test]
+    fn test_output_that_names_a_folder_is_created_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = Some(dir.path().to_path_buf());
+        ensure_output_directories(
+            &[
+                "qc/".to_string(),
+                "deep/er/file.txt".to_string(),
+                "plain.txt".to_string(),
+            ],
+            &base,
+        )
+        .unwrap();
+        assert!(dir.path().join("qc").is_dir());
+        assert!(dir.path().join("deep/er").is_dir());
+        assert!(!dir.path().join("deep/er/file.txt").exists());
+        assert!(!dir.path().join("plain.txt").exists());
     }
 }

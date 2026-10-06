@@ -42,7 +42,32 @@
 //! ```
 //!
 //! Steps without `named_inputs` and `named_outputs` behave exactly as before.
+//!
+//! An input listed in `optional_slots` may have an empty file list: its
+//! placeholder then expands to nothing (the second read file of a pair).
+//!
+//! # Where the tool comes from
+//!
+//! A step can carry an `install` block (see
+//! [`crate::environment::install::Install`]) so the engine installs exactly
+//! the tool the step was made for:
+//!
+//! ```yaml
+//! steps:
+//!   - id: align
+//!     tool: star
+//!     command: STAR --version
+//!     install:
+//!       kind: conda        # or `external` (checked download) or `system`
+//!       package: star
+//!       version: 2.7.10b   # an exact pin: the environment is star-2.7.10b
+//!       channel: bioconda
+//!       osx64: true        # Intel build on Apple silicon
+//! ```
+//!
+//! Steps without `install` keep the original behaviour.
 
+use crate::environment::install::Install;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -324,6 +349,19 @@ pub struct Step {
     /// does a step after it (its result came from placeholders).
     #[serde(default, skip_serializing_if = "is_false")]
     pub mock: bool,
+
+    /// Where the tool comes from (see [`Install`]): a pinned conda package, a
+    /// checked download or a program already on the `PATH`. Without it the
+    /// step runs as a system tool, or in the environment `env_map.json` names
+    /// for its tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<Install>,
+
+    /// Named input slots that may stay empty: `{name}` then expands to
+    /// nothing instead of being an error. Used for optional files such as
+    /// the second read file of a pair.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_slots: Vec<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -434,7 +472,21 @@ impl Step {
             timeout_secs: None,
             checks: Vec::new(),
             mock: false,
+            install: None,
+            optional_slots: Vec::new(),
         }
+    }
+
+    /// Sets where the tool comes from.
+    pub fn with_install(mut self, install: Install) -> Self {
+        self.install = Some(install);
+        self
+    }
+
+    /// Marks named input slots as optional.
+    pub fn with_optional_slots(mut self, names: &[&str]) -> Self {
+        self.optional_slots = names.iter().map(|n| n.to_string()).collect();
+        self
     }
 
     /// Adds an output check.

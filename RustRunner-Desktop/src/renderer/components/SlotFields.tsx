@@ -16,6 +16,7 @@ export interface BindingPromptData {
 
 function SlotField({
   state,
+  followsLabel,
   choices,
   error,
   onVisit,
@@ -25,77 +26,146 @@ function SlotField({
   onUnlink,
 }: {
   state: SlotState;
+  /** For an output that follows another (STAR's BAM in its folder): that one's label. */
+  followsLabel?: string;
   choices: LinkChoice[];
   error?: string;
   onVisit: () => void;
   onFile: (value: string) => void;
   onKind: (kind: SlotKind) => void;
   onLink: (choice: LinkChoice) => void;
-  onUnlink: () => void;
+  onUnlink: (fromNodeId?: string) => void;
 }) {
-  const { def, link } = state;
+  const { def, links } = state;
   const id = def.id;
   const isOutput = def.kind === 'output';
+  const optional = !isOutput && !def.required;
+
+  // An output that is another output plus a suffix has no field: it follows.
+  if (def.derived) {
+    return (
+      <div className="slot-field" data-testid={`prop-slot-${id}-row`}>
+        <div className="field">
+          <span className="field-label" id={`prop-slot-${id}-label`}>
+            {def.label} (written by this step)
+          </span>
+          <div role="group" aria-labelledby={`prop-slot-${id}-label`}>
+            <code className="slot-file" data-testid={`prop-slot-${id}`}>
+              {state.files.length > 0 ? state.files.join(', ') : 'follows the folder above'}
+            </code>
+          </div>
+          <div className="field-hint">
+            {def.hint} It follows {followsLabel ? `"${followsLabel}"` : 'the folder'}, so there is
+            nothing to type. Later steps can use it.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Links already made, so the picker offers only the others.
+  const linkedKeys = new Set(links.map((l) => l.nodeId));
+  const pickable = def.multiple ? choices.filter((c) => !linkedKeys.has(c.nodeId)) : choices;
+
+  const linkedList = links.length > 0 && (
+    <div className="field">
+      <span className="field-label" id={`prop-slot-${id}-label`}>
+        {def.label}
+      </span>
+      {links.map((link, index) => {
+        // The first link keeps the plain test ids; later ones (a slot for several files) are numbered.
+        const suffix = index === 0 ? '' : `-${index + 1}`;
+        return (
+        <div
+          key={link.nodeId}
+          className="slot-linked"
+          role="group"
+          aria-labelledby={`prop-slot-${id}-label`}
+        >
+          <Badge tone="info" icon="link" data-testid={`prop-slot-${id}-from-badge${suffix}`}>
+            from {link.stepLabel}
+          </Badge>
+          <code className="slot-file" data-testid={`prop-slot-${id}${suffix}`}>
+            {link.files.length > 0 ? link.files.join(', ') : 'no file yet'}
+          </code>
+          <Button
+            size="sm"
+            onClick={() => onUnlink(def.multiple ? link.nodeId : undefined)}
+            data-testid={`prop-slot-${id}-unlink${suffix}`}
+            aria-label={`Unlink ${def.label} from ${link.stepLabel}`}
+          >
+            Unlink
+          </Button>
+        </div>
+        );
+      })}
+      <div className="field-hint">
+        {def.multiple
+          ? 'These follow the connected steps. Unlink one to type its file names instead.'
+          : `It follows the ${links[0].outputLabel.toLowerCase()} of ${links[0].stepLabel}. Unlink to type a file name instead.`}
+      </div>
+      {error && (
+        <div className="field-error">
+          <span>{error}</span>
+        </div>
+      )}
+    </div>
+  );
+
+  const picker = !isOutput && pickable.length > 0 && (
+    <Select
+      label={`Take "${def.label}" from a step`}
+      hideLabel
+      value=""
+      data-testid={`prop-slot-${id}-from`}
+      onChange={(e) => {
+        const choice = pickable.find((c) => c.value === e.target.value);
+        if (choice) onLink(choice);
+      }}
+    >
+      <option value="">{def.multiple ? 'Add the output of a step…' : 'Use the output of a step…'}</option>
+      {pickable.map((c) => (
+        <option key={c.value} value={c.value}>
+          {c.label}
+        </option>
+      ))}
+    </Select>
+  );
+
+  const placeholder = isOutput
+    ? def.isDir
+      ? 'e.g. results/'
+      : 'e.g. results/sorted.bam'
+    : def.example
+      ? `e.g. ${def.example}`
+      : 'File name, e.g. data/genome.fa';
+  const typedHint = isOutput
+    ? `${def.hint}${def.isDir ? ' A folder: end it with /.' : ''} Later steps can use it.`
+    : `${def.hint} ${def.multiple ? 'Separate several files with commas.' : ''}`.trim();
 
   return (
     <div className="slot-field" data-testid={`prop-slot-${id}-row`}>
-      {link ? (
-        <div className="field">
-          <span className="field-label" id={`prop-slot-${id}-label`}>
-            {def.label}
-          </span>
-          <div className="slot-linked" role="group" aria-labelledby={`prop-slot-${id}-label`}>
-            <Badge tone="info" icon="link" data-testid={`prop-slot-${id}-from-badge`}>
-              from {link.stepLabel}
-            </Badge>
-            <code className="slot-file" data-testid={`prop-slot-${id}`}>
-              {state.files.length > 0 ? state.files.join(', ') : 'no file yet'}
-            </code>
-            <Button size="sm" onClick={onUnlink} data-testid={`prop-slot-${id}-unlink`}>
-              Unlink
-            </Button>
-          </div>
-          <div className="field-hint">
-            It follows the {link.outputLabel.toLowerCase()} of {link.stepLabel}. Unlink to type a
-            file name instead.
-          </div>
-          {error && (
-            <div className="field-error">
-              <span>{error}</span>
-            </div>
-          )}
-        </div>
-      ) : (
+      {linkedList}
+      {(links.length === 0 || def.multiple) && (
         <>
           <TextField
-            label={isOutput ? `${def.label} (written by this step)` : def.label}
+            label={
+              isOutput
+                ? `${def.label} (written by this step)`
+                : links.length > 0
+                  ? `${def.label}: more files by name`
+                  : def.label
+            }
+            optional={optional}
             value={state.value}
-            data-testid={`prop-slot-${id}`}
-            placeholder={isOutput ? 'e.g. results/sorted.bam' : 'File name, e.g. data/genome.fa'}
-            error={error}
-            hint={`${def.hint}${isOutput ? ' Later steps can use it.' : ' Separate several files with commas.'}`}
+            data-testid={links.length > 0 ? `prop-slot-${id}-typed` : `prop-slot-${id}`}
+            placeholder={placeholder}
+            error={links.length === 0 ? error : undefined}
+            hint={typedHint}
             onChange={(e) => onFile(e.target.value)}
             onBlur={onVisit}
           />
-          {!isOutput && choices.length > 0 && (
-            <Select
-              label={`Take "${def.label}" from a step`}
-              hideLabel
-              value=""
-              data-testid={`prop-slot-${id}-from`}
-              onChange={(e) => {
-                const choice = choices.find((c) => c.value === e.target.value);
-                if (choice) onLink(choice);
-              }}
-            >
-              <option value="">Use the output of a step…</option>
-              {choices.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </Select>
-          )}
+          {picker}
         </>
       )}
       {!def.fromCatalog && (
@@ -135,21 +205,30 @@ export function SlotFields({
   onFile: (slot: string, value: string) => void;
   onKind: (slot: string, kind: SlotKind) => void;
   onLink: (slot: string, choice: LinkChoice) => void;
-  onUnlink: (slot: string) => void;
+  onUnlink: (slot: string, fromNodeId?: string) => void;
   onChoose: (option: BindingOption) => void;
   onDismiss: () => void;
 }) {
   if (slots.length === 0 && !prompt) return null;
+  /** Every file belongs to a catalog tool: the command is built for the person, so it is not explained. */
+  const catalogOnly = slots.length > 0 && slots.every((s) => s.def.fromCatalog);
   const manyOutputs = prompt ? new Set(prompt.options.map((o) => o.outputKey)).size > 1 : false;
 
   return (
     <div className="slot-group" role="group" aria-labelledby="prop-slots-label" data-testid="prop-slots">
       <span className="field-label" id="prop-slots-label">
-        Files named in the command
+        {catalogOnly ? 'Files' : 'Files named in the command'}
       </span>
       <div className="field-hint">
-        Each <code>{'{name}'}</code> in the command is a file. Type its name, or connect a step that
-        makes it. To keep braces as plain text, write them twice: <code>{'{{name}}'}</code>.
+        {catalogOnly ? (
+          <>Type the name of each file, or connect a step that makes it.</>
+        ) : (
+          <>
+            Each <code>{'{name}'}</code> in the command is a file. Type its name, or connect a step
+            that makes it. To keep braces as plain text, write them twice:{' '}
+            <code>{'{{name}}'}</code>.
+          </>
+        )}
       </div>
 
       {prompt && (
@@ -179,13 +258,18 @@ export function SlotFields({
         <SlotField
           key={state.def.id}
           state={state}
+          followsLabel={
+            state.def.derived
+              ? slots.find((other) => other.def.id === state.def.derived!.from)?.def.label
+              : undefined
+          }
           choices={choices}
           error={errorFor(state.def.id)}
           onVisit={() => onVisit(state.def.id)}
           onFile={(value) => onFile(state.def.id, value)}
           onKind={(kind) => onKind(state.def.id, kind)}
           onLink={(choice) => onLink(state.def.id, choice)}
-          onUnlink={() => onUnlink(state.def.id)}
+          onUnlink={(fromNodeId) => onUnlink(state.def.id, fromNodeId)}
         />
       ))}
     </div>

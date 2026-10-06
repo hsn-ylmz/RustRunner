@@ -3,8 +3,8 @@
  * main input and output (a reference genome, the two read files of a pair, the
  * `.bai` that goes with a `.bam`).
  *
- * A slot comes from the tool catalog (a tool declares `inputSlots` and
- * `outputSlots`) or, for a step written by hand, from the placeholders found in
+ * A slot comes from the tool catalog (a tool declares `inputs` and
+ * `outputs`) or, for a step written by hand, from the placeholders found in
  * its command. Each slot is shown as a labelled file field. It holds either a
  * file name the person typed or a link to an output of a step that runs before
  * this one; connecting two steps fills a free slot of the later step with a
@@ -16,11 +16,21 @@
  *
  * Node data used (all optional, so older workflow files load unchanged):
  *   slotFiles  { slotId: "a.fa, b.fa" }        what was typed for each slot
- *   slotLinks  { slotId: { from, output } }    a slot filled from another step
+ *   slotLinks  { slotId: { from, output } }    a slot filled from another step; a slot
+ *                                              that takes several files holds a list of them
  *   slotKinds  { slotId: 'input' | 'output' }  the role of a hand-written slot
  */
 
-import { CATALOG, findTool, shellQuote, type Catalog, type CatalogSlot } from './tools/catalog';
+import {
+  ANY_TYPE,
+  CATALOG,
+  findTool,
+  shellQuote,
+  typesFit,
+  type Catalog,
+  type InputSlot,
+  type OutputSlot,
+} from './tools/catalog';
 import { declaredOutputs, normalizeWildcardName } from './stepNames';
 
 // -----------------------------------------------------------------------------
@@ -208,6 +218,7 @@ const EXTENSION_TYPES: Record<string, string> = {
   txt: 'txt',
   html: 'html',
   zip: 'zip',
+  json: 'json',
 };
 
 /** The file type a path's extension names (`reads.fq.gz` is fastq), or none. */
@@ -226,7 +237,6 @@ export function typesOfPaths(paths: string[]): string[] {
   return types;
 }
 
-const intersects = (a: string[], b: string[]) => a.some((t) => b.includes(t));
 
 // -----------------------------------------------------------------------------
 // Slots of a step
@@ -245,6 +255,16 @@ export interface SlotDef {
   /** One or two short lines under the field. */
   hint: string;
   fromCatalog: boolean;
+  /** An input the step cannot run without. An optional one may stay empty. */
+  required: boolean;
+  /** Several files, and several connected steps, can fill it. */
+  multiple: boolean;
+  /** A file name shown as placeholder text in the field. */
+  example?: string;
+  /** The slot is a folder. */
+  isDir: boolean;
+  /** An output that is another output plus a suffix; it has no field of its own. */
+  derived?: { from: string; suffix: string };
 }
 
 /** What `{ref}`-style names usually mean, so a hand-written step gets a plain label and a type. */
@@ -275,20 +295,41 @@ function humanize(id: string): string {
   return words ? words[0].toUpperCase() + words.slice(1) : id;
 }
 
-function hintFor(id: string, types: string[], extra?: string): string {
-  const parts = [extra, `Written as {${id}} in the command.`];
-  if (types.length > 0) parts.push(`File type: ${types.join(' or ')}.`);
+function hintFor(id: string, types: string[], extra?: string, showName = true): string {
+  // A catalog step's command is built for the person, so the placeholder name is not their business.
+  const parts = [extra, showName ? `Written as {${id}} in the command.` : ''];
+  const shown = types.filter((t) => t !== ANY_TYPE);
+  if (shown.length > 0) parts.push(`File type: ${shown.join(' or ')}.`);
   return parts.filter(Boolean).join(' ');
 }
 
-function catalogDef(slot: CatalogSlot, kind: SlotKind): SlotDef {
+function catalogInputDef(slot: InputSlot): SlotDef {
   return {
-    id: slot.id,
-    kind,
+    id: slot.name,
+    kind: 'input',
     label: slot.label,
     types: slot.types,
-    hint: hintFor(slot.id, slot.types, slot.description),
+    hint: hintFor(slot.name, slot.types, slot.description, false),
     fromCatalog: true,
+    required: slot.required,
+    multiple: slot.multiple,
+    example: slot.example,
+    isDir: false,
+  };
+}
+
+function catalogOutputDef(slot: OutputSlot): SlotDef {
+  return {
+    id: slot.name,
+    kind: 'output',
+    label: slot.label,
+    types: slot.types,
+    hint: hintFor(slot.name, slot.types, slot.description, false),
+    fromCatalog: true,
+    required: true,
+    multiple: false,
+    isDir: slot.is_dir,
+    derived: slot.derived,
   };
 }
 
@@ -302,6 +343,9 @@ function derivedDef(id: string, kind: SlotKind): SlotDef {
     types,
     hint: hintFor(id, types),
     fromCatalog: false,
+    required: true,
+    multiple: false,
+    isDir: false,
   };
 }
 
@@ -327,14 +371,22 @@ export interface SlotLink {
 }
 
 /** The links of a node, dropping entries that are not well-formed. */
-export function slotLinksOf(data: any): Record<string, SlotLink> {
-  const out: Record<string, SlotLink> = {};
-  if (isRecord(data?.slotLinks)) {
-    for (const [id, link] of Object.entries(data.slotLinks)) {
+export function slotLinksOf(data: any): Record<string, SlotLink[]> {
+  const out: Record<string, SlotLink[]> = {};
+  if (!isRecord(data?.slotLinks)) return out;
+  for (const [id, value] of Object.entries(data.slotLinks)) {
+    // A slot that takes one file holds one link (the original spelling); a
+    // slot that takes several holds a list.
+    const list: unknown[] = Array.isArray(value) ? value : [value];
+    const links: SlotLink[] = [];
+    for (const link of list) {
       if (isRecord(link) && typeof link.from === 'string' && typeof link.output === 'string') {
-        out[id] = { from: link.from, output: link.output };
+        if (!links.some((l) => l.from === link.from && l.output === link.output)) {
+          links.push({ from: link.from, output: link.output });
+        }
       }
     }
+    if (links.length > 0) out[id] = links;
   }
   return out;
 }
@@ -359,10 +411,7 @@ function slotKindsOf(data: any): Record<string, SlotKind> {
 export function slotDefsFor(data: any, catalog: Catalog = CATALOG): SlotDef[] {
   const tool = findTool(data?.catalogId, catalog);
   const declared: SlotDef[] = tool
-    ? [
-        ...(tool.inputSlots ?? []).map((s) => catalogDef(s, 'input')),
-        ...(tool.outputSlots ?? []).map((s) => catalogDef(s, 'output')),
-      ]
+    ? [...tool.inputs.map(catalogInputDef), ...tool.outputs.map(catalogOutputDef)]
     : [];
   if (tool && data?.catalogCommandCustom !== true) return declared;
 
@@ -389,6 +438,19 @@ export interface OutputItem {
   label: string;
   files: string[];
   types: string[];
+  /** The output is a folder. */
+  isDir: boolean;
+}
+
+/**
+ * The files an output slot holds: what was typed for it, or for a derived
+ * output the files of the output it follows with the suffix added.
+ */
+function outputFilesOf(def: SlotDef, typed: Record<string, string>): string[] {
+  if (def.derived) {
+    return declaredOutputs(typed[def.derived.from]).map((file) => file + def.derived!.suffix);
+  }
+  return declaredOutputs(typed[def.id]);
 }
 
 /**
@@ -402,7 +464,6 @@ export function outputItems(
   includeEmpty = false
 ): OutputItem[] {
   const data = node?.data ?? {};
-  const tool = findTool(data.catalogId, catalog);
   const items: OutputItem[] = [];
 
   const main = declaredOutputs(data.output);
@@ -411,19 +472,21 @@ export function outputItems(
       key: '',
       label: 'Output file',
       files: main,
-      types: tool ? tool.outputTypes : typesOfPaths(main),
+      types: typesOfPaths(main),
+      isDir: false,
     });
   }
   const typed = slotFilesOf(data);
   for (const def of slotDefsFor(data, catalog)) {
     if (def.kind !== 'output') continue;
-    const files = declaredOutputs(typed[def.id]);
+    const files = outputFilesOf(def, typed);
     if (files.length === 0 && !includeEmpty) continue;
     items.push({
       key: def.id,
       label: def.label,
       files,
       types: def.types.length > 0 ? def.types : typesOfPaths(files),
+      isDir: def.isDir,
     });
   }
   return items;
@@ -443,12 +506,24 @@ export interface GraphEdgeLike {
   target: string;
 }
 
+export interface SlotLinkState {
+  nodeId: string;
+  stepLabel: string;
+  outputLabel: string;
+  /** The files the linked output has now. */
+  files: string[];
+}
+
 export interface SlotState {
   def: SlotDef;
   /** What was typed (kept while the slot is linked, so Unlink can start from it). */
   value: string;
-  /** Set when the slot takes its file from a step that still runs before this one. */
-  link: { nodeId: string; stepLabel: string; outputLabel: string } | null;
+  /**
+   * The steps this slot takes its files from, while their connections exist.
+   * A slot that takes one file has at most one; one that takes several can
+   * have many.
+   */
+  links: SlotLinkState[];
   /** The files the engine gets for this slot. */
   files: string[];
 }
@@ -460,12 +535,11 @@ function stepLabelOf(node: GraphNodeLike | undefined): string {
 
 /** A link counts while its connection exists and its source step is still on the canvas. */
 function liveLink(
-  link: SlotLink | undefined,
+  link: SlotLink,
   nodeId: string,
   nodes: ReadonlyArray<GraphNodeLike>,
   edges: ReadonlyArray<GraphEdgeLike>
 ): GraphNodeLike | undefined {
-  if (!link) return undefined;
   if (!edges.some((e) => e.source === link.from && e.target === nodeId)) return undefined;
   return nodes.find((n) => n.id === link.from);
 }
@@ -477,24 +551,33 @@ export function slotStates(
   catalog: Catalog = CATALOG
 ): SlotState[] {
   const typed = slotFilesOf(node.data);
-  const links = slotLinksOf(node.data);
+  const allLinks = slotLinksOf(node.data);
   return slotDefsFor(node.data, catalog).map((def) => {
     const value = typed[def.id] ?? '';
-    const source = def.kind === 'input' ? liveLink(links[def.id], node.id, nodes, edges) : undefined;
-    if (source) {
-      const item = outputItems(source, catalog, true).find((o) => o.key === links[def.id].output);
-      return {
-        def,
-        value,
-        link: {
-          nodeId: source.id,
-          stepLabel: stepLabelOf(source),
-          outputLabel: item?.label ?? 'Output file',
-        },
-        files: item?.files ?? [],
-      };
+    if (def.kind !== 'input') {
+      return { def, value, links: [], files: outputFilesOf(def, typed) };
     }
-    return { def, value, link: null, files: declaredOutputs(value) };
+    let links: SlotLinkState[] = [];
+    for (const link of allLinks[def.id] ?? []) {
+      const source = liveLink(link, node.id, nodes, edges);
+      if (!source) continue;
+      const item = outputItems(source, catalog, true).find((o) => o.key === link.output);
+      links.push({
+        nodeId: source.id,
+        stepLabel: stepLabelOf(source),
+        outputLabel: item?.label ?? 'Output file',
+        files: item?.files ?? [],
+      });
+    }
+    // A slot for one file follows its first link; typed text is kept for Unlink.
+    if (!def.multiple) links = links.slice(0, 1);
+    const linked = links.flatMap((l) => l.files);
+    const files = def.multiple
+      ? [...linked, ...declaredOutputs(value)]
+      : links.length > 0
+        ? linked
+        : declaredOutputs(value);
+    return { def, value, links, files };
   });
 }
 
@@ -541,8 +624,14 @@ export function planBinding(
   const target = nodes.find((n) => n.id === targetId);
   if (!source || !target || sourceId === targetId) return { kind: 'none' };
 
+  // A slot for one file is free until something fills it. A slot for several
+  // files can always take one more connected step.
   const free = slotStates(target, nodes, edges, catalog).filter(
-    (s) => s.def.kind === 'input' && s.link === null && s.value.trim() === ''
+    (s) =>
+      s.def.kind === 'input' &&
+      (s.def.multiple
+        ? !s.links.some((l) => l.nodeId === sourceId)
+        : s.links.length === 0 && s.value.trim() === '')
   );
   const outputs = outputItems(source, catalog);
   if (free.length === 0 || outputs.length === 0) return { kind: 'none' };
@@ -553,15 +642,26 @@ export function planBinding(
     outputKey: out.key,
     outputLabel: out.label,
     files: out.files,
-    typeMatch: slot.def.types.length > 0 && out.types.length > 0 && intersects(slot.def.types, out.types),
+    typeMatch: typesFit(slot.def.types, out.types),
   });
 
-  const matching: BindingOption[] = [];
+  let matching: BindingOption[] = [];
   for (const slot of free) for (const out of outputs) if (pair(slot, out).typeMatch) matching.push(pair(slot, out));
+  // A folder is offered only when no single file fits: STAR's BAM, not its output folder.
+  const isDir = (option: BindingOption) => outputs.find((o) => o.key === option.outputKey)?.isDir === true;
+  if (matching.some((m) => !isDir(m))) matching = matching.filter((m) => !isDir(m));
+  // An optional slot (the second read file of a pair) is filled only when no required slot fits.
+  const isRequired = (option: BindingOption) => free.find((s) => s.def.id === option.slot)?.def.required !== false;
+  if (matching.some(isRequired)) matching = matching.filter(isRequired);
   if (matching.length === 1) return { kind: 'auto', option: matching[0] };
   if (matching.length > 1) return { kind: 'ask', options: matching };
 
-  const open = free.find((s) => s.def.types.length === 0) ?? free.find((s) => outputs.some((o) => o.types.length === 0));
+  // Nothing fits by type. A slot with no declared type, or an output of unknown
+  // type, is matched by guesswork, but never into an optional slot.
+  const guessable = free.filter((s) => s.def.required);
+  const open =
+    guessable.find((s) => s.def.types.length === 0) ??
+    guessable.find((s) => outputs.some((o) => o.types.length === 0));
   if (!open) return { kind: 'none' };
   const candidates = outputs
     .filter((o) => open.def.types.length === 0 || o.types.length === 0)
@@ -570,9 +670,31 @@ export function planBinding(
   return candidates.length > 1 ? { kind: 'ask', options: candidates } : { kind: 'none' };
 }
 
-/** The node-data patch that links `slotId` to an output of `sourceId`. */
-export function linkPatch(data: any, slotId: string, sourceId: string, outputKey: string): Record<string, unknown> {
-  return { slotLinks: { ...slotLinksOf(data), [slotId]: { from: sourceId, output: outputKey } } };
+/**
+ * The node-data patch that links `slotId` to an output of `sourceId`. A slot
+ * for one file now follows that output alone; a slot for several files adds it
+ * to the ones it already follows.
+ */
+export function linkPatch(
+  data: any,
+  slotId: string,
+  sourceId: string,
+  outputKey: string,
+  catalog: Catalog = CATALOG
+): Record<string, unknown> {
+  const links = slotLinksOf(data);
+  const multiple = slotDefsFor(data, catalog).find((d) => d.id === slotId)?.multiple === true;
+  const link: SlotLink = { from: sourceId, output: outputKey };
+  if (!multiple) return { slotLinks: { ...rawLinks(links), [slotId]: link } };
+  const existing = (links[slotId] ?? []).filter((l) => !(l.from === sourceId && l.output === outputKey));
+  return { slotLinks: { ...rawLinks(links), [slotId]: [...existing, link] } };
+}
+
+/** The links as stored: one link as an object, several as a list. */
+function rawLinks(links: Record<string, SlotLink[]>): Record<string, SlotLink | SlotLink[]> {
+  const out: Record<string, SlotLink | SlotLink[]> = {};
+  for (const [id, list] of Object.entries(links)) out[id] = list.length === 1 ? list[0] : list;
+  return out;
 }
 
 /** The patch that stores a typed file name for a slot. */
@@ -586,21 +708,44 @@ export function kindPatch(data: any, slotId: string, kind: SlotKind): Record<str
 }
 
 /**
- * The patch that turns a link into a typed file name: the field starts with
- * the files the slot has now, so nothing is lost by unlinking.
+ * The patch that turns a link into typed file names: the field starts with
+ * the files the link gave, so nothing is lost by unlinking. For a slot that
+ * follows several steps, `from` names the one to let go (its canvas id, and
+ * `output` its output key when that step is linked twice); without it every
+ * link of the slot is let go.
  */
 export function unlinkPatch(
   node: GraphNodeLike,
   nodes: ReadonlyArray<GraphNodeLike>,
   edges: ReadonlyArray<GraphEdgeLike>,
   slotId: string,
-  catalog: Catalog = CATALOG
+  catalog: Catalog = CATALOG,
+  from?: { nodeId: string; output?: string }
 ): Record<string, unknown> {
   const state = slotStates(node, nodes, edges, catalog).find((s) => s.def.id === slotId);
-  const links = { ...slotLinksOf(node.data) };
-  delete links[slotId];
-  const typed = state?.link ? state.files.join(', ') : slotFilesOf(node.data)[slotId] ?? '';
-  return { slotLinks: links, slotFiles: { ...slotFilesOf(node.data), [slotId]: typed } };
+  const stored = slotLinksOf(node.data);
+  const current = stored[slotId] ?? [];
+  const typedBefore = slotFilesOf(node.data)[slotId] ?? '';
+
+  const leaving = (link: SlotLink) =>
+    from === undefined || (link.from === from.nodeId && (from.output === undefined || link.output === from.output));
+  const staying = current.filter((l) => !leaving(l));
+  const liveLeaving = (state?.links ?? []).filter(
+    (l) => from === undefined || (l.nodeId === from.nodeId)
+  );
+  const gained = liveLeaving.flatMap((l) => l.files);
+
+  const links = { ...stored };
+  if (staying.length > 0) links[slotId] = staying;
+  else delete links[slotId];
+
+  let typed: string;
+  if (state?.def.multiple) {
+    typed = [...declaredOutputs(typedBefore), ...gained].join(', ');
+  } else {
+    typed = liveLeaving.length > 0 ? gained.join(', ') : typedBefore;
+  }
+  return { slotLinks: rawLinks(links), slotFiles: { ...slotFilesOf(node.data), [slotId]: typed } };
 }
 
 /**
@@ -623,16 +768,23 @@ export function connectWithBinding<N extends GraphNodeLike>(
   if (!target) return { nodes: next, plan: { kind: 'none' } };
 
   const links = slotLinksOf(target.data);
-  const kept: Record<string, SlotLink> = {};
-  for (const [id, link] of Object.entries(links)) {
-    if (edgesBefore.some((e) => e.source === link.from && e.target === targetId)) kept[id] = link;
+  const kept: Record<string, SlotLink[]> = {};
+  let dropped = false;
+  for (const [id, list] of Object.entries(links)) {
+    const alive = list.filter((link) =>
+      edgesBefore.some((e) => e.source === link.from && e.target === targetId)
+    );
+    if (alive.length !== list.length) dropped = true;
+    if (alive.length > 0) kept[id] = alive;
   }
-  if (Object.keys(kept).length !== Object.keys(links).length) {
-    next = next.map((n) => (n.id === targetId ? { ...n, data: { ...n.data, slotLinks: kept } } : n));
+  if (dropped) {
+    next = next.map((n) =>
+      n.id === targetId ? { ...n, data: { ...n.data, slotLinks: rawLinks(kept) } } : n
+    );
   }
 
   const plan = planBinding(next, edgesAfter, sourceId, targetId, catalog);
-  if (plan.kind === 'auto') next = applyBinding(next, targetId, sourceId, plan.option);
+  if (plan.kind === 'auto') next = applyBinding(next, targetId, sourceId, plan.option, catalog);
   return { nodes: next, plan };
 }
 
@@ -641,11 +793,12 @@ export function applyBinding<N extends GraphNodeLike>(
   nodes: ReadonlyArray<N>,
   targetId: string,
   sourceId: string,
-  option: BindingOption
+  option: BindingOption,
+  catalog: Catalog = CATALOG
 ): N[] {
   return nodes.map((n) =>
     n.id === targetId
-      ? { ...n, data: { ...n.data, ...linkPatch(n.data, option.slot, sourceId, option.outputKey) } }
+      ? { ...n, data: { ...n.data, ...linkPatch(n.data, option.slot, sourceId, option.outputKey, catalog) } }
       : n
   );
 }
@@ -703,15 +856,25 @@ export function slotYaml(
   nodes: ReadonlyArray<GraphNodeLike>,
   edges: ReadonlyArray<GraphEdgeLike>,
   catalog: Catalog = CATALOG
-): { named_inputs?: Record<string, string[]>; named_outputs?: Record<string, string[]> } {
+): SlotYaml {
   const states = slotStates(node, nodes, edges, catalog);
   const named_inputs: Record<string, string[]> = {};
   const named_outputs: Record<string, string[]> = {};
   for (const s of states) (s.def.kind === 'input' ? named_inputs : named_outputs)[s.def.id] = s.files;
-  const out: { named_inputs?: Record<string, string[]>; named_outputs?: Record<string, string[]> } = {};
+  const out: SlotYaml = {};
   if (Object.keys(named_inputs).length > 0) out.named_inputs = named_inputs;
   if (Object.keys(named_outputs).length > 0) out.named_outputs = named_outputs;
+  // An optional input may stay empty: the engine then fills `{name}` with nothing.
+  const optional = states.filter((s) => s.def.kind === 'input' && !s.def.required).map((s) => s.def.id);
+  if (optional.length > 0) out.optional_slots = optional;
   return out;
+}
+
+/** The slot fields of a step in the engine's YAML. */
+export interface SlotYaml {
+  named_inputs?: Record<string, string[]>;
+  named_outputs?: Record<string, string[]>;
+  optional_slots?: string[];
 }
 
 // -----------------------------------------------------------------------------
@@ -745,6 +908,8 @@ export interface PreviewContext {
   threads: number;
   /** Files of each slot; an empty list is a slot with no file yet. */
   slots: Record<string, string[]>;
+  /** Slots that may stay empty: they fill with nothing instead of being marked. */
+  optional?: string[];
 }
 
 const escapeDouble = (file: string) => file.replace(/[\\"$`]/g, '\\$&');
@@ -815,6 +980,9 @@ export function previewCommand(command: string, ctx: PreviewContext): Preview {
       } else {
         addText(`{${name}}`);
       }
+    } else if (files.length === 0 && ctx.optional?.includes(name)) {
+      // An optional file that is not given: the engine leaves nothing in its place.
+      pieces.push({ text: '', state: 'filled', name });
     } else if (files.length === 0 || files.some((f) => f.trim() === '')) {
       pieces.push({ text: `{${name}}`, state: 'missing', name, reason: 'no-file' });
       addMissing(name);
@@ -855,6 +1023,7 @@ export function previewForNode(
   const threads = Math.max(1, Math.floor(Number(data.threads)) || 1);
   return previewCommand(typeof data.command === 'string' ? data.command : '', {
     structured: states.length > 0,
+    optional: states.filter((s) => s.def.kind === 'input' && !s.def.required).map((s) => s.def.id),
     input: declaredOutputs(data.input),
     output: declaredOutputs(data.output),
     threads,
@@ -894,11 +1063,16 @@ export function slotIssues(
       });
     }
     if (state.files.length > 0) continue;
+    // An optional file may stay empty; a derived one follows its folder, which is checked itself.
+    // (A link to a step that has no file yet is still a problem, optional or not.)
+    if (def.kind === 'input' && !def.required && state.links.length === 0) continue;
+    if (def.derived) continue;
+    const empty = state.links.find((l) => l.files.length === 0);
     issues.push({
       slot: def.id,
       kind: 'missing',
-      message: state.link
-        ? `"${def.label}" comes from ${state.link.stepLabel}, which has no ${state.link.outputLabel.toLowerCase()} yet. Set it there or choose a file here.`
+      message: empty
+        ? `"${def.label}" comes from ${empty.stepLabel}, which has no ${empty.outputLabel.toLowerCase()} yet. Set it there or choose a file here.`
         : def.kind === 'input'
           ? `Choose a file for "${def.label}" (written {${def.id}} in the command).`
           : `Say where "${def.label}" is written (written {${def.id}} in the command).`,

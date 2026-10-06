@@ -341,6 +341,8 @@ enum Binding {
     Files(Vec<String>),
     /// The thread count, written bare.
     Threads(String),
+    /// An optional slot that has no file: it expands to nothing.
+    Empty,
     /// A slot of the step that has no usable file.
     Unbound,
     Unknown,
@@ -358,6 +360,9 @@ fn binding_of(step: &Step, name: &str) -> Binding {
         {
             Some(files) if !files.is_empty() && files.iter().all(|f| !f.trim().is_empty()) => {
                 Binding::Files(files.clone())
+            }
+            Some(files) if files.is_empty() && step.optional_slots.iter().any(|n| n == name) => {
+                Binding::Empty
             }
             Some(_) => Binding::Unbound,
             None => Binding::Unknown,
@@ -393,6 +398,14 @@ pub fn declaration_problems(step: &Step) -> Vec<String> {
                     step.id, name
                 ));
             }
+        }
+    }
+    for name in &step.optional_slots {
+        if !step.named_inputs.contains_key(name) {
+            problems.push(format!(
+                "Step '{}': optional slot '{}' is not one of the step's named inputs",
+                step.id, name
+            ));
         }
     }
     for (name, _) in sorted_slots(&step.named_inputs) {
@@ -464,6 +477,7 @@ pub fn render_command(step: &Step) -> Result<String, Vec<String>> {
                     &mut errors,
                 ),
                 Binding::Threads(n) => out.push_str(&n),
+                Binding::Empty => {}
                 Binding::Files(files) => out.push_str(&fill(&files, quote)),
             },
         }
@@ -822,5 +836,50 @@ mod tests {
             .with_named_input("z", &["y"])
             .with_named_output("m", &["o"]);
         assert_eq!(unused_slots(&s), vec!["m", "z"]);
+    }
+
+    // ---- optional slots ----
+
+    #[test]
+    fn test_optional_empty_slot_expands_to_nothing() {
+        let step = Step::new("a", "bash", "bwa mem {ref} {r1} {r2} > {sam}")
+            .with_named_input("ref", &["g.fa"])
+            .with_named_input("r1", &["a.fq"])
+            .with_named_input("r2", &[])
+            .with_named_output("sam", &["o.sam"])
+            .with_optional_slots(&["r2"]);
+        assert_eq!(
+            render_command(&step).unwrap(),
+            "bwa mem 'g.fa' 'a.fq'  > 'o.sam'"
+        );
+    }
+
+    #[test]
+    fn test_optional_slot_with_a_file_is_filled_as_usual() {
+        let step = Step::new("a", "bash", "run {r1} {r2}")
+            .with_named_input("r1", &["a.fq"])
+            .with_named_input("r2", &["b.fq"])
+            .with_optional_slots(&["r2"]);
+        assert_eq!(render_command(&step).unwrap(), "run 'a.fq' 'b.fq'");
+    }
+
+    #[test]
+    fn test_only_listed_slots_may_be_empty() {
+        let step = Step::new("a", "bash", "run {r1} {r2}")
+            .with_named_input("r1", &[])
+            .with_named_input("r2", &[])
+            .with_optional_slots(&["r2"]);
+        let errors = render_command(&step).unwrap_err();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("{r1}"));
+    }
+
+    #[test]
+    fn test_optional_slot_must_be_declared_as_a_named_input() {
+        let step = Step::new("a", "bash", "run {r1}")
+            .with_named_input("r1", &["a.fq"])
+            .with_optional_slots(&["nope"]);
+        let problems = declaration_problems(&step);
+        assert!(problems.iter().any(|p| p.contains("nope")), "{problems:?}");
     }
 }

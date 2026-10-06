@@ -131,3 +131,27 @@ describe('remembered state', () => {
     expect(parseOpenState('"x"')).toEqual({});
   });
 });
+
+describe('summaries of catalog steps that name every file in a slot', () => {
+  const catalogStep = { catalogId: 'bwa-mem', input: '', output: '' };
+
+  it('counts the named files instead of saying there is no input or output', () => {
+    expect(sectionSummary('io', catalogStep, { slotCount: 4, slotsToFill: 2 })).toBe('4 files named, 2 to choose');
+    expect(sectionSummary('io', catalogStep, { slotCount: 4, slotsToFill: 0 })).toBe('4 files named, all chosen');
+    expect(sectionSummary('io', catalogStep, { slotCount: 1, slotsToFill: 0, upstreamCount: 1 })).toBe(
+      'after 1 step, 1 file named, all chosen'
+    );
+  });
+
+  it('keeps the plain summary for a hand-edited command, which still has an input and an output', () => {
+    expect(
+      sectionSummary('io', { ...catalogStep, catalogCommandCustom: true, input: 'a', output: 'b' }, { slotCount: 1, slotsToFill: 0 })
+    ).toBe('in: a, out: b, 1 named file');
+  });
+
+  it('does not ask for an output when a named output exists', () => {
+    expect(sectionSummary('checks', catalogStep)).toBe('Needs an output');
+    expect(sectionSummary('checks', catalogStep, { hasOutput: true })).toBe('None');
+    expect(sectionSummary('checks', { ...catalogStep, checkExists: true }, { hasOutput: true })).toBe('exists');
+  });
+});

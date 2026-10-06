@@ -21,9 +21,13 @@ import {
 } from '../workflowConversion';
 import {
   applyParamChange,
+  catalogToolName,
   coerceNumber,
   defaultParams,
+  describeInstall,
   findTool,
+  inputTypesOf,
+  outputTypesOf,
   missingRequiredParams,
   renderCommand,
   type ParamValue,
@@ -58,6 +62,7 @@ import {
   testIdForField,
   type OpenState,
   type SectionId,
+  type SummaryExtra,
 } from '../panelSections';
 import type { IssueField } from '../validation';
 
@@ -178,7 +183,7 @@ export function PropertiesPanel({
   onSlotFile?: (slotId: string, value: string) => void;
   onSlotKind?: (slotId: string, kind: SlotKind) => void;
   onSlotLink?: (slotId: string, nodeId: string, outputKey: string) => void;
-  onSlotUnlink?: (slotId: string) => void;
+  onSlotUnlink?: (slotId: string, fromNodeId?: string) => void;
   /** A connection that fits several slots: the person picks one. */
   bindingPrompt?: BindingPromptData | null;
   onChooseBinding?: (option: BindingOption) => void;
@@ -255,7 +260,7 @@ export function PropertiesPanel({
     ).length;
   const sectionProps = (
     section: SectionId,
-    extra: { fileCount?: number; upstreamCount?: number; slotCount?: number; slotsToFill?: number } = {}
+    extra: SummaryExtra = {}
   ) => ({
     title: SECTION_TITLES[section],
     open: isSectionOpen(section, chosen, data),
@@ -290,11 +295,13 @@ export function PropertiesPanel({
     ? { ...defaultParams(catalogTool), ...(selectedNode.data.catalogParams ?? {}) }
     : {};
   const commandIsCustom = selectedNode.data.catalogCommandCustom === true;
+  /** A catalog step names every file in a slot; the single Input and Output fields are for free-form steps and hand-edited commands. */
+  const showMainFiles = !catalogTool || commandIsCustom;
   const missingParams = catalogTool ? missingRequiredParams(catalogTool, catalogParams) : [];
 
   /** Changing the tool away from the catalog's package turns the node into a free-form one. */
   const handleToolChange = (value: string) => {
-    if (catalogTool && value.trim() !== catalogTool.conda.package) {
+    if (catalogTool && value.trim() !== catalogToolName(catalogTool)) {
       onNodePatch(selectedNode.id, {
         tool: value,
         catalogId: undefined,
@@ -467,7 +474,12 @@ export function PropertiesPanel({
           fileCount: nodeFiles?.length,
           upstreamCount: upstream.filter((u) => u.connected).length,
           slotCount: slots.length,
-          slotsToFill: slots.filter((s) => s.files.length === 0).length,
+          slotsToFill: slots.filter(
+            (s) =>
+              s.files.length === 0 &&
+              !s.def.derived &&
+              (s.def.kind === 'output' || s.def.required || s.links.length > 0)
+          ).length,
         })}
       >
         {upstream.length > 0 && (
@@ -545,42 +557,46 @@ export function PropertiesPanel({
           hint={
             wildcardNameProblem ? undefined : (
               <>
-                <code>{`{${wildcardName}}`}</code> in the input and output below stands for each
+                <code>{`{${wildcardName}}`}</code> in a file name below stands for each
                 chosen file, e.g. <code>{`out/{${wildcardName}}.bam`}</code>. Empty means "sample".
               </>
             )
           }
         />
 
-        <TextField
-          label="Input file"
-          value={selectedNode.data.input || ''}
-          data-testid="prop-input"
-          onChange={(e) => handleInputChange('input', e.target.value)}
-          onBlur={() => visit('input')}
-          error={errorFor('input')}
-          placeholder="e.g. reads.fastq or data/{sample}.fastq"
-          hint={
-            hasWildcards(selectedNode.data.input || '')
-              ? 'Has a {name}: the step runs once for each matching file.'
-              : 'What the command reads, written as {input} in it. Separate several with commas.'
-          }
-        />
+        {showMainFiles && (
+          <>
+            <TextField
+              label="Input file"
+              value={selectedNode.data.input || ''}
+              data-testid="prop-input"
+              onChange={(e) => handleInputChange('input', e.target.value)}
+              onBlur={() => visit('input')}
+              error={errorFor('input')}
+              placeholder="e.g. reads.fastq or data/{sample}.fastq"
+              hint={
+                hasWildcards(selectedNode.data.input || '')
+                  ? 'Has a {name}: the step runs once for each matching file.'
+                  : 'What the command reads, written as {input} in it. Separate several with commas.'
+              }
+            />
 
-        <TextField
-          label="Output file"
-          value={selectedNode.data.output || ''}
-          data-testid="prop-output"
-          onChange={(e) => handleInputChange('output', e.target.value)}
-          onBlur={() => visit('output')}
-          error={errorFor('output')}
-          placeholder="e.g. results/counts.tsv"
-          hint={
-            hasWildcards(selectedNode.data.output || '')
-              ? 'One output is made for each input file.'
-              : 'What the command writes, written as {output} in it. Later steps can read it.'
-          }
-        />
+            <TextField
+              label="Output file"
+              value={selectedNode.data.output || ''}
+              data-testid="prop-output"
+              onChange={(e) => handleInputChange('output', e.target.value)}
+              onBlur={() => visit('output')}
+              error={errorFor('output')}
+              placeholder="e.g. results/counts.tsv"
+              hint={
+                hasWildcards(selectedNode.data.output || '')
+                  ? 'One output is made for each input file.'
+                  : 'What the command writes, written as {output} in it. Later steps can read it.'
+              }
+            />
+          </>
+        )}
 
         <SlotFields
           slots={slots}
@@ -591,7 +607,7 @@ export function PropertiesPanel({
           onFile={(slot, value) => onSlotFile?.(slot, value)}
           onKind={(slot, kind) => onSlotKind?.(slot, kind)}
           onLink={(slot, choice) => onSlotLink?.(slot, choice.nodeId, choice.outputKey)}
-          onUnlink={(slot) => onSlotUnlink?.(slot)}
+          onUnlink={(slot, fromNodeId) => onSlotUnlink?.(slot, fromNodeId)}
           onChoose={(option) => onChooseBinding?.(option)}
           onDismiss={() => onDismissBinding?.()}
         />
@@ -600,8 +616,26 @@ export function PropertiesPanel({
       {catalogTool && (
         <CollapsibleSection {...sectionProps('options')} data-testid="catalog-params">
           <div className="field-hint" data-testid="catalog-types">
-            {catalogTool.description} Conda package: {catalogTool.conda.package}. File types:{' '}
-            {catalogTool.inputTypes.join(', ')} {'→'} {catalogTool.outputTypes.join(', ')}.
+            {catalogTool.description} {describeInstall(catalogTool.install)} File types:{' '}
+            {inputTypesOf(catalogTool).join(', ')} {'→'} {outputTypesOf(catalogTool).join(', ')}.
+          </div>
+
+          {catalogTool.needs_database && (
+            <Callout tone="info" data-testid="catalog-needs-database">
+              <strong>Needs {catalogTool.needs_database.label}.</strong>{' '}
+              {catalogTool.needs_database.hint}
+            </Callout>
+          )}
+
+          <div className="property-actions">
+            <Button
+              size="sm"
+              icon="link"
+              data-testid="catalog-docs"
+              onClick={() => void window.electron.ipcRenderer.openDocs(catalogTool.docs)}
+            >
+              Open the {catalogTool.name} documentation
+            </Button>
           </div>
 
           {catalogTool.params.map((param) => {
@@ -775,7 +809,7 @@ export function PropertiesPanel({
         </div>
       </CollapsibleSection>
 
-      <CollapsibleSection {...sectionProps('checks')}>
+      <CollapsibleSection {...sectionProps('checks', { hasOutput })}>
         <div className="field-hint" data-testid="checks-hint">
           {hasOutput
             ? 'Checked after the step succeeds. Each check can cover all outputs or just one.'
