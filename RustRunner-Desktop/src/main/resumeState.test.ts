@@ -6,6 +6,7 @@ import {
   NO_RESUME_INFO,
   parseResumeInfo,
   readResumeInfo,
+  readResumeInfoFor,
   stateFilePath,
   workflowFileStem,
 } from './resumeState';
@@ -77,6 +78,62 @@ describe('readResumeInfo', () => {
       expect(info.canResume).toBe(true);
       expect(info.completedCount).toBe(1);
       expect(readResumeInfo(dir, 'other').canResume).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('readResumeInfoFor', () => {
+  function writeState(dir: string, key: string, completed: string[]) {
+    fs.mkdirSync(path.join(dir, '.rustrunner'), { recursive: true });
+    fs.writeFileSync(
+      stateFilePath(dir, key),
+      JSON.stringify({ completed_steps: completed, failed_step: null })
+    );
+  }
+
+  it('finds the state by id, whatever the workflow is called now', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-resume-'));
+    try {
+      writeState(dir, 'abc-123', ['a', 'b']);
+      const info = readResumeInfoFor(dir, 'A brand new name', 'abc-123');
+      expect(info.canResume).toBe(true);
+      expect(info.completedCount).toBe(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to the name-keyed state of a workflow that has not run since getting an id', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-resume-'));
+    try {
+      writeState(dir, 'rna_qc', ['a']);
+      expect(readResumeInfoFor(dir, 'RNA QC', 'new-id').completedCount).toBe(1);
+      expect(readResumeInfoFor(dir, 'RNA QC').completedCount).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('prefers the id-keyed state over the name-keyed one', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-resume-'));
+    try {
+      writeState(dir, 'rna_qc', ['old']);
+      writeState(dir, 'the-id', ['x', 'y', 'z']);
+      expect(readResumeInfoFor(dir, 'RNA QC', 'the-id').completedCount).toBe(3);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores an id that is not path-safe', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rr-resume-'));
+    try {
+      writeState(dir, 'rna_qc', ['a']);
+      const info = readResumeInfoFor(dir, 'RNA QC', '../../escape');
+      expect(info.completedCount).toBe(1);
+      expect(readResumeInfoFor(dir, 'Other', '../../escape')).toEqual(NO_RESUME_INFO);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

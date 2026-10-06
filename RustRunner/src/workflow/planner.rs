@@ -154,8 +154,12 @@ impl ExecutionPlanner {
         let mut threads_to_allocate = 0;
 
         for step in &self.workflow.steps {
-            // Skip completed or running steps
-            if self.completed_steps.contains(&step.id) || self.running_steps.contains(&step.id) {
+            // Skip completed, running and failed steps (a failed step is not
+            // retried here: its attempts are used up inside the step runner).
+            if self.completed_steps.contains(&step.id)
+                || self.running_steps.contains(&step.id)
+                || self.is_failed(&step.id)
+            {
                 continue;
             }
 
@@ -292,8 +296,78 @@ impl ExecutionPlanner {
     }
 
     /// Returns true if there are more steps to execute.
+    ///
+    /// Steps that failed, and steps that can never run because something they
+    /// depend on failed, are not work: a keep-going run is over once the
+    /// independent branches are done.
     pub fn has_work_remaining(&self) -> bool {
-        self.completed_steps.len() < self.workflow.steps.len()
+        let blocked = self.blocked_steps();
+        self.workflow.steps.iter().any(|s| {
+            !self.completed_steps.contains(&s.id)
+                && !self.is_failed(&s.id)
+                && !blocked.contains_key(&s.id)
+        })
+    }
+
+    fn is_failed(&self, step_id: &str) -> bool {
+        matches!(
+            self.step_metrics.get(step_id).map(|m| &m.status),
+            Some(StepStatus::Failed(_))
+        )
+    }
+
+    /// Ids of the steps that failed, in workflow order.
+    pub fn failed_steps(&self) -> Vec<String> {
+        self.workflow
+            .steps
+            .iter()
+            .filter(|s| self.is_failed(&s.id))
+            .map(|s| s.id.clone())
+            .collect()
+    }
+
+    /// Steps that can no longer run because a step they depend on (directly
+    /// or through other steps) failed, as `step -> the failed step to blame`.
+    /// Steps that already completed or started are never reported.
+    pub fn blocked_steps(&self) -> HashMap<String, String> {
+        let by_id: HashMap<&str, &Step> = self
+            .workflow
+            .steps
+            .iter()
+            .map(|s| (s.id.as_str(), s))
+            .collect();
+        let mut blocked: HashMap<String, String> = HashMap::new();
+        // Dependencies can be listed in any order, so repeat until nothing
+        // new is blocked (at most one pass per step).
+        loop {
+            let mut changed = false;
+            for step in &self.workflow.steps {
+                if blocked.contains_key(&step.id)
+                    || self.completed_steps.contains(&step.id)
+                    || self.running_steps.contains(&step.id)
+                    || self.is_failed(&step.id)
+                {
+                    continue;
+                }
+                let culprit = step.previous.iter().find_map(|dep| {
+                    if !by_id.contains_key(dep.as_str()) {
+                        None
+                    } else if self.is_failed(dep) {
+                        Some(dep.clone())
+                    } else {
+                        blocked.get(dep).cloned()
+                    }
+                });
+                if let Some(culprit) = culprit {
+                    blocked.insert(step.id.clone(), culprit);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        blocked
     }
 
     /// Returns the current progress as (completed, total).
@@ -472,6 +546,41 @@ mod tests {
             StepStatus::Failed(msg) => assert_eq!(msg, "Test error"),
             _ => panic!("Expected Failed status"),
         }
+    }
+
+    #[test]
+    fn test_failed_step_blocks_only_its_downstream() {
+        // a -> b -> c, and an independent d.
+        let mut wf = Workflow::new();
+        wf.add_step(Step::new("a", "bash", "x")).unwrap();
+        wf.add_step(Step::new("b", "bash", "x").depends_on("a"))
+            .unwrap();
+        wf.add_step(Step::new("c", "bash", "x").depends_on("b"))
+            .unwrap();
+        wf.add_step(Step::new("d", "bash", "x")).unwrap();
+        let mut planner = ExecutionPlanner::new(wf, false, 4).unwrap();
+
+        planner.mark_step_running("a");
+        planner.mark_step_failed("a", "boom".into());
+
+        let blocked = planner.blocked_steps();
+        assert_eq!(blocked.get("b").map(String::as_str), Some("a"));
+        // c is blamed on the step that actually failed, not on b.
+        assert_eq!(blocked.get("c").map(String::as_str), Some("a"));
+        assert!(!blocked.contains_key("d"));
+        assert_eq!(planner.failed_steps(), vec!["a".to_string()]);
+
+        // d can still run; once it is done nothing is left to do.
+        let ready: Vec<String> = planner
+            .get_ready_steps()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ready, vec!["d".to_string()]);
+        assert!(planner.has_work_remaining());
+        planner.mark_step_running("d");
+        planner.mark_step_completed("d");
+        assert!(!planner.has_work_remaining());
     }
 
     #[test]

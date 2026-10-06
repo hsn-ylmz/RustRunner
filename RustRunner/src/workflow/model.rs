@@ -539,16 +539,27 @@ impl Step {
 /// Longest accepted metadata name or version, in characters.
 pub const MAX_METADATA_LEN: usize = 200;
 
+/// Longest accepted workflow id, in characters.
+pub const MAX_ID_LEN: usize = 64;
+
 /// Optional descriptive information about a workflow, shown in the run log
 /// and recorded in the run summary and the saved run state.
 ///
 /// ```yaml
 /// metadata:
+///   id: 3f2b8c1e-5a47-4c0e-9d3a-7b1f6e2a9c10
 ///   name: RNA-seq QC
 ///   version: "1.2"
 /// ```
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkflowMetadata {
+    /// Stable identifier, generated once by the GUI. The saved run state is
+    /// keyed on it, so renaming the workflow or its file keeps the resume
+    /// history. Limited to letters, digits, `-` and `_` because it becomes a
+    /// file name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
     /// Human-readable workflow name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -562,14 +573,21 @@ impl WorkflowMetadata {
     /// Creates metadata with the given name and version.
     pub fn new(name: Option<&str>, version: Option<&str>) -> Self {
         Self {
+            id: None,
             name: name.map(String::from),
             version: version.map(String::from),
         }
     }
 
-    /// Trims both fields and turns blank ones into `None`.
+    /// Sets the stable workflow id.
+    pub fn with_id(mut self, id: &str) -> Self {
+        self.id = Some(id.to_string());
+        self
+    }
+
+    /// Trims all fields and turns blank ones into `None`.
     pub fn normalize(&mut self) {
-        for field in [&mut self.name, &mut self.version] {
+        for field in [&mut self.id, &mut self.name, &mut self.version] {
             if let Some(value) = field.take() {
                 let trimmed = value.trim();
                 if !trimmed.is_empty() {
@@ -583,6 +601,23 @@ impl WorkflowMetadata {
     /// echoed into the log, which front ends parse line by line, so a newline
     /// must never get through.
     pub fn validate(&self) -> Result<(), String> {
+        if let Some(id) = &self.id {
+            if id.chars().count() > MAX_ID_LEN {
+                return Err(format!(
+                    "Workflow metadata id is longer than {} characters",
+                    MAX_ID_LEN
+                ));
+            }
+            if !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(
+                    "Workflow metadata id may only contain letters, digits, '-' and '_'"
+                        .to_string(),
+                );
+            }
+        }
         for (label, value) in [("name", &self.name), ("version", &self.version)] {
             let Some(value) = value else { continue };
             if value.chars().count() > MAX_METADATA_LEN {
@@ -601,9 +636,9 @@ impl WorkflowMetadata {
         Ok(())
     }
 
-    /// True when neither a name nor a version is set.
+    /// True when no id, name or version is set.
     pub fn is_empty(&self) -> bool {
-        self.name.is_none() && self.version.is_none()
+        self.id.is_none() && self.name.is_none() && self.version.is_none()
     }
 
     /// One-line description such as `RNA-seq QC (version 1.2)`, or `None` when
@@ -628,6 +663,12 @@ pub struct Workflow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<WorkflowMetadata>,
 
+    /// Keep going after a failure: a failed step blocks only the steps that
+    /// depend on it, and independent branches still run to completion. The
+    /// run still ends as failed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_going: bool,
+
     /// List of unique tools used (auto-populated)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
@@ -639,6 +680,7 @@ impl Workflow {
         Self {
             steps: Vec::new(),
             metadata: None,
+            keep_going: false,
             tools: Vec::new(),
         }
     }
@@ -648,6 +690,7 @@ impl Workflow {
         let mut workflow = Self {
             steps,
             metadata: None,
+            keep_going: false,
             tools: Vec::new(),
         };
         workflow.refresh_tools();
@@ -657,6 +700,12 @@ impl Workflow {
     /// Sets the workflow's name and version.
     pub fn with_metadata(mut self, metadata: WorkflowMetadata) -> Self {
         self.metadata = Some(metadata);
+        self
+    }
+
+    /// Turns keep-going mode on or off.
+    pub fn with_keep_going(mut self, keep_going: bool) -> Self {
+        self.keep_going = keep_going;
         self
     }
 
@@ -758,6 +807,61 @@ mod tests {
         assert_eq!(meta.label().unwrap(), "RNA-seq QC (version 1.2)");
         let again: Workflow = serde_yaml::from_str(&serde_yaml::to_string(&wf).unwrap()).unwrap();
         assert_eq!(again.metadata, Some(meta));
+    }
+
+    #[test]
+    fn test_metadata_id_round_trips_and_old_yaml_has_none() {
+        let yaml =
+            "metadata:\n  id: 3f2b8c1e-5a47\nsteps:\n  - id: a\n    tool: bash\n    command: x\n";
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        let meta = wf.metadata.clone().unwrap();
+        assert_eq!(meta.id.as_deref(), Some("3f2b8c1e-5a47"));
+        assert!(!meta.is_empty());
+        assert_eq!(meta.label(), None);
+        let again: Workflow = serde_yaml::from_str(&serde_yaml::to_string(&wf).unwrap()).unwrap();
+        assert_eq!(again.metadata, Some(meta));
+
+        let old: WorkflowMetadata = serde_yaml::from_str("name: qc\n").unwrap();
+        assert_eq!(old.id, None);
+    }
+
+    #[test]
+    fn test_metadata_id_must_be_path_safe() {
+        for ok in ["abc", "3f2b8c1e-5a47_x", &"a".repeat(MAX_ID_LEN)] {
+            assert!(WorkflowMetadata::default().with_id(ok).validate().is_ok());
+        }
+        for bad in [
+            "../evil",
+            "a/b",
+            "a b",
+            "ä",
+            "x.state",
+            &"a".repeat(MAX_ID_LEN + 1),
+        ] {
+            assert!(
+                WorkflowMetadata::default().with_id(bad).validate().is_err(),
+                "{bad}"
+            );
+        }
+        let mut blank = WorkflowMetadata::default().with_id("  ");
+        blank.normalize();
+        assert!(blank.is_empty());
+    }
+
+    #[test]
+    fn test_keep_going_defaults_to_false_and_round_trips() {
+        let wf: Workflow =
+            serde_yaml::from_str("steps:\n  - id: a\n    tool: bash\n    command: x\n").unwrap();
+        assert!(!wf.keep_going);
+        assert!(!serde_yaml::to_string(&wf).unwrap().contains("keep_going"));
+
+        let on: Workflow = serde_yaml::from_str(
+            "keep_going: true\nsteps:\n  - id: a\n    tool: bash\n    command: x\n",
+        )
+        .unwrap();
+        assert!(on.keep_going);
+        let again: Workflow = serde_yaml::from_str(&serde_yaml::to_string(&on).unwrap()).unwrap();
+        assert!(again.keep_going);
     }
 
     #[test]

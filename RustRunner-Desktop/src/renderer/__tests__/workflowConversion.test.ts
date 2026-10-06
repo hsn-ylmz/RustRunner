@@ -4,6 +4,8 @@ import {
   DEFAULT_WILDCARD_NAME,
   buildChecks,
   buildMetadata,
+  generateWorkflowId,
+  isValidWorkflowId,
   extractWildcardNames,
   normalizeMetadataText,
   normalizeWildcardName,
@@ -203,6 +205,57 @@ describe('workflow metadata', () => {
     expect(normalizeMetadataText('a\nStarting step: x')).toBe('a Starting step: x');
     expect(normalizeMetadataText('x'.repeat(500))).toHaveLength(200);
     expect(normalizeMetadataText(undefined)).toBe('');
+  });
+});
+
+describe('workflow id', () => {
+  it('generates distinct ids the engine accepts', () => {
+    const a = generateWorkflowId();
+    const b = generateWorkflowId();
+    expect(a).not.toBe(b);
+    expect(isValidWorkflowId(a)).toBe(true);
+    expect(a.length).toBeLessThanOrEqual(64);
+  });
+
+  it('accepts only path-safe ids', () => {
+    for (const ok of ['abc', '3f2b8c1e-5a47-4c0e-9d3a-7b1f6e2a9c10', 'a_b-C9']) {
+      expect(isValidWorkflowId(ok)).toBe(true);
+    }
+    for (const bad of ['', '../x', 'a/b', 'a b', 'é', 'x'.repeat(65), 12, undefined, null]) {
+      expect(isValidWorkflowId(bad)).toBe(false);
+    }
+  });
+
+  it('reaches the engine YAML in the metadata block, even with no name', () => {
+    const id = generateWorkflowId();
+    const wf = convertNodesToWorkflow([node('a', 'A')], [], {}, { id, name: 'QC' });
+    expect(wf.metadata).toEqual({ id, name: 'QC' });
+    const parsed: any = yaml.load(yaml.dump(wf));
+    expect(parsed.metadata.id).toBe(id);
+    expect(typeof parsed.metadata.id).toBe('string');
+    expect(buildMetadata({ id })).toEqual({ id });
+  });
+
+  it('drops an invalid id instead of sending it to the engine', () => {
+    expect(buildMetadata({ id: '../evil' })).toBeUndefined();
+    expect(buildMetadata({ id: 'a b', name: 'x' })).toEqual({ name: 'x' });
+  });
+});
+
+describe('keep going', () => {
+  it('is omitted by default so old YAML is unchanged', () => {
+    const plain = convertNodesToWorkflow([node('a', 'A')], [], {}, { name: 'x' });
+    expect(plain).not.toHaveProperty('keep_going');
+    const off = convertNodesToWorkflow([node('a', 'A')], [], {}, { keepGoing: false });
+    expect(off).not.toHaveProperty('keep_going');
+  });
+
+  it('reaches the engine YAML as keep_going: true', () => {
+    const wf: any = convertNodesToWorkflow([node('a', 'A')], [], {}, { keepGoing: true });
+    expect(wf.keep_going).toBe(true);
+    const parsed: any = yaml.load(yaml.dump(wf));
+    expect(parsed.keep_going).toBe(true);
+    expect(parsed.steps).toHaveLength(1);
   });
 });
 

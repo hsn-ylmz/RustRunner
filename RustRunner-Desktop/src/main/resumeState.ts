@@ -49,6 +49,11 @@ export function workflowFileStem(name: string | undefined): string {
   return slug || 'workflow';
 }
 
+/** True when `id` is safe to use as a state file name (see `isValidWorkflowId`). */
+function isSafeId(id: unknown): id is string {
+  return typeof id === 'string' && id.length > 0 && id.length <= 64 && /^[A-Za-z0-9_-]+$/.test(id);
+}
+
 /** Where the engine keeps the state of `stem` when run in `workingDir`. */
 export function stateFilePath(workingDir: string, stem: string): string {
   return path.join(workingDir, '.rustrunner', `${stem}.state`);
@@ -99,4 +104,21 @@ export function readResumeInfo(workingDir: string, stem: string): ResumeInfo {
   } catch {
     return NO_RESUME_INFO;
   }
+}
+
+/**
+ * The saved run of a workflow: the engine keys it on the workflow's id, and for
+ * a workflow that has none (or has not run since it got one) on the file stem
+ * derived from its name. Looks under the id first, then the name.
+ */
+export function readResumeInfoFor(
+  workingDir: string,
+  workflowName: string,
+  workflowId?: string
+): ResumeInfo {
+  if (isSafeId(workflowId)) {
+    const byId = readResumeInfo(workingDir, workflowId);
+    if (byId.canResume) return byId;
+  }
+  return readResumeInfo(workingDir, workflowFileStem(workflowName));
 }

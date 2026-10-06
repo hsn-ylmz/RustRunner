@@ -13,7 +13,8 @@ import type { EngineEvent } from './engineEvents';
 export type Channels = 'ipc-example';
 
 interface WorkflowData {
-  metadata?: { name?: string; version?: string };
+  metadata?: { id?: string; name?: string; version?: string };
+  keep_going?: boolean;
   steps: Array<{
     id: string;
     tool: string;
@@ -91,8 +92,12 @@ const electronHandler = {
     },
 
     // Saved-run info for "Resume last run".
-    getResumeInfo(workflowName: string, workingDir: string): Promise<ResumeInfo> {
-      return ipcRenderer.invoke('get-resume-info', workflowName, workingDir);
+    getResumeInfo(
+      workflowName: string,
+      workingDir: string,
+      workflowId?: string
+    ): Promise<ResumeInfo> {
+      return ipcRenderer.invoke('get-resume-info', workflowName, workingDir, workflowId);
     },
 
     pauseWorkflow() {

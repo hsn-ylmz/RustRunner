@@ -132,17 +132,57 @@ export function convertNodesToWorkflow(
     return step;
   });
 
+  // Optional top-level settings come first and only appear when they change
+  // behaviour, so plain workflows keep their old YAML.
+  const workflow: any = {};
   const metadata = buildMetadata(details);
-  return metadata ? { metadata, steps } : { steps };
+  if (metadata) workflow.metadata = metadata;
+  if (details.keepGoing === true) workflow.keep_going = true;
+  workflow.steps = steps;
+  return workflow;
 }
 
 /** Longest name/version the engine accepts (`MAX_METADATA_LEN` in model.rs). */
 export const MAX_METADATA_LEN = 200;
 
-/** The name and version a user gives a workflow. */
+/** Longest id the engine accepts (`MAX_ID_LEN` in model.rs). */
+export const MAX_WORKFLOW_ID_LEN = 64;
+
+/**
+ * True when `value` can be a workflow id: what the engine accepts, since the id
+ * names the saved-run file (letters, digits, `-` and `_` only; no path parts).
+ */
+export function isValidWorkflowId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_WORKFLOW_ID_LEN &&
+    /^[A-Za-z0-9_-]+$/.test(value)
+  );
+}
+
+/** A new random id for a workflow (a UUID). */
+export function generateWorkflowId(): string {
+  const c: Crypto | undefined = (globalThis as any).crypto;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  // Fallback for environments without randomUUID: 128 random bits as hex.
+  const bytes = new Uint8Array(16);
+  if (c && typeof c.getRandomValues === 'function') {
+    c.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** The name, version, stable id and run settings of a workflow. */
 export interface WorkflowDetails {
+  /** Stable id; keys the engine's saved run so renaming keeps its history. */
+  id?: string;
   name?: string;
   version?: string;
+  /** Keep running independent steps after one fails. */
+  keepGoing?: boolean;
 }
 
 /** Trims, drops control characters (the engine rejects them) and caps the length. */
@@ -156,11 +196,15 @@ export function normalizeMetadataText(value: unknown): string {
  * The engine's optional `metadata` block, or undefined when neither a name nor
  * a version is set so plain workflows keep their old YAML.
  */
-export function buildMetadata(details: WorkflowDetails): { name?: string; version?: string } | undefined {
+export function buildMetadata(
+  details: WorkflowDetails
+): { id?: string; name?: string; version?: string } | undefined {
+  const id = isValidWorkflowId(details.id) ? details.id : '';
   const name = normalizeMetadataText(details.name);
   const version = normalizeMetadataText(details.version);
-  if (!name && !version) return undefined;
-  const metadata: { name?: string; version?: string } = {};
+  if (!id && !name && !version) return undefined;
+  const metadata: { id?: string; name?: string; version?: string } = {};
+  if (id) metadata.id = id;
   if (name) metadata.name = name;
   if (version) metadata.version = version;
   return metadata;

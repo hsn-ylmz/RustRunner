@@ -20,6 +20,12 @@
 //! # Ignore saved state and run every step again
 //! rustrunner workflow.yaml --fresh
 //!
+//! # Keep running independent steps after one fails
+//! rustrunner workflow.yaml --keep-going
+//!
+//! # After a failure, still run the steps that do not depend on it
+//! rustrunner workflow.yaml --keep-going
+//!
 //! # Machine-readable events on stderr, one JSON object per line
 //! rustrunner workflow.yaml --json-events
 //!
@@ -56,6 +62,7 @@ struct Config {
     max_parallel: usize,
     verbose: bool,
     fresh: bool,
+    keep_going: bool,
     json_events: bool,
 }
 
@@ -69,6 +76,7 @@ impl Default for Config {
             max_parallel: DEFAULT_MAX_PARALLEL,
             verbose: false,
             fresh: false,
+            keep_going: false,
             json_events: false,
         }
     }
@@ -116,6 +124,8 @@ fn print_usage() {
         DEFAULT_MAX_PARALLEL
     );
     println!("  --fresh             Discard saved state and run every step again");
+    println!("  --keep-going        After a step fails, still run the steps that do not depend");
+    println!("                      on it (the run ends as failed)");
     println!("  --json-events       Also write machine-readable run events to stderr,");
     println!("                      one JSON object per line prefixed with RUSTRUNNER_EVENT");
     println!("  --verbose           Enable debug logging");
@@ -151,6 +161,9 @@ fn parse_arguments(args: &[String]) -> Result<Config, String> {
             }
             "--fresh" => {
                 config.fresh = true;
+            }
+            "--keep-going" => {
+                config.keep_going = true;
             }
             "--json-events" => {
                 config.json_events = true;
@@ -311,6 +324,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     engine.set_max_parallel(config.max_parallel);
     engine.set_dry_run(config.dry_run);
     engine.set_fresh(config.fresh);
+    engine.set_keep_going(config.keep_going);
     engine.set_event_sink(events);
 
     if let Some(pause_path) = config.pause_flag_path {

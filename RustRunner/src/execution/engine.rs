@@ -135,6 +135,7 @@ pub struct Engine {
     pause_flag_path: Option<String>,
     working_dir: Option<PathBuf>,
     fresh: bool,
+    keep_going: bool,
     events: EventSink,
 }
 
@@ -149,6 +150,7 @@ impl Engine {
             pause_flag_path: None,
             working_dir: None,
             fresh: false,
+            keep_going: false,
             events: EventSink::disabled(),
         }
     }
@@ -163,6 +165,14 @@ impl Engine {
     /// again. By default a run resumes from the saved state.
     pub fn set_fresh(&mut self, fresh: bool) {
         self.fresh = fresh;
+    }
+
+    /// Keeps the run going after a step fails (`--keep-going`). A failed step
+    /// then blocks only the steps that depend on it; independent branches run
+    /// to the end, and the run still finishes as failed. The workflow's own
+    /// `keep_going` setting turns this on too.
+    pub fn set_keep_going(&mut self, keep_going: bool) {
+        self.keep_going = keep_going;
     }
 
     /// Sets the workflow file path (used for state persistence).
@@ -297,9 +307,31 @@ impl Engine {
         // (the CLI has already changed into it, so this is the same place it
         // always was).
         let state_dir = self.working_dir.clone();
+        let workflow_id = self.workflow.metadata.as_ref().and_then(|m| m.id.clone());
+        let keep_going = self.keep_going || self.workflow.keep_going;
+        if keep_going {
+            info!("Keep going: a failed step blocks only the steps that depend on it");
+        }
+        // A workflow that has just been given an id takes over the state it
+        // saved under its old (file name) key. A dry run must not touch files.
+        if !self.dry_run {
+            if let Err(e) = WorkflowState::migrate_legacy(
+                &self.workflow_path,
+                workflow_id.as_deref(),
+                state_dir.as_deref(),
+            ) {
+                warn!("Could not move the saved state to the workflow id: {}", e);
+            }
+        }
         let mut state = if self.fresh {
-            let fresh = WorkflowState::new(&self.workflow_path).in_dir(state_dir.as_deref());
-            if WorkflowState::state_file_exists_in(&self.workflow_path, state_dir.as_deref()) {
+            let fresh = WorkflowState::new(&self.workflow_path)
+                .with_id(workflow_id.as_deref())
+                .in_dir(state_dir.as_deref());
+            if WorkflowState::state_file_exists_keyed(
+                &self.workflow_path,
+                workflow_id.as_deref(),
+                state_dir.as_deref(),
+            ) {
                 if self.dry_run {
                     info!("Running from scratch (saved state left untouched: dry run)");
                 } else {
@@ -313,13 +345,18 @@ impl Engine {
             }
             fresh
         } else {
-            match WorkflowState::load_in(&self.workflow_path, state_dir.as_deref()) {
+            match WorkflowState::load_keyed(
+                &self.workflow_path,
+                workflow_id.as_deref(),
+                state_dir.as_deref(),
+            ) {
                 Ok(state) => state,
                 Err(e) => {
                     // A file that exists but fails to load is corrupt/incompatible.
                     // Warn loudly so completed steps aren't silently re-run.
-                    if WorkflowState::state_file_exists_in(
+                    if WorkflowState::state_file_exists_keyed(
                         &self.workflow_path,
+                        workflow_id.as_deref(),
                         state_dir.as_deref(),
                     ) {
                         warn!(
@@ -330,7 +367,9 @@ impl Engine {
                     } else {
                         info!("Starting fresh workflow execution");
                     }
-                    WorkflowState::new(&self.workflow_path).in_dir(state_dir.as_deref())
+                    WorkflowState::new(&self.workflow_path)
+                        .with_id(workflow_id.as_deref())
+                        .in_dir(state_dir.as_deref())
                 }
             }
         };
@@ -425,6 +464,8 @@ impl Engine {
         // returning early so the monitor thread is always stopped and joined
         // below (an early `?` would leak the detached sampling thread).
         let mut run_error: Option<Box<dyn std::error::Error>> = None;
+        // The first step that failed in a keep-going run.
+        let mut first_failure: Option<String> = None;
 
         // Main execution loop
         loop {
@@ -576,6 +617,10 @@ impl Engine {
                         planner.mark_step_completed(&step_id);
                         timeline.add_event(step_id.clone(), EventType::Completed);
                         state.mark_completed(&step_id);
+                        // A success must not hide an earlier failure of this run.
+                        if let Some(failed) = &first_failure {
+                            state.mark_failed(failed);
+                        }
                         if let Err(e) = state.save() {
                             run_error = Some(e);
                             break;
@@ -591,6 +636,20 @@ impl Engine {
                             warn!("Failed to persist state after step failure: {}", save_err);
                         }
 
+                        if keep_going {
+                            // Only this step's downstream is off the table;
+                            // everything else keeps being scheduled.
+                            self.report_blocked(&planner, &mut not_run);
+                            // The state names the run's first failure.
+                            let first = first_failure.get_or_insert_with(|| step_id.clone());
+                            if *first != step_id {
+                                state.mark_failed(first);
+                                if let Err(save_err) = state.save() {
+                                    warn!("Failed to persist state: {}", save_err);
+                                }
+                            }
+                            continue;
+                        }
                         run_error =
                             Some(format!("Workflow failed at step '{}': {}", step_id, e).into());
                         break;
@@ -640,6 +699,35 @@ impl Engine {
                     warn!("Failed to persist state: {}", e);
                 }
             }
+        }
+
+        // A keep-going run ends once the independent branches are done; report
+        // what failed and what was never reached.
+        if run_error.is_none() && keep_going && first_failure.is_some() {
+            let failed = planner.failed_steps();
+            let blocked = planner.blocked_steps();
+            let mut skipped: Vec<&str> = self
+                .workflow
+                .steps
+                .iter()
+                .filter(|s| blocked.contains_key(&s.id))
+                .map(|s| s.id.as_str())
+                .collect();
+            skipped.sort_unstable();
+            let mut message = format!(
+                "Workflow failed: {} step(s) failed ({})",
+                failed.len(),
+                failed.join(", ")
+            );
+            if !skipped.is_empty() {
+                message.push_str(&format!(
+                    "; {} step(s) not run because a step they depend on failed ({})",
+                    skipped.len(),
+                    skipped.join(", ")
+                ));
+            }
+            error!("{}", message);
+            run_error = Some(message.into());
         }
 
         // Steps that never started because the run stopped early.
@@ -692,6 +780,29 @@ impl Engine {
         println!("{}", final_monitor.get_summary());
 
         Ok(())
+    }
+
+    /// Reports the steps a failure has made unreachable (keep-going mode) as
+    /// skipped, once each, as soon as they are known.
+    fn report_blocked(&self, planner: &ExecutionPlanner, reported: &mut HashSet<String>) {
+        let blocked = planner.blocked_steps();
+        for step in &self.workflow.steps {
+            let Some(culprit) = blocked.get(&step.id) else {
+                continue;
+            };
+            if !reported.insert(step.id.clone()) {
+                continue;
+            }
+            warn!(
+                "Step '{}' will not run: step '{}' failed and it depends on it",
+                step.id, culprit
+            );
+            self.events.emit(Event::StepSkipped {
+                step: step.id.clone(),
+                reason: format!("not run: step '{}' failed", culprit),
+            });
+            self.events.update_tally(|t| t.skipped += 1);
+        }
     }
 
     /// Checks if pause flag exists and waits for it to be removed.
@@ -1041,6 +1152,282 @@ mod tests {
         let state = WorkflowState::load_in("wf.yaml", Some(dir.path())).unwrap();
         assert!(state.completed_steps.contains("sib_slow"));
         assert_eq!(state.failed_step.as_deref(), Some("sib_fail"));
+    }
+
+    /// `kg_bad` fails at once while `kg_ok` is still running; `kg_after`
+    /// depends on the failure and `kg_ok2` on the slow, healthy step.
+    fn keep_going_workflow(prefix: &str) -> Workflow {
+        let bad = format!("{prefix}_bad");
+        let after = format!("{prefix}_after");
+        let ok = format!("{prefix}_ok");
+        let ok2 = format!("{prefix}_ok2");
+        Workflow::from_steps(vec![
+            Step::new(bad.as_str(), "bash", "exit 1"),
+            Step::new(after.as_str(), "bash", "touch after.txt")
+                .with_output("after.txt")
+                .depends_on(bad.as_str()),
+            Step::new(ok.as_str(), "bash", "sleep 1; touch ok.txt").with_output("ok.txt"),
+            Step::new(ok2.as_str(), "bash", "touch ok2.txt")
+                .with_output("ok2.txt")
+                .depends_on(ok.as_str()),
+        ])
+    }
+
+    #[test]
+    fn test_without_keep_going_the_independent_branch_is_not_continued() {
+        let (result, dir) = run_in_tempdir(keep_going_workflow("nokg"));
+        assert!(result
+            .unwrap_err()
+            .contains("Workflow failed at step 'nokg_bad'"));
+        // The running sibling is waited for, but nothing new is started.
+        assert!(dir.path().join("ok.txt").exists());
+        assert!(!dir.path().join("ok2.txt").exists());
+    }
+
+    #[test]
+    fn test_keep_going_runs_independent_branch_and_skips_only_downstream() {
+        let dir = tempdir().unwrap();
+        let wf = keep_going_workflow("kg").with_keep_going(true);
+        let (result, events) = run_with_events_in(wf, dir.path(), false);
+
+        let err = result.unwrap_err();
+        assert!(err.contains("1 step(s) failed (kg_bad)"), "{err}");
+        assert!(
+            err.contains("1 step(s) not run because a step they depend on failed (kg_after)"),
+            "{err}"
+        );
+        assert!(dir.path().join("ok.txt").exists());
+        assert!(
+            dir.path().join("ok2.txt").exists(),
+            "the independent branch must run to the end"
+        );
+        assert!(
+            !dir.path().join("after.txt").exists(),
+            "the failed step's downstream must not run"
+        );
+
+        // The state records the finished branch (a resume skips it) and the failure.
+        let state = WorkflowState::load_in("wf.yaml", Some(dir.path())).unwrap();
+        assert!(state.completed_steps.contains("kg_ok"));
+        assert!(state.completed_steps.contains("kg_ok2"));
+        assert!(!state.completed_steps.contains("kg_after"));
+        assert_eq!(state.failed_step.as_deref(), Some("kg_bad"));
+
+        let tokens = outline(&events);
+        for expected in [
+            "step_failed:kg_bad",
+            "step_skipped:kg_after",
+            "step_succeeded:kg_ok",
+            "step_succeeded:kg_ok2",
+        ] {
+            assert!(
+                tokens.iter().any(|t| t == expected),
+                "{expected} in {tokens:?}"
+            );
+        }
+        assert_eq!(tokens.last().unwrap(), "run_finished:failed");
+        assert_eq!(
+            tokens
+                .iter()
+                .filter(|t| t.starts_with("run_finished"))
+                .count(),
+            1
+        );
+        // The skipped step is announced as soon as the failure is known, so
+        // before the slow independent branch finishes.
+        let pos = |t: &str| tokens.iter().position(|x| x == t).unwrap();
+        assert!(pos("step_skipped:kg_after") < pos("step_succeeded:kg_ok2"));
+        let skipped = events
+            .iter()
+            .find(|e| e["event"] == "step_skipped")
+            .unwrap();
+        assert!(skipped["reason"].as_str().unwrap().contains("kg_bad"));
+
+        let summary = &events.last().unwrap()["summary"];
+        assert_eq!(summary["total"], 4);
+        assert_eq!(summary["succeeded"], 2);
+        assert_eq!(summary["failed"], 1);
+        assert_eq!(summary["skipped"], 1);
+        assert!(summary["error"].as_str().unwrap().contains("kg_bad"));
+    }
+
+    #[test]
+    fn test_keep_going_can_be_set_on_the_engine_and_skips_whole_chains() {
+        // a_bad -> mid -> leaf: both descendants are skipped, none run.
+        let dir = tempdir().unwrap();
+        let wf = Workflow::from_steps(vec![
+            Step::new("chain_bad", "bash", "exit 1"),
+            Step::new("chain_mid", "bash", "touch mid.txt")
+                .with_output("mid.txt")
+                .depends_on("chain_bad"),
+            Step::new("chain_leaf", "bash", "touch leaf.txt")
+                .with_output("leaf.txt")
+                .depends_on("chain_mid"),
+            Step::new("chain_free", "bash", "touch free.txt").with_output("free.txt"),
+        ]);
+        let mut engine = Engine::new(wf);
+        engine.set_working_dir(dir.path().to_path_buf());
+        engine.set_workflow_path(dir.path().join("wf.yaml").to_str().unwrap());
+        engine.set_keep_going(true);
+        let err = engine.run().unwrap_err().to_string();
+        assert!(err.contains("(chain_leaf, chain_mid)"), "{err}");
+        assert!(dir.path().join("free.txt").exists());
+        assert!(!dir.path().join("mid.txt").exists());
+        assert!(!dir.path().join("leaf.txt").exists());
+    }
+
+    #[test]
+    fn test_keep_going_with_no_failure_succeeds() {
+        let wf =
+            Workflow::from_steps(vec![Step::new("kgok_a", "bash", "true")]).with_keep_going(true);
+        let (result, _dir) = run_in_tempdir(wf);
+        assert!(result.is_ok(), "{:?}", result);
+    }
+
+    /// A one-step workflow that logs every real execution to `runs.log`. The
+    /// output path is absolute because the in-process engine does not change
+    /// into the working directory the way the CLI does.
+    fn counting_workflow(dir: &Path, id: Option<&str>) -> Workflow {
+        let out = dir.join("id.out");
+        // Step ids key the temp script file; keep concurrent tests apart.
+        let tag: String = dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .collect();
+        let step_id = format!("idc_{tag}");
+        let wf = Workflow::from_steps(vec![Step::new(
+            step_id.as_str(),
+            "bash",
+            "echo run >> runs.log; touch id.out",
+        )
+        .with_output(out.to_str().unwrap())]);
+        match id {
+            Some(id) => wf.with_metadata(crate::workflow::WorkflowMetadata::default().with_id(id)),
+            None => wf,
+        }
+    }
+
+    fn run_named(dir: &Path, file: &str, wf: Workflow) {
+        let mut engine = Engine::new(wf);
+        engine.set_working_dir(dir.to_path_buf());
+        engine.set_workflow_path(dir.join(file).to_str().unwrap());
+        engine.run().unwrap();
+    }
+
+    fn runs(dir: &Path) -> usize {
+        fs::read_to_string(dir.join("runs.log"))
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn test_state_is_keyed_on_the_workflow_id_and_a_rename_keeps_history() {
+        let dir = tempdir().unwrap();
+        run_named(
+            dir.path(),
+            "before.yaml",
+            counting_workflow(dir.path(), Some("wf-1234")),
+        );
+        assert!(dir.path().join(".rustrunner/wf-1234.state").exists());
+        assert!(!dir.path().join(".rustrunner/before.state").exists());
+
+        // Same id under another file name: the history is found, nothing re-runs.
+        run_named(
+            dir.path(),
+            "after_rename.yaml",
+            counting_workflow(dir.path(), Some("wf-1234")),
+        );
+        assert_eq!(runs(dir.path()), 1);
+
+        // A different id is a different workflow, even under the same file name.
+        run_named(
+            dir.path(),
+            "before.yaml",
+            counting_workflow(dir.path(), Some("wf-9999")),
+        );
+        assert_eq!(
+            runs(dir.path()),
+            2,
+            "a different id has no history: it runs"
+        );
+        assert!(dir.path().join(".rustrunner/wf-9999.state").exists());
+    }
+
+    #[test]
+    fn test_workflow_without_id_still_uses_the_file_stem() {
+        let dir = tempdir().unwrap();
+        run_named(
+            dir.path(),
+            "plain.yaml",
+            counting_workflow(dir.path(), None),
+        );
+        assert!(dir.path().join(".rustrunner/plain.state").exists());
+        run_named(
+            dir.path(),
+            "plain.yaml",
+            counting_workflow(dir.path(), None),
+        );
+        assert_eq!(runs(dir.path()), 1);
+    }
+
+    #[test]
+    fn test_old_state_moves_to_the_id_when_a_workflow_gains_one() {
+        let dir = tempdir().unwrap();
+        run_named(
+            dir.path(),
+            "legacy.yaml",
+            counting_workflow(dir.path(), None),
+        );
+        assert!(dir.path().join(".rustrunner/legacy.state").exists());
+
+        run_named(
+            dir.path(),
+            "legacy.yaml",
+            counting_workflow(dir.path(), Some("wf-new")),
+        );
+        assert_eq!(runs(dir.path()), 1, "the old history must be resumed");
+        assert!(dir.path().join(".rustrunner/wf-new.state").exists());
+        assert!(
+            !dir.path().join(".rustrunner/legacy.state").exists(),
+            "the old file is moved, not copied"
+        );
+    }
+
+    #[test]
+    fn test_dry_run_does_not_migrate_the_old_state() {
+        let dir = tempdir().unwrap();
+        run_named(
+            dir.path(),
+            "legacy.yaml",
+            counting_workflow(dir.path(), None),
+        );
+
+        let mut engine = Engine::new(counting_workflow(dir.path(), Some("wf-dry")));
+        engine.set_working_dir(dir.path().to_path_buf());
+        engine.set_workflow_path(dir.path().join("legacy.yaml").to_str().unwrap());
+        engine.set_dry_run(true);
+        engine.run().unwrap();
+        assert!(dir.path().join(".rustrunner/legacy.state").exists());
+        assert!(!dir.path().join(".rustrunner/wf-dry.state").exists());
+    }
+
+    #[test]
+    fn test_fresh_run_discards_the_id_keyed_state() {
+        let dir = tempdir().unwrap();
+        run_named(
+            dir.path(),
+            "f.yaml",
+            counting_workflow(dir.path(), Some("wf-fresh")),
+        );
+        let mut engine = Engine::new(counting_workflow(dir.path(), Some("wf-fresh")));
+        engine.set_working_dir(dir.path().to_path_buf());
+        engine.set_workflow_path(dir.path().join("f.yaml").to_str().unwrap());
+        engine.set_fresh(true);
+        engine.run().unwrap();
+        assert_eq!(runs(dir.path()), 2);
     }
 
     #[test]

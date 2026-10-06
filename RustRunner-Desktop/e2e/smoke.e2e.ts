@@ -5,6 +5,8 @@ import {
   expect,
   addNode,
   buildChain,
+  connect,
+  fillNode,
   nodes,
   openStepStatus,
   pidsMatching,
@@ -282,4 +284,67 @@ test('newly added nodes never cover each other', async ({ page }) => {
       expect(overlap, `nodes ${i} and ${j} overlap`).toBe(false);
     }
   }
+});
+
+/** Opens Workflow Details and applies `change` before confirming. */
+async function editDetails(
+  page: import('@playwright/test').Page,
+  change: { name?: string; keepGoing?: boolean }
+): Promise<void> {
+  await page.getByTestId('details').click();
+  if (change.name !== undefined) await page.getByTestId('dialog-name').fill(change.name);
+  if (change.keepGoing !== undefined) {
+    await page.getByTestId('keep-going').setChecked(change.keepGoing);
+  }
+  await page.getByTestId('dialog-confirm').click();
+  await expect(page.getByTestId('dialog-confirm')).toHaveCount(0);
+}
+
+test('keep going runs the independent branch after a failure', async ({ page, sandbox }) => {
+  // Bad -> After, and an unrelated Free -> Free2 that is still running when Bad fails.
+  await buildChain(page, [
+    { label: 'Bad', command: 'exit 1', output: 'bad.txt' },
+    { label: 'After', command: 'cp {input} {output}', input: 'bad.txt', output: 'after.txt' },
+  ]);
+  await addNode(page);
+  await selectNode(page, 'Node 3');
+  await fillNode(page, { label: 'Free', command: 'sleep 1; echo ok > {output}', output: 'free.txt' });
+  await addNode(page);
+  await selectNode(page, 'Node 4');
+  await fillNode(page, { label: 'Free2', command: 'cp {input} {output}', input: 'free.txt', output: 'free2.txt' });
+  await connect(page, 'Free', 'Free2');
+
+  await editDetails(page, { keepGoing: true });
+  await page.getByTestId('run').click();
+  await openStepStatus(page);
+
+  await expect(stepRow(page, 'bad')).toHaveAttribute('data-state', 'failed');
+  await expect(stepRow(page, 'after')).toHaveAttribute('data-state', 'skipped');
+  await expect(stepRow(page, 'after').locator('.step-row-details')).toContainText("step 'bad' failed");
+  await expect(stepRow(page, 'free')).toHaveAttribute('data-state', 'succeeded');
+  await expect(stepRow(page, 'free2')).toHaveAttribute('data-state', 'succeeded');
+  await expect(page.getByTestId('run')).toBeEnabled();
+  expect(fs.existsSync(path.join(sandbox.workDir, 'free2.txt'))).toBe(true);
+  expect(fs.existsSync(path.join(sandbox.workDir, 'after.txt'))).toBe(false);
+});
+
+test('renaming the workflow keeps its saved run for Resume', async ({ page }) => {
+  await buildChain(page, TWO_STEPS);
+  await page.getByTestId('set-directory').click();
+  await expect(page.locator('.working-directory')).toBeVisible();
+
+  await page.getByTestId('run').click();
+  await openStepStatus(page);
+  await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'succeeded');
+  await expect(page.getByTestId('resume')).toBeEnabled();
+
+  await editDetails(page, { name: 'A completely different name' });
+  await expect(page.getByTestId('workflow-title')).toContainText('A completely different name');
+  await expect(page.getByTestId('resume')).toBeEnabled();
+  await expect(page.getByTestId('resume')).toHaveAttribute('title', /2 step/);
+
+  await page.getByTestId('resume').click();
+  await expect(page.getByTestId('run')).toBeEnabled();
+  await expect(stepRow(page, 'make')).toHaveAttribute('data-state', 'skipped');
+  await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'skipped');
 });

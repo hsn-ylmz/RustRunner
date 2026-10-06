@@ -23,7 +23,7 @@ import yaml from 'js-yaml';
 import MenuBuilder from './menu';
 import { setupAutoUpdater } from './updater';
 import { resolveHtmlPath } from './util';
-import { readResumeInfo, workflowFileStem } from './resumeState';
+import { readResumeInfoFor, workflowFileStem } from './resumeState';
 import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
 
 // =============================================================================
@@ -31,8 +31,10 @@ import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
 // =============================================================================
 
 interface WorkflowData {
-  /** Optional name/version, echoed by the engine in its log and run state. */
-  metadata?: { name?: string; version?: string };
+  /** Optional id/name/version, echoed by the engine in its log and run state. */
+  metadata?: { id?: string; name?: string; version?: string };
+  /** Keep running independent steps after one fails. */
+  keep_going?: boolean;
   steps: Array<{
     id: string;
     tool: string;
@@ -312,9 +314,10 @@ ipcMain.on(
         fs.mkdirSync(tempDir, { recursive: true });
       }
 
-      // The engine keys its saved run state on this file's stem, so the stem
-      // follows the workflow's name: "Resume last run" then finds the state of
-      // this workflow and not of another one run in the same directory.
+      // The engine keys its saved run state on `metadata.id` when the workflow
+      // has one. The file stem still follows the workflow's name: a workflow
+      // without an id (or one that has just been given an id) is keyed on the
+      // stem, and the engine moves that old state to the id the first time.
       const stem = workflowFileStem(workflowData.metadata?.name);
       const workflowPath = path.join(tempDir, `${stem}.yaml`);
       fs.writeFileSync(workflowPath, yamlContent, 'utf-8');
@@ -432,8 +435,8 @@ ipcMain.on(
  */
 ipcMain.handle(
   'get-resume-info',
-  (_event, workflowName: string, workingDir: string) =>
-    readResumeInfo(workingDir, workflowFileStem(workflowName))
+  (_event, workflowName: string, workingDir: string, workflowId?: string) =>
+    readResumeInfoFor(workingDir, workflowName, workflowId)
 );
 
 ipcMain.on('pause-workflow', (event: IpcMainEvent) => {

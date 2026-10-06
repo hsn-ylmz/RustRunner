@@ -27,6 +27,8 @@ import {
 import {
   convertNodesToWorkflow,
   findInvalidNodeIds,
+  generateWorkflowId,
+  isValidWorkflowId,
   labelToId,
   validateWorkflow,
 } from './workflowConversion';
@@ -69,6 +71,11 @@ function WorkflowEditorInner() {
   const [isDirty, setIsDirty] = useState(false);
   const [executionState, setExecutionState] = useState<'idle' | 'running' | 'paused'>('idle');
   const [workflowVersion, setWorkflowVersion] = useState('');
+  // Stable id: keys the engine's saved run, so renaming keeps "Resume last run".
+  const [workflowId, setWorkflowId] = useState(() => generateWorkflowId());
+  /** Keep running independent steps after one fails. */
+  const [keepGoing, setKeepGoing] = useState(false);
+  const [tempKeepGoing, setTempKeepGoing] = useState(false);
   /** 'new' starts a fresh canvas; 'details' only edits the name and version. */
   const [nameDialog, setNameDialog] = useState<'new' | 'details' | null>(null);
   const [tempWorkflowName, setTempWorkflowName] = useState('');
@@ -437,27 +444,33 @@ function WorkflowEditorInner() {
     if (!(await confirmDiscardIfDirty('Start a new workflow without saving?'))) return;
     setTempWorkflowName('My Workflow');
     setTempWorkflowVersion('');
+    setTempKeepGoing(false);
     setNameDialog('new');
   }, [confirmDiscardIfDirty]);
 
   const handleEditDetails = useCallback(() => {
     setTempWorkflowName(workflowName);
     setTempWorkflowVersion(workflowVersion);
+    setTempKeepGoing(keepGoing);
     setNameDialog('details');
-  }, [workflowName, workflowVersion]);
+  }, [workflowName, workflowVersion, keepGoing]);
 
   const handleConfirmDetails = useCallback(() => {
     if (!tempWorkflowName.trim()) return;
     setWorkflowName(tempWorkflowName);
     setWorkflowVersion(tempWorkflowVersion);
+    setKeepGoing(tempKeepGoing);
     setNameDialog(null);
     markDirty();
-  }, [tempWorkflowName, tempWorkflowVersion, markDirty]);
+  }, [tempWorkflowName, tempWorkflowVersion, tempKeepGoing, markDirty]);
 
   const handleConfirmNew = useCallback(() => {
     if (!tempWorkflowName.trim()) return;
     setWorkflowName(tempWorkflowName);
     setWorkflowVersion(tempWorkflowVersion);
+    setKeepGoing(tempKeepGoing);
+    // A new workflow is a new identity: it never inherits another's saved run.
+    setWorkflowId(generateWorkflowId());
     setNameDialog(null);
     addLog(`New workflow created: ${tempWorkflowName}`);
 
@@ -487,7 +500,7 @@ function WorkflowEditorInner() {
     setIsDirty(false);
     undoStack.current = [];
     redoStack.current = [];
-  }, [tempWorkflowName, tempWorkflowVersion, addLog]);
+  }, [tempWorkflowName, tempWorkflowVersion, tempKeepGoing, addLog]);
 
   const handleOpen = useCallback(async () => {
     if (!(await confirmDiscardIfDirty('Open another workflow without saving?'))) return;
@@ -519,8 +532,15 @@ function WorkflowEditorInner() {
       setWorkflowVersion(
         typeof data.metadata?.workflowVersion === 'string' ? data.metadata.workflowVersion : ''
       );
+      setKeepGoing(data.metadata?.keepGoing === true);
+      // Keep the id the file carries. A file from before ids existed gets one
+      // now and is marked unsaved, so saving it makes the id permanent (until
+      // then each open would pick a new one and lose the saved run).
+      const fileId = data.metadata?.workflowId;
+      const hasId = isValidWorkflowId(fileId);
+      setWorkflowId(hasId ? fileId : generateWorkflowId());
       setCurrentFilePath(result.path);
-      setIsDirty(false);
+      setIsDirty(!hasId);
       undoStack.current = [];
       redoStack.current = [];
 
@@ -549,6 +569,8 @@ function WorkflowEditorInner() {
             name: workflowName,
             // Version of the workflow itself; `version` below is the file format's.
             workflowVersion,
+            workflowId,
+            keepGoing,
             version: '1.1.0',
             createdAt: new Date().toISOString(),
           },
@@ -570,7 +592,17 @@ function WorkflowEditorInner() {
         addLog(`Failed to save workflow: ${error}`);
       }
     },
-    [nodes, edges, nodeWildcardFiles, workflowName, workflowVersion, currentFilePath, addLog]
+    [
+      nodes,
+      edges,
+      nodeWildcardFiles,
+      workflowName,
+      workflowVersion,
+      workflowId,
+      keepGoing,
+      currentFilePath,
+      addLog,
+    ]
   );
 
   const handleSave = useCallback(() => saveWorkflowTo(false), [saveWorkflowTo]);
@@ -619,8 +651,10 @@ function WorkflowEditorInner() {
       }
 
       const workflow = convertNodesToWorkflow(nodes, edges, nodeWildcardFiles, {
+        id: workflowId,
         name: workflowName,
         version: workflowVersion,
+        keepGoing,
       });
 
       const errors = validateWorkflow(workflow);
@@ -650,7 +684,17 @@ function WorkflowEditorInner() {
       setRunPhase('active');
       return { workflow, dir };
     },
-    [nodes, edges, nodeWildcardFiles, workflowName, workflowVersion, workingDirectory, addLog]
+    [
+      nodes,
+      edges,
+      nodeWildcardFiles,
+      workflowName,
+      workflowVersion,
+      workflowId,
+      keepGoing,
+      workingDirectory,
+      addLog,
+    ]
   );
 
   // Which saved run (if any) "Resume last run" would continue. Looked up in
@@ -663,7 +707,7 @@ function WorkflowEditorInner() {
     }
     let cancelled = false;
     window.electron.ipcRenderer
-      .getResumeInfo(workflowName, workingDirectory)
+      .getResumeInfo(workflowName, workingDirectory, workflowId)
       .then((info) => {
         if (!cancelled) setResumeInfo(info);
       })
@@ -673,7 +717,7 @@ function WorkflowEditorInner() {
     return () => {
       cancelled = true;
     };
-  }, [workflowName, workingDirectory, executionState]);
+  }, [workflowName, workflowId, workingDirectory, executionState]);
 
   // Execution. "Run from scratch" asks the engine to ignore any saved state;
   // "Resume last run" lets it pick the state up and skip finished steps.
@@ -840,7 +884,7 @@ function WorkflowEditorInner() {
               <button className="toolbar-button" onClick={handleSave}>Save</button>
               <button className="toolbar-button" onClick={handleSaveAs}>Save As</button>
               <button className="toolbar-button" onClick={handleClear}>Clear</button>
-              <button className="toolbar-button" onClick={handleEditDetails}>
+              <button className="toolbar-button" data-testid="details" onClick={handleEditDetails}>
                 Details
               </button>
               <button className="toolbar-button" onClick={handleSelectDirectory}
@@ -953,6 +997,7 @@ function WorkflowEditorInner() {
               <input
                 type="text"
                 className="dialog-input"
+                data-testid="dialog-name"
                 value={tempWorkflowName}
                 onChange={(e) => setTempWorkflowName(e.target.value)}
                 onKeyDown={(e) =>
@@ -976,10 +1021,23 @@ function WorkflowEditorInner() {
                 }
               />
             </label>
+            <label className="dialog-checkbox">
+              <input
+                type="checkbox"
+                data-testid="keep-going"
+                checked={tempKeepGoing}
+                onChange={(e) => setTempKeepGoing(e.target.checked)}
+              />{' '}
+              Keep going after a failure
+            </label>
+            <p className="dialog-hint">
+              When a step fails, steps that do not depend on it still run. The run still ends as
+              failed, with a summary of what failed and what was not run.
+            </p>
             <p className="dialog-hint">
               {nameDialog === 'new'
                 ? 'You will choose a working directory when you click Run.'
-                : 'Shown in the run log and saved with each run. Renaming the workflow starts a new saved run, so "Resume last run" will not find the old one.'}
+                : 'Shown in the run log and saved with each run. Renaming the workflow keeps its saved run, so "Resume last run" still finds it.'}
             </p>
             <div className="dialog-buttons">
               <button className="dialog-button cancel" onClick={() => setNameDialog(null)}>
@@ -987,6 +1045,7 @@ function WorkflowEditorInner() {
               </button>
               <button
                 className="dialog-button confirm"
+                data-testid="dialog-confirm"
                 onClick={nameDialog === 'new' ? handleConfirmNew : handleConfirmDetails}
               >
                 {nameDialog === 'new' ? 'Create' : 'Save'}

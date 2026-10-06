@@ -5,8 +5,10 @@
 import type { EngineEvent } from '../main/engineEvents';
 
 interface WorkflowData {
-  /** Optional name/version; read by the engine's `metadata` field. */
-  metadata?: { name?: string; version?: string };
+  /** Optional id/name/version; read by the engine's `metadata` field. */
+  metadata?: { id?: string; name?: string; version?: string };
+  /** Keep running independent steps after one fails. */
+  keep_going?: boolean;
   steps: Array<{
     id: string;
     tool: string;
@@ -95,7 +97,7 @@ interface ElectronAPI {
       workingDir?: string,
       fresh?: boolean
     ): void;
-    getResumeInfo(workflowName: string, workingDir: string): Promise<ResumeInfo>;
+    getResumeInfo(workflowName: string, workingDir: string, workflowId?: string): Promise<ResumeInfo>;
     pauseWorkflow(): void;
     resumeWorkflow(): void;
     stopWorkflow(): void;
