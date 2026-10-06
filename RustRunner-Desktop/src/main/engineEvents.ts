@@ -157,13 +157,21 @@ export interface SplitOutput {
  * Splits a stream of output chunks into events and log text.
  *
  * Chunks end anywhere, so an incomplete last line is held back until its
- * newline arrives (or {@link flush} is called when the stream ends).
+ * newline arrives (or {@link flush} is called when the stream ends). Byte
+ * chunks (a child process's raw stderr) are decoded as one UTF-8 stream, so a
+ * multi-byte character split across two chunks is not mangled; decoding each
+ * chunk on its own would turn it into replacement characters, corrupting a
+ * non-ASCII step name in an event.
  */
 export class EngineOutputSplitter {
   private pending = '';
 
-  push(chunk: string): SplitOutput {
-    const data = this.pending + chunk;
+  private readonly decoder = new TextDecoder('utf-8');
+
+  push(chunk: string | Uint8Array): SplitOutput {
+    const decoded =
+      typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, { stream: true });
+    const data = this.pending + decoded;
     const lastNewline = data.lastIndexOf('\n');
     if (lastNewline === -1) {
       this.pending = data;
@@ -175,7 +183,8 @@ export class EngineOutputSplitter {
 
   /** Releases a held-back incomplete line, for when the stream has ended. */
   flush(): SplitOutput {
-    const rest = this.pending;
+    // Any bytes of an unfinished character become a replacement character.
+    const rest = this.pending + this.decoder.decode();
     this.pending = '';
     return this.classify(rest);
   }

@@ -406,6 +406,7 @@ impl Engine {
             .collect();
         let stale: HashMap<String, StaleReason> =
             assess(&self.workflow, &state, self.working_dir.as_deref(), &env_of);
+        let mut forgot_a_success = false;
         for step in &self.workflow.steps {
             let Some(reason) = stale.get(&step.id) else {
                 continue;
@@ -413,7 +414,20 @@ impl Engine {
             if !self.fresh {
                 info!("Step '{}' will run: {}", step.id, reason);
             }
+            forgot_a_success |= state.completed_steps.contains(&step.id);
             state.invalidate(&step.id);
+        }
+        // Write that down before any stale step starts. Otherwise the file
+        // still calls the step finished while it rewrites its outputs, and a
+        // run killed at that moment (Stop, a crash) would leave fresh-looking
+        // partial outputs behind that the next run skips as up to date.
+        if forgot_a_success && !self.dry_run {
+            state.save().map_err(|e| {
+                format!(
+                    "Could not save the run state before re-running out-of-date steps: {}",
+                    e
+                )
+            })?;
         }
 
         if state.is_resume() {
@@ -496,6 +510,15 @@ impl Engine {
 
         // Main execution loop
         loop {
+            // A termination signal is being handled: start nothing new. The
+            // running steps are being killed and are collected below. Without
+            // this a keep-going run would hand the next independent steps to
+            // workers, which only report them as failed.
+            if is_shutting_down() {
+                run_error = Some("Workflow stopped by a termination signal".into());
+                break;
+            }
+
             // Schedule ready steps
             while running_count < self.max_parallel {
                 let ready_steps = planner.get_ready_steps();
@@ -1446,6 +1469,41 @@ mod tests {
         engine.run().unwrap();
         assert!(dir.path().join(".rustrunner/legacy.state").exists());
         assert!(!dir.path().join(".rustrunner/wf-dry.state").exists());
+    }
+
+    /// Regression: a stale step was forgotten only in memory, and the state
+    /// file still listed it as finished (with its old hash) until the first
+    /// step of the new run ended. A run stopped while the stale step was
+    /// rewriting its outputs then left partial outputs that looked current.
+    #[test]
+    fn test_a_stale_step_is_forgotten_on_disk_before_it_runs() {
+        let dir = tempdir().unwrap();
+        let out = dir.path().join("p.out");
+        let workflow = |command: &str| {
+            Workflow::from_steps(vec![
+                Step::new("persist_inval", "bash", command).with_output(out.to_str().unwrap())
+            ])
+            .with_metadata(crate::workflow::WorkflowMetadata::default().with_id("wf-persist"))
+        };
+        run_named(dir.path(), "p.yaml", workflow("touch p.out"));
+
+        // The edited command copies the state file as it is while it runs.
+        run_named(
+            dir.path(),
+            "p.yaml",
+            workflow("cp .rustrunner/wf-persist.state during.json; touch p.out"),
+        );
+        let during: WorkflowState =
+            serde_json::from_str(&fs::read_to_string(dir.path().join("during.json")).unwrap())
+                .unwrap();
+        assert!(!during.completed_steps.contains("persist_inval"));
+        assert!(!during.step_hashes.contains_key("persist_inval"));
+
+        // Afterwards it is recorded as finished with the new definition.
+        let after =
+            WorkflowState::load_keyed("p.yaml", Some("wf-persist"), Some(dir.path())).unwrap();
+        assert!(after.completed_steps.contains("persist_inval"));
+        assert!(after.step_hashes.contains_key("persist_inval"));
     }
 
     #[test]

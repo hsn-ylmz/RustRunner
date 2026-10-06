@@ -119,6 +119,26 @@ describe('EngineOutputSplitter', () => {
     expect(out.text).toBe('\r\nplain\r\n');
   });
 
+  it('decodes byte chunks as one UTF-8 stream, even when a character is split', () => {
+    const s = new EngineOutputSplitter();
+    const named = line({ event: 'step_succeeded', step: 'örnek_ğ', attempts: 1 });
+    const bytes = new TextEncoder().encode(`${named}\nlog é\n`);
+    // Cut inside the two-byte "ö".
+    const cut = bytes.indexOf(0xc3) + 1;
+    const first = s.push(bytes.subarray(0, cut));
+    const second = s.push(bytes.subarray(cut));
+    expect(first).toEqual({ events: [], text: '' });
+    expect(second.events).toHaveLength(1);
+    expect(second.events[0]).toMatchObject({ event: 'step_succeeded', step: 'örnek_ğ' });
+    expect(second.text).toBe('log é\n');
+  });
+
+  it('flush turns a dangling partial character into a replacement character', () => {
+    const s = new EngineOutputSplitter();
+    s.push(new Uint8Array([0x61, 0xc3]));
+    expect(s.flush()).toEqual({ events: [], text: 'a\ufffd' });
+  });
+
   it('keeps a malformed event line in the text', () => {
     const s = new EngineOutputSplitter();
     const bad = `${EVENT_PREFIX}{oops`;

@@ -983,7 +983,7 @@ function WorkflowEditorInner() {
             <button
               className={`execution-button run-button ${executionState === 'running' ? 'active' : ''}`}
               onClick={handleRun}
-              data-testid="run-normal"
+              data-testid="run"
               disabled={nodes.length === 0 || executionState === 'running'}
               title={
                 executionState === 'paused'
@@ -1000,7 +1000,7 @@ function WorkflowEditorInner() {
             <button
               className="execution-button resume-button"
               onClick={handleRunFromScratch}
-              data-testid="run"
+              data-testid="run-from-scratch"
               disabled={nodes.length === 0 || executionState !== 'idle'}
               title="Discard saved progress and run every step again."
             >

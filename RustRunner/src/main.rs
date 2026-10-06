@@ -20,9 +20,6 @@
 //! # Ignore saved state and run every step again
 //! rustrunner workflow.yaml --fresh
 //!
-//! # Keep running independent steps after one fails
-//! rustrunner workflow.yaml --keep-going
-//!
 //! # After a failure, still run the steps that do not depend on it
 //! rustrunner workflow.yaml --keep-going
 //!
@@ -36,11 +33,13 @@
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use log::{error, info};
 
 use rustrunner::execution::events::{EventSink, RunStatus};
-use rustrunner::execution::process::install_signal_handlers;
+use rustrunner::execution::process::{install_signal_handlers, is_shutting_down};
 use rustrunner::execution::step::cleanup_scripts;
 use rustrunner::execution::Engine;
 use rustrunner::workflow::parser::load_workflow;
@@ -51,6 +50,10 @@ const DEFAULT_WORKFLOW: &str = "workflow.yaml";
 
 /// Default maximum parallel jobs.
 const DEFAULT_MAX_PARALLEL: usize = 4;
+
+/// How long `main` leaves the signal handler to finish a stop: it waits up to
+/// 3 s for the steps' process groups, then kills them and exits on its own.
+const SIGNAL_EXIT_WAIT: Duration = Duration::from_secs(10);
 
 /// Command-line configuration parsed from arguments.
 #[derive(Debug)]
@@ -345,6 +348,17 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            // A Stop kills the running steps, so the engine sees them fail and
+            // returns, often before the signal handler has seen their process
+            // groups disappear. The handler owns the exit of a stopped run
+            // (`128 + signal`, after `run_finished` and the cleanup): wait for
+            // it instead of racing it with a plain failure.
+            if is_shutting_down() {
+                let deadline = Instant::now() + SIGNAL_EXIT_WAIT;
+                while Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
             eprintln!();
             eprintln!("Error: {}", e);
             ExitCode::FAILURE

@@ -218,19 +218,26 @@ impl EventSink {
 
     /// Writes one event. A write error (for example a reader that went away)
     /// is ignored: reporting progress must never fail the run itself.
-    /// `run_finished` is written at most once.
+    /// `run_finished` is written at most once, and nothing is written after
+    /// it: on a Stop the signal handler finishes the run while worker threads
+    /// may still be reporting the steps it is killing.
     pub fn emit(&self, event: Event) {
         let Some(writer) = &self.inner.writer else {
             return;
         };
-        if matches!(event, Event::RunFinished { .. })
-            && self.inner.finished.swap(true, Ordering::SeqCst)
-        {
-            return;
-        }
         let mut line = render_line(&event);
         line.push('\n');
+        // The flag is checked under the writer lock, so no event can slip in
+        // between `run_finished` being decided and being written.
         let mut writer = writer.lock().unwrap_or_else(|e| e.into_inner());
+        let is_finish = matches!(event, Event::RunFinished { .. });
+        if is_finish {
+            if self.inner.finished.swap(true, Ordering::SeqCst) {
+                return;
+            }
+        } else if self.inner.finished.load(Ordering::SeqCst) {
+            return;
+        }
         let _ = writer.write_all(line.as_bytes());
         let _ = writer.flush();
     }
@@ -373,6 +380,31 @@ mod tests {
         assert_eq!(events[0]["summary"]["total"], 2);
         assert_eq!(events[0]["summary"]["failed"], 1);
         assert_eq!(events[0]["summary"]["error"], "boom");
+    }
+
+    #[test]
+    fn test_nothing_is_written_after_run_finished() {
+        let buf = SharedBuffer::default();
+        let sink = EventSink::to_writer(buf.clone());
+        sink.emit(Event::StepStarted {
+            step: "a".into(),
+            attempt: 1,
+            max_attempts: 1,
+        });
+        sink.finish(RunStatus::Stopped, Some("terminated by a signal".into()));
+        // A worker thread reporting the step the Stop just killed.
+        sink.clone().emit(Event::StepFailed {
+            step: "a".into(),
+            reason: "killed".into(),
+            attempts: 1,
+        });
+
+        let names: Vec<_> = buf
+            .events()
+            .iter()
+            .map(|e| e["event"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(names, vec!["step_started", "run_finished"]);
     }
 
     #[test]

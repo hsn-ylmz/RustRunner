@@ -360,9 +360,9 @@ ipcMain.on(
       const rustProcess = spawn(rustExecutable, args);
       currentRustProcess = rustProcess;
 
-      // Stream output
-      rustProcess.stdout.on('data', (data: Buffer) => {
-        const output = data.toString();
+      // Stream output. setEncoding decodes UTF-8 across chunk boundaries.
+      rustProcess.stdout.setEncoding('utf8');
+      rustProcess.stdout.on('data', (output: string) => {
         log.info('Rust stdout:', output);
         event.reply('workflow-output', output);
       });
@@ -379,8 +379,10 @@ ipcMain.on(
           event.reply('workflow-output', text);
         }
       };
+      // Raw bytes: the splitter decodes them as one UTF-8 stream, so a
+      // character split across two chunks stays intact.
       rustProcess.stderr.on('data', (data: Buffer) => {
-        forwardStderr(stderrSplitter.push(data.toString()));
+        forwardStderr(stderrSplitter.push(data));
       });
 
       // Handle completion
