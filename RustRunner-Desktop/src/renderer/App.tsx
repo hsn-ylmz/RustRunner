@@ -1,44 +1,40 @@
 /**
  * RustRunner Workflow Editor
- * 
- * Visual workflow design interface using React Flow.
- * Now with wildcards support for batch file processing.
+ *
+ * Owns editor state and wires the canvas, properties panel, execution logs
+ * and update banner together. Pure logic lives in ./workflowConversion and
+ * the presentational pieces in ./components.
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
-  ReactFlow,
-  Background,
-  BackgroundVariant,
-  Controls,
-  Handle,
-  Position,
-  NodeToolbar,
   useReactFlow,
   applyEdgeChanges,
   applyNodeChanges,
   addEdge,
-  MiniMap,
   ReactFlowProvider,
 } from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
 import './App.css';
 import {
   applyStepEvent,
   parseStepEvent,
   type NodeStatus,
 } from './stepEvents';
-
-// =============================================================================
-// Constants
-// =============================================================================
-
-const COLOR_OPTIONS = [
-  '#a8e6cf', '#88c5f7', '#d4a5f7', '#f5efe9',
-  '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6',
-];
-
-const DEFAULT_COLOR = '#88c5f7';
+import {
+  WILDCARD_NAME,
+  convertNodesToWorkflow,
+  findInvalidNodeIds,
+  labelToId,
+  validateWorkflow,
+} from './workflowConversion';
+import { UpdateBanner, type UpdateStatus } from './components/UpdateBanner';
+import { PropertiesPanel } from './components/PropertiesPanel';
+import { ExecutionLogs } from './components/ExecutionLogs';
+import {
+  WorkflowCanvas,
+  DEFAULT_COLOR,
+  nextNodePosition,
+} from './components/WorkflowCanvas';
 
 /**
  * Cap on retained log lines. A chatty run (or `seq 1 200000`) used to grow
@@ -50,691 +46,6 @@ const MAX_LOG_LINES = 5000;
 /** Cap on undo history depth. */
 const MAX_HISTORY = 50;
 
-// =============================================================================
-// Auto-update Types
-// =============================================================================
-
-/**
- * Status payloads emitted by the main process over the 'update-status'
- * IPC channel. Kept inline (rather than imported from preload.d.ts) so the
- * renderer stays free of cross-process type imports — the shape is also
- * declared in src/main/updater.ts and src/renderer/preload.d.ts; keep all
- * three in sync.
- */
-type UpdateStatus =
-  | { status: 'checking'; manual: boolean }
-  | {
-      status: 'available';
-      manual: boolean;
-      version: string;
-      canAutoInstall: boolean;
-      downloadUrl?: string;
-      releaseDate?: string;
-      releaseNotes?: string | null;
-    }
-  | { status: 'up-to-date'; manual: boolean; version: string }
-  | { status: 'downloading'; percent: number; bytesPerSecond: number; transferred: number; total: number }
-  | { status: 'downloaded'; version: string; canAutoInstall: boolean }
-  | { status: 'error'; manual: boolean; message: string };
-
-/** Human-readable bytes-per-second for the download progress line. */
-function formatBytesPerSec(bytes: number): string {
-  if (!isFinite(bytes) || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes.toFixed(0)} B/s`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB/s`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB/s`;
-}
-
-// =============================================================================
-// Utility Functions
-// =============================================================================
-
-function labelToId(label: string): string {
-  return label
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .replace(/_+/g, '_');
-}
-
-/** The wildcard name the file picker generates patterns for. */
-const WILDCARD_NAME = 'sample';
-
-/**
- * Builds the engine-facing workflow from the canvas.
- *
- * Wildcard files are attached **per step** as `wildcard_files`, matching the
- * Rust `Step` struct. `load_workflow` merges those and expands the workflow
- * before validation, so no CLI flag is involved — the engine has no
- * `--wildcards` option and rejects unknown ones outright.
- *
- * Files are looked up from the live `nodes` list rather than iterated out of
- * `nodeWildcardFiles`, so entries left behind by deleted nodes can never reach
- * a run, and each step gets only its own files instead of the union of all.
- */
-function convertNodesToWorkflow(
-  nodes: any[],
-  edges: any[],
-  nodeWildcardFiles: Record<string, string[]> = {}
-) {
-  const nodeIdToStepId = new Map<string, string>();
-  nodes.forEach((node: any) => {
-    nodeIdToStepId.set(node.id, labelToId(node.data.label));
-  });
-
-  const steps = nodes.map((node: any) => {
-    const stepId = nodeIdToStepId.get(node.id)!;
-    const incoming = edges.filter((e: any) => e.target === node.id);
-    const outgoing = edges.filter((e: any) => e.source === node.id);
-    const files = nodeWildcardFiles[node.id] || [];
-
-    const step: any = {
-      id: stepId,
-      tool: node.data.tool || '',
-      command: node.data.command || '',
-      input: node.data.input ? [node.data.input] : [],
-      output: node.data.output ? [node.data.output] : [],
-      previous: incoming.map((e: any) => nodeIdToStepId.get(e.source)!),
-      next: outgoing.map((e: any) => nodeIdToStepId.get(e.target)!),
-      threads: normalizeThreads(node.data.threads),
-    };
-
-    // Omit the key entirely when empty — Rust skips serializing empty maps and
-    // an empty mapping would just be noise in the YAML.
-    if (files.length > 0) {
-      step.wildcard_files = { [WILDCARD_NAME]: files };
-    }
-
-    return step;
-  });
-
-  return { steps };
-}
-
-/**
- * Picks a severity class for one log line.
- *
- * Ordered most- to least-specific: the engine's own `[ERROR]`/`[WARN]` prefixes
- * win over keyword sniffing, so a command that merely mentions "error" isn't
- * painted red. Applied per line rather than per stdout chunk.
- */
-function classifyLogLine(line: string): string {
-  if (/^\s*\[ERROR\]/.test(line)) return 'error';
-  if (/^\s*\[WARN\]/.test(line)) return 'warning';
-  if (/^\s*\[(PAUSED|STOPPED)\]/.test(line)) return 'warning';
-  if (/completed successfully|Workflow completed/i.test(line)) return 'success';
-  if (/\bfailed\b|Execution error/i.test(line)) return 'error';
-  if (/stopped by user|paused/i.test(line)) return 'warning';
-  if (/\[DRY RUN\]|Wildcards|Starting step:/i.test(line)) return 'info';
-  return '';
-}
-
-/**
- * Chooses where a newly added node should appear.
- *
- * Measured against the canvas element, NOT the window: the toolbars and the
- * properties panel make the canvas considerably smaller than the window, so
- * window-relative placement lands nodes near the canvas's bottom-right corner.
- *
- * Placement also has to dodge the floating overlays, which sit above the nodes
- * and swallow clicks on anything underneath them — the execution controls
- * (top-left), the MiniMap (bottom-right) and the zoom Controls (bottom-left).
- * Nodes are laid out on a 3x2 grid inside the remaining box and cycle through
- * its cells, so consecutive nodes never stack on each other either.
- *
- * Positions are computed in screen space and converted, so panning and zoom
- * are handled by React Flow rather than guessed at.
- */
-function nextNodePosition(
-  wrapper: HTMLElement | null,
-  nodeCount: number,
-  toFlow: (p: { x: number; y: number }) => { x: number; y: number }
-): { x: number; y: number } {
-  if (!wrapper) {
-    return toFlow({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-  }
-
-  const rect = wrapper.getBoundingClientRect();
-
-  // Insets clearing the floating overlays. Generous rather than exact — the
-  // cost of being wrong is an unclickable node.
-  const box = {
-    left: rect.x + 170,
-    top: rect.y + 90,
-    right: rect.right - 230,
-    bottom: rect.bottom - 60,
-  };
-
-  // Two columns, not three: a node renders around 300px wide, so three columns
-  // in this box would be narrower than the nodes themselves and they'd overlap.
-  const COLS = 2;
-  const ROWS = 2;
-  const cells = COLS * ROWS;
-  const cell = nodeCount % cells;
-  const col = cell % COLS;
-  const row = Math.floor(cell / COLS);
-
-  // Once the grid wraps, nudge each new lap so nodes don't land exactly on top
-  // of the ones from the previous lap.
-  const lap = Math.floor(nodeCount / cells) * 26;
-
-  const width = Math.max(box.right - box.left, 1);
-  const height = Math.max(box.bottom - box.top, 1);
-
-  return toFlow({
-    x: box.left + (width * (col + 0.5)) / COLS + lap,
-    y: box.top + (height * (row + 0.5)) / ROWS + lap,
-  });
-}
-
-/** Coerces a threads value from the UI into a positive integer. */
-function normalizeThreads(value: unknown): number {
-  const n = Math.floor(Number(value));
-  return Number.isFinite(n) && n >= 1 ? n : 1;
-}
-
-/**
- * Finds step ids that would collide or be empty once labels are slugified.
- * Surfaced live on the canvas rather than only when Run is pressed, since
- * `labelToId` silently maps "Process" and "process" onto the same id.
- */
-function findInvalidNodeIds(nodes: any[]): Record<string, string> {
-  const counts = new Map<string, number>();
-  nodes.forEach((node: any) => {
-    const id = labelToId(node.data?.label || '');
-    counts.set(id, (counts.get(id) || 0) + 1);
-  });
-
-  const problems: Record<string, string> = {};
-  nodes.forEach((node: any) => {
-    const id = labelToId(node.data?.label || '');
-    if (!id) {
-      problems[node.id] = 'Name must contain at least one letter or number';
-    } else if ((counts.get(id) || 0) > 1) {
-      problems[node.id] = `Duplicate step ID "${id}"`;
-    }
-  });
-
-  return problems;
-}
-
-function validateWorkflow(workflow: any): string[] {
-  const errors: string[] = [];
-
-  if (!workflow.steps || workflow.steps.length === 0) {
-    errors.push('Workflow has no steps');
-    return errors;
-  }
-
-  const stepIds = new Set<string>();
-  workflow.steps.forEach((step: any) => {
-    if (stepIds.has(step.id)) {
-      errors.push(`Duplicate step ID: ${step.id}`);
-    }
-    stepIds.add(step.id);
-
-    if (!step.id || step.id.trim() === '') {
-      errors.push('Step has empty ID');
-    }
-    if (!step.tool || step.tool.trim() === '') {
-      errors.push(`Step ${step.id}: missing tool`);
-    }
-    if (!step.command || step.command.trim() === '') {
-      errors.push(`Step ${step.id}: missing command`);
-    }
-  });
-
-  return errors;
-}
-
-// =============================================================================
-// Wildcard Helper Functions
-// =============================================================================
-
-/**
- * Generates a wildcard pattern from a list of files.
- * Example: ["sample1.fastq", "sample2.fastq"] -> "{sample}.fastq"
- */
-function generatePattern(files: string[]): string {
-  if (files.length === 0) return '';
-  
-  const firstFile = files[0];
-  const fileName = firstFile.split('/').pop() || firstFile;
-  const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
-  const dir = firstFile.substring(0, firstFile.lastIndexOf('/') + 1);
-  
-  return `${dir}{sample}${ext}`;
-}
-
-/**
- * Checks if a string contains wildcard syntax.
- */
-function hasWildcards(text: string): boolean {
-  return text.includes('{') && text.includes('}');
-}
-
-// =============================================================================
-// Custom Node Component
-// =============================================================================
-
-/** Badge glyph shown in the corner of a node for each execution state. */
-const STATUS_GLYPH: Record<string, string> = {
-  running: '●',
-  done: '✓',
-  failed: '✕',
-};
-
-function CustomNode({ id, data, selected }: any) {
-  const { updateNodeData } = useReactFlow();
-
-  const handleColorChange = (newColor: string) => {
-    updateNodeData(id, { color: newColor });
-  };
-
-  const nodeColor = data.color || DEFAULT_COLOR;
-
-  // Injected by the editor rather than stored on the node, so execution state
-  // never ends up in a saved workflow file.
-  const status: NodeStatus | undefined = data.__status;
-  const invalidReason: string | undefined = data.__invalidReason;
-
-  const state = status?.state ?? 'idle';
-  const showCount = status && status.total > 1;
-
-  return (
-    <>
-      <NodeToolbar isVisible={selected} className="nopan">
-        <div className="color-picker-toolbar">
-          {COLOR_OPTIONS.map((colorOption) => (
-            <button
-              key={colorOption}
-              onClick={() => handleColorChange(colorOption)}
-              className={`color-button ${colorOption === nodeColor ? 'selected' : ''}`}
-              style={{ backgroundColor: colorOption }}
-              title={`Change color to ${colorOption}`}
-            />
-          ))}
-        </div>
-      </NodeToolbar>
-
-      <div
-        className={[
-          'custom-node',
-          selected ? 'selected' : '',
-          `node-state-${state}`,
-          invalidReason ? 'node-invalid' : '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        style={{ background: nodeColor }}
-        title={status?.message || invalidReason || undefined}
-      >
-        <Handle type="target" position={Position.Top} />
-
-        {state !== 'idle' && state !== 'pending' && (
-          <div className={`node-status-badge node-status-${state}`}>
-            {STATUS_GLYPH[state]}
-          </div>
-        )}
-
-        <div className="node-label">{data.label || 'New Node'}</div>
-        <div className="node-tool">{data.tool || 'No tool'}</div>
-
-        {showCount && (
-          <div className="node-progress">
-            {status!.finished}/{status!.total}
-          </div>
-        )}
-
-        {invalidReason && (
-          <div className="node-invalid-badge" title={invalidReason}>
-            !
-          </div>
-        )}
-
-        <Handle type="source" position={Position.Bottom} />
-      </div>
-    </>
-  );
-}
-
-// =============================================================================
-// Properties Panel Component
-// =============================================================================
-
-function PropertiesPanel({
-  selectedNode,
-  onNodeUpdate,
-  nodeFiles,
-  onNodeFilesUpdate,
-  addLog,
-  invalidReason,
-}: any) {
-  if (!selectedNode) {
-    return (
-      <div className="properties-panel">
-        <h3>Properties</h3>
-        <p className="no-selection">Select a node to edit its properties</p>
-      </div>
-    );
-  }
-
-  const handleInputChange = (field: string, value: string) => {
-    onNodeUpdate(selectedNode.id, field, value);
-  };
-
-  const handleFileSelection = async () => {
-    try {
-      const files = await window.electron.ipcRenderer.selectFiles();
-      if (files && files.length > 0) {
-        // Generate pattern automatically
-        const pattern = generatePattern(files);
-        handleInputChange('input', pattern);
-        
-        // Store files for this node
-        onNodeFilesUpdate(selectedNode.id, files);
-        
-        // Log success
-        addLog(`Selected ${files.length} file(s) for ${selectedNode.data.label}`);
-        
-        // Auto-suggest output pattern if not set
-        if (!selectedNode.data.output || selectedNode.data.output === '') {
-          const outputPattern = pattern.replace('{sample}', 'output/{sample}');
-          handleInputChange('output', outputPattern);
-        }
-      }
-    } catch (error) {
-      console.error('File selection error:', error);
-      addLog('Failed to select files');
-    }
-  };
-
-  const handleClearFiles = () => {
-    onNodeFilesUpdate(selectedNode.id, []);
-    handleInputChange('input', '');
-    addLog(`Cleared files for ${selectedNode.data.label}`);
-  };
-
-  return (
-    <div className="properties-panel">
-      <h3>Node Properties</h3>
-
-      <div className="property-group">
-        <label className="property-label">Node Name:</label>
-        <input
-          type="text"
-          className="property-input"
-          value={selectedNode.data.label || ''}
-          onChange={(e) => handleInputChange('label', e.target.value)}
-        />
-        {selectedNode.data.label && !invalidReason && (
-          <div className="property-hint">
-            Step ID: {labelToId(selectedNode.data.label)}
-          </div>
-        )}
-        {invalidReason && (
-          <div className="property-error">⚠ {invalidReason}</div>
-        )}
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Tool:</label>
-        <input
-          type="text"
-          className="property-input"
-          value={selectedNode.data.tool || ''}
-          onChange={(e) => handleInputChange('tool', e.target.value)}
-          placeholder="e.g., bash, fastqc, bowtie2"
-        />
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Command:</label>
-        <textarea
-          className="property-textarea"
-          value={selectedNode.data.command || ''}
-          onChange={(e) => handleInputChange('command', e.target.value)}
-          placeholder="Enter command to execute"
-          rows={4}
-        />
-        <div className="property-hint">
-          Use {'{input}'} and {'{output}'} as placeholders
-        </div>
-      </div>
-
-      {/* WILDCARDS FEATURE: File Selection */}
-      <div className="property-group">
-        <label className="property-label">Input Files:</label>
-        <button 
-          className="property-button" 
-          onClick={handleFileSelection}
-        >
-          📁 Select Files for Batch Processing...
-        </button>
-        
-        {nodeFiles && nodeFiles.length > 0 && (
-          <>
-            <div className="file-list">
-              <div className="file-list-header">
-                ✓ Selected {nodeFiles.length} file(s):
-              </div>
-              {nodeFiles.slice(0, 5).map((file: string, i: number) => (
-                <div key={i} className="file-item">
-                  {file.split('/').pop()}
-                </div>
-              ))}
-              {nodeFiles.length > 5 && (
-                <div className="file-item file-item-more">
-                  ... and {nodeFiles.length - 5} more
-                </div>
-              )}
-            </div>
-            
-            <div className="wildcard-info">
-              <div className="property-hint">
-                🔄 Pattern: <code>{generatePattern(nodeFiles)}</code>
-              </div>
-              <div className="property-hint">
-                ⚡ Will create {nodeFiles.length} step instance(s)
-              </div>
-            </div>
-            
-            <button 
-              className="property-button property-button-secondary" 
-              onClick={handleClearFiles}
-            >
-              Clear Selected Files
-            </button>
-          </>
-        )}
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Input Pattern:</label>
-        <input
-          type="text"
-          className="property-input"
-          value={selectedNode.data.input || ''}
-          onChange={(e) => handleInputChange('input', e.target.value)}
-          placeholder="e.g., {sample}.fastq or data/{sample}.txt"
-        />
-        {hasWildcards(selectedNode.data.input || '') && (
-          <div className="property-hint">
-            🎯 Wildcard detected - this will process multiple files
-          </div>
-        )}
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Output Pattern:</label>
-        <input
-          type="text"
-          className="property-input"
-          value={selectedNode.data.output || ''}
-          onChange={(e) => handleInputChange('output', e.target.value)}
-          placeholder="e.g., output/{sample}.txt"
-        />
-        {hasWildcards(selectedNode.data.output || '') && (
-          <div className="property-hint">
-            💾 Output will be generated for each input file
-          </div>
-        )}
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Threads:</label>
-        <input
-          type="number"
-          min={1}
-          step={1}
-          className="property-input"
-          value={selectedNode.data.threads ?? 1}
-          onChange={(e) => handleInputChange('threads', e.target.value)}
-          onBlur={(e) =>
-            handleInputChange('threads', String(normalizeThreads(e.target.value)))
-          }
-        />
-        <div className="property-hint">
-          CPU threads this step requests from the scheduler.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// =============================================================================
-// Node Types
-// =============================================================================
-
-const nodeTypes = { custom: CustomNode };
-const defaultEdgeOptions = { animated: true };
-
-// =============================================================================
-// Update Banner Component
-// =============================================================================
-
-/**
- * Renders a slim banner at the top of the app when there's something
- * worth saying about updates.
- *
- * Status × manual matrix:
- *
- *   checking      manual → "Checking for updates…"   silent → hidden
- *   up-to-date    manual → "You're up to date"       silent → hidden
- *   available     always shown
- *                   canAutoInstall=true  → "Downloading in the background…"
- *                   canAutoInstall=false → "Download from GitHub" action
- *   downloading   always shown, with a progress strip
- *   downloaded    always shown — "Restart & Install" (only fires on auto-install platforms)
- *   error         always shown
- *
- * Dismissal is per-status-transition; the parent un-dismisses when the
- * status field changes, so dismissing during download still surfaces the
- * "ready to install" prompt when the download finishes.
- */
-function UpdateBanner({
-  status,
-  onInstall,
-  onDismiss,
-}: {
-  status: UpdateStatus | null;
-  onInstall: () => void;
-  onDismiss: () => void;
-}) {
-  if (!status) return null;
-
-  // Silent-flow suppression: hide the "Checking…" tick and the
-  // "Up to date" reassurance unless the user explicitly asked.
-  if (status.status === 'checking' && !status.manual) return null;
-  if (status.status === 'up-to-date' && !status.manual) return null;
-
-  let title = '';
-  let detail = '';
-  let progressPct: number | null = null;
-  let action: { label: string; onClick: () => void } | null = null;
-  let variant: 'info' | 'success' | 'error' = 'info';
-
-  switch (status.status) {
-    case 'checking':
-      title = 'Checking for updates…';
-      break;
-    case 'available':
-      title = `Update available — v${status.version}`;
-      if (status.canAutoInstall) {
-        detail = 'Downloading in the background…';
-      } else {
-        // Detection-only platform (e.g. unsigned macOS): point the user
-        // to GitHub for a manual install.
-        detail = 'Open the GitHub release page to download.';
-        action = { label: 'Download from GitHub', onClick: onInstall };
-      }
-      break;
-    case 'downloading': {
-      title = 'Downloading update';
-      progressPct = Math.max(0, Math.min(100, status.percent));
-      const speed = formatBytesPerSec(status.bytesPerSecond);
-      detail = speed
-        ? `${progressPct.toFixed(0)}% — ${speed}`
-        : `${progressPct.toFixed(0)}%`;
-      break;
-    }
-    case 'downloaded':
-      title = `Update ready — v${status.version}`;
-      detail = status.canAutoInstall
-        ? 'Restart RustRunner to install.'
-        : 'Open the GitHub release page to install.';
-      action = {
-        label: status.canAutoInstall ? 'Restart & Install' : 'Download from GitHub',
-        onClick: onInstall,
-      };
-      variant = 'success';
-      break;
-    case 'up-to-date':
-      title = `You're up to date — v${status.version}`;
-      variant = 'success';
-      break;
-    case 'error':
-      title = 'Update check failed';
-      detail = status.message;
-      variant = 'error';
-      break;
-  }
-
-  return (
-    <div className={`update-banner update-banner-${variant}`} role="status">
-      <div className="update-banner-text">
-        <span className="update-banner-title">{title}</span>
-        {detail && <span className="update-banner-detail">{detail}</span>}
-      </div>
-
-      {progressPct !== null && (
-        <div className="update-banner-progress" aria-hidden="true">
-          <div
-            className="update-banner-progress-bar"
-            style={{ width: `${progressPct}%` }}
-          />
-        </div>
-      )}
-
-      <div className="update-banner-actions">
-        {action && (
-          <button className="update-banner-button" onClick={action.onClick}>
-            {action.label}
-          </button>
-        )}
-        <button
-          className="update-banner-dismiss"
-          onClick={onDismiss}
-          aria-label="Dismiss update notification"
-          title="Dismiss"
-        >
-          ×
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // =============================================================================
 // Main Editor Component
@@ -760,12 +71,8 @@ function WorkflowEditorInner() {
   const [stepStatus, setStepStatus] = useState<Record<string, NodeStatus>>({});
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const logContentRef = useRef<HTMLDivElement>(null);
   /** The canvas viewport, for placing new nodes where they're actually visible. */
   const flowWrapperRef = useRef<HTMLDivElement>(null);
-  /** False while the user has scrolled up, so new output doesn't yank them back. */
-  const stickToBottomRef = useRef(true);
   const { screenToFlowPosition } = useReactFlow();
 
   const selectedNode =
@@ -907,20 +214,6 @@ function WorkflowEditorInner() {
       return () => clearTimeout(id);
     }
   }, [updateStatus]);
-
-  // Auto-scroll logs, but only while the user is already at the bottom.
-  useEffect(() => {
-    if (stickToBottomRef.current) {
-      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [executionLogs]);
-
-  const handleLogScroll = useCallback(() => {
-    const el = logContentRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceFromBottom < 40;
-  }, []);
 
   // Keep the main process's view of unsaved state current for the close guard.
   useEffect(() => {
@@ -1489,28 +782,15 @@ function WorkflowEditorInner() {
             {progress && <div className="execution-progress">{progress}</div>}
           </div>
 
-          <ReactFlow
+
+          <WorkflowCanvas
             nodes={decoratedNodes}
             edges={edges}
-            defaultEdgeOptions={defaultEdgeOptions}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onSelectionChange={onSelectionChange}
-            nodeTypes={nodeTypes}
-            fitView
-          >
-            <Background
-              variant={BackgroundVariant.Dots}
-              gap={30}
-              color="var(--canvas-grid)"
-            />
-            <Controls />
-            <MiniMap
-              nodeStrokeWidth={1}
-              nodeColor={(node: any) => node.data?.color || '#aaa'}
-            />
-          </ReactFlow>
+          />
         </div>
 
         {selectedNode && (
@@ -1526,31 +806,12 @@ function WorkflowEditorInner() {
       </div>
 
       {/* Execution Logs Panel */}
-      <div className={`execution-panel ${showExecutionPanel ? 'visible' : 'hidden'}`}>
-        <div className="execution-panel-header">
-          <h3>Execution Logs</h3>
-          <div className="execution-panel-controls">
-            <button className="panel-button" onClick={handleClearLogs}>Clear</button>
-            <button className="panel-button" onClick={handleTogglePanel}>
-              {showExecutionPanel ? 'Hide' : 'Show'}
-            </button>
-          </div>
-        </div>
-        {showExecutionPanel && (
-          <div
-            className="execution-panel-content"
-            ref={logContentRef}
-            onScroll={handleLogScroll}
-          >
-            {executionLogs.map((log, index) => (
-              <div key={index} className={`log-entry ${classifyLogLine(log)}`}>
-                {log}
-              </div>
-            ))}
-            <div ref={logsEndRef} />
-          </div>
-        )}
-      </div>
+      <ExecutionLogs
+        logs={executionLogs}
+        visible={showExecutionPanel}
+        onClear={handleClearLogs}
+        onToggle={handleTogglePanel}
+      />
 
       {/* Name Dialog */}
       {showNameDialog && (

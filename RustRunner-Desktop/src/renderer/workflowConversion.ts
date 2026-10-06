@@ -1,0 +1,149 @@
+/**
+ * Pure workflow logic: canvas -> engine workflow conversion, validation and
+ * wildcard helpers. No React or Electron imports so it is unit-testable.
+ */
+
+export function labelToId(label: string): string {
+  return label
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_+/g, '_');
+}
+
+/** The wildcard name the file picker generates patterns for. */
+export const WILDCARD_NAME = 'sample';
+
+/**
+ * Builds the engine-facing workflow from the canvas.
+ *
+ * Wildcard files are attached **per step** as `wildcard_files`, matching the
+ * Rust `Step` struct. `load_workflow` merges those and expands the workflow
+ * before validation, so no CLI flag is involved — the engine has no
+ * `--wildcards` option and rejects unknown ones outright.
+ *
+ * Files are looked up from the live `nodes` list rather than iterated out of
+ * `nodeWildcardFiles`, so entries left behind by deleted nodes can never reach
+ * a run, and each step gets only its own files instead of the union of all.
+ */
+export function convertNodesToWorkflow(
+  nodes: any[],
+  edges: any[],
+  nodeWildcardFiles: Record<string, string[]> = {}
+) {
+  const nodeIdToStepId = new Map<string, string>();
+  nodes.forEach((node: any) => {
+    nodeIdToStepId.set(node.id, labelToId(node.data.label));
+  });
+
+  const steps = nodes.map((node: any) => {
+    const stepId = nodeIdToStepId.get(node.id)!;
+    const incoming = edges.filter((e: any) => e.target === node.id);
+    const outgoing = edges.filter((e: any) => e.source === node.id);
+    const files = nodeWildcardFiles[node.id] || [];
+
+    const step: any = {
+      id: stepId,
+      tool: node.data.tool || '',
+      command: node.data.command || '',
+      input: node.data.input ? [node.data.input] : [],
+      output: node.data.output ? [node.data.output] : [],
+      previous: incoming.map((e: any) => nodeIdToStepId.get(e.source)!),
+      next: outgoing.map((e: any) => nodeIdToStepId.get(e.target)!),
+      threads: normalizeThreads(node.data.threads),
+    };
+
+    // Omit the key entirely when empty — Rust skips serializing empty maps and
+    // an empty mapping would just be noise in the YAML.
+    if (files.length > 0) {
+      step.wildcard_files = { [WILDCARD_NAME]: files };
+    }
+
+    return step;
+  });
+
+  return { steps };
+}
+
+/** Coerces a threads value from the UI into a positive integer. */
+export function normalizeThreads(value: unknown): number {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+/**
+ * Finds step ids that would collide or be empty once labels are slugified.
+ * Surfaced live on the canvas rather than only when Run is pressed, since
+ * `labelToId` silently maps "Process" and "process" onto the same id.
+ */
+export function findInvalidNodeIds(nodes: any[]): Record<string, string> {
+  const counts = new Map<string, number>();
+  nodes.forEach((node: any) => {
+    const id = labelToId(node.data?.label || '');
+    counts.set(id, (counts.get(id) || 0) + 1);
+  });
+
+  const problems: Record<string, string> = {};
+  nodes.forEach((node: any) => {
+    const id = labelToId(node.data?.label || '');
+    if (!id) {
+      problems[node.id] = 'Name must contain at least one letter or number';
+    } else if ((counts.get(id) || 0) > 1) {
+      problems[node.id] = `Duplicate step ID "${id}"`;
+    }
+  });
+
+  return problems;
+}
+
+export function validateWorkflow(workflow: any): string[] {
+  const errors: string[] = [];
+
+  if (!workflow.steps || workflow.steps.length === 0) {
+    errors.push('Workflow has no steps');
+    return errors;
+  }
+
+  const stepIds = new Set<string>();
+  workflow.steps.forEach((step: any) => {
+    if (stepIds.has(step.id)) {
+      errors.push(`Duplicate step ID: ${step.id}`);
+    }
+    stepIds.add(step.id);
+
+    if (!step.id || step.id.trim() === '') {
+      errors.push('Step has empty ID');
+    }
+    if (!step.tool || step.tool.trim() === '') {
+      errors.push(`Step ${step.id}: missing tool`);
+    }
+    if (!step.command || step.command.trim() === '') {
+      errors.push(`Step ${step.id}: missing command`);
+    }
+  });
+
+  return errors;
+}
+
+/**
+ * Generates a wildcard pattern from a list of files.
+ * Example: ["sample1.fastq", "sample2.fastq"] -> "{sample}.fastq"
+ */
+export function generatePattern(files: string[]): string {
+  if (files.length === 0) return '';
+  
+  const firstFile = files[0];
+  const fileName = firstFile.split('/').pop() || firstFile;
+  const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
+  const dir = firstFile.substring(0, firstFile.lastIndexOf('/') + 1);
+  
+  return `${dir}{sample}${ext}`;
+}
+
+/**
+ * Checks if a string contains wildcard syntax.
+ */
+export function hasWildcards(text: string): boolean {
+  return text.includes('{') && text.includes('}');
+}
