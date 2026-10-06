@@ -2,6 +2,8 @@
  * Type definitions for the Electron preload API
  */
 
+import type { EngineEvent } from '../main/engineEvents';
+
 interface WorkflowData {
   /** Optional name/version; read by the engine's `metadata` field. */
   metadata?: { name?: string; version?: string };
@@ -114,6 +116,8 @@ interface ElectronAPI {
     // Event listeners. All return an unsubscribe function so React effects
     // can clean up on unmount.
     onWorkflowOutput(callback: (output: string) => void): () => void;
+    /** Typed run events from the engine, in the order it emitted them. */
+    onWorkflowEvent(callback: (event: EngineEvent) => void): () => void;
     onWorkflowComplete(
       callback: (
         success: boolean,

@@ -18,7 +18,7 @@ import './App.css';
 import {
   applyRunEvent,
   buildStatusRows,
-  parseStepEvent,
+  toStepEvent,
   resolveBaseStepId,
   rollupNodeStatuses,
   type RunPhase,
@@ -154,23 +154,20 @@ function WorkflowEditorInner() {
   useEffect(() => {
     const unsubscribeOutput = window.electron.ipcRenderer.onWorkflowOutput(
       (output: string) => {
+        // Raw engine log only; step progress arrives as typed events below.
         const lines = output.split('\n').filter((line) => line.trim() !== '');
-
-        // Drive canvas and status-panel state off the same lines. Anything
-        // unrecognized just falls through to the log pane, so wording drift
-        // degrades the badges rather than breaking output.
-        setStepRuns((prev) => {
-          let next = prev;
-          for (const line of lines) {
-            const event = parseStepEvent(line);
-            if (event && resolveBaseStepId(event.stepId, baseStepIdsRef.current)) {
-              next = applyRunEvent(next, event);
-            }
-          }
-          return next;
-        });
-
         appendLogLines(lines);
+      }
+    );
+
+    // Typed run events drive the canvas badges and the status panel.
+    const unsubscribeEvent = window.electron.ipcRenderer.onWorkflowEvent(
+      (runEvent) => {
+        const event = toStepEvent(runEvent);
+        if (!event || !resolveBaseStepId(event.stepId, baseStepIdsRef.current)) {
+          return;
+        }
+        setStepRuns((prev) => applyRunEvent(prev, event));
       }
     );
 
@@ -213,6 +210,7 @@ function WorkflowEditorInner() {
 
     return () => {
       unsubscribeOutput();
+      unsubscribeEvent();
       unsubscribeComplete();
       unsubscribeError();
       unsubscribeUpdate();

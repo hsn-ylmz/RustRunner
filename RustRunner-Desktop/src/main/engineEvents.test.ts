@@ -1,0 +1,127 @@
+import { describe, it, expect } from 'vitest';
+import {
+  EVENT_PREFIX,
+  EngineOutputSplitter,
+  parseEngineLine,
+  type EngineEvent,
+} from './engineEvents';
+
+const line = (body: Record<string, unknown>, v: number = 1) =>
+  EVENT_PREFIX + JSON.stringify({ v, ts: '2026-01-01T00:00:00.000Z', ...body });
+
+const SUMMARY = {
+  total: 2,
+  succeeded: 1,
+  failed: 1,
+  skipped: 0,
+  retried: 1,
+  check_warnings: 0,
+  duration_secs: 1.5,
+};
+
+describe('parseEngineLine', () => {
+  it('parses every event of the v1 schema', () => {
+    const bodies: Record<string, unknown>[] = [
+      { event: 'run_started', workflow: 'demo', run_id: 'r1', steps: ['a', 'b'], dry_run: false },
+      { event: 'step_started', step: 'a', attempt: 1, max_attempts: 3 },
+      {
+        event: 'step_retrying',
+        step: 'a',
+        attempt: 1,
+        max_attempts: 3,
+        delay_secs: 5,
+        reason: 'exit 1',
+      },
+      { event: 'step_succeeded', step: 'a', attempts: 2 },
+      { event: 'step_failed', step: 'b', reason: 'boom', attempts: 1 },
+      { event: 'step_skipped', step: 'c', reason: 'completed in an earlier run' },
+      { event: 'check_failed', step: 'b', kind: 'non_empty', blocking: true, message: 'is empty' },
+      { event: 'run_finished', status: 'failed', summary: { ...SUMMARY, error: 'x' } },
+    ];
+    for (const body of bodies) {
+      const parsed = parseEngineLine(line(body));
+      expect(parsed.type, String(body.event)).toBe('event');
+      if (parsed.type === 'event') expect(parsed.event).toMatchObject(body);
+    }
+  });
+
+  it('treats ordinary log lines as text', () => {
+    expect(parseEngineLine('Starting step: align')).toEqual({ type: 'text' });
+    expect(parseEngineLine('')).toEqual({ type: 'text' });
+    expect(parseEngineLine(`  ${EVENT_PREFIX}{}`)).toEqual({ type: 'text' });
+  });
+
+  it('keeps malformed event lines visible as text', () => {
+    expect(parseEngineLine(EVENT_PREFIX + '{not json')).toEqual({ type: 'text' });
+    expect(parseEngineLine(EVENT_PREFIX + '[1,2]')).toEqual({ type: 'text' });
+    expect(parseEngineLine(EVENT_PREFIX + '{"event":"step_started"}')).toEqual({ type: 'text' });
+    // Known event, wrong field types.
+    expect(
+      parseEngineLine(line({ event: 'step_started', step: 'a', attempt: '1', max_attempts: 2 }))
+    ).toEqual({ type: 'text' });
+    expect(
+      parseEngineLine(line({ event: 'run_finished', status: 'weird', summary: SUMMARY }))
+    ).toEqual({ type: 'text' });
+    expect(parseEngineLine(line({ event: 'run_finished', status: 'failed', summary: {} }))).toEqual({
+      type: 'text',
+    });
+  });
+
+  it('drops events it does not know and events of another schema version', () => {
+    expect(parseEngineLine(line({ event: 'step_paused', step: 'a' }))).toEqual({ type: 'ignored' });
+    expect(parseEngineLine(line({ event: 'step_started', step: 'a', attempt: 1, max_attempts: 1 }, 2))).toEqual({
+      type: 'ignored',
+    });
+    // Prototype keys are not event names.
+    expect(parseEngineLine(line({ event: 'constructor' }))).toEqual({ type: 'ignored' });
+  });
+
+  it('ignores fields it does not know (additive schema changes)', () => {
+    const parsed = parseEngineLine(
+      line({ event: 'step_succeeded', step: 'a', attempts: 1, new_field: { x: 1 } })
+    );
+    expect(parsed.type).toBe('event');
+  });
+});
+
+describe('EngineOutputSplitter', () => {
+  const started = line({ event: 'step_started', step: 'a', attempt: 1, max_attempts: 1 });
+  const done = line({ event: 'step_succeeded', step: 'a', attempts: 1 });
+
+  it('separates events from log text and keeps the text verbatim', () => {
+    const s = new EngineOutputSplitter();
+    const out = s.push(`log one\n${started}\nlog two\n${done}\n`);
+    expect(out.text).toBe('log one\nlog two\n');
+    expect(out.events.map((e: EngineEvent) => e.event)).toEqual(['step_started', 'step_succeeded']);
+  });
+
+  it('holds back an incomplete line until its newline arrives', () => {
+    const s = new EngineOutputSplitter();
+    const cut = Math.floor(started.length / 2);
+    expect(s.push(`first\n${started.slice(0, cut)}`)).toMatchObject({ text: 'first\n', events: [] });
+    const rest = s.push(`${started.slice(cut)}\nafter`);
+    expect(rest.events).toHaveLength(1);
+    expect(rest.text).toBe('');
+    expect(s.flush()).toEqual({ events: [], text: 'after' });
+  });
+
+  it('flush releases a final line that had no newline, including an event', () => {
+    const s = new EngineOutputSplitter();
+    expect(s.push(done)).toEqual({ events: [], text: '' });
+    expect(s.flush().events.map((e: EngineEvent) => e.event)).toEqual(['step_succeeded']);
+    expect(s.flush()).toEqual({ events: [], text: '' });
+  });
+
+  it('handles CRLF line endings and blank lines', () => {
+    const s = new EngineOutputSplitter();
+    const out = s.push(`${started}\r\n\r\nplain\r\n`);
+    expect(out.events).toHaveLength(1);
+    expect(out.text).toBe('\r\nplain\r\n');
+  });
+
+  it('keeps a malformed event line in the text', () => {
+    const s = new EngineOutputSplitter();
+    const bad = `${EVENT_PREFIX}{oops`;
+    expect(s.push(`${bad}\n`)).toEqual({ events: [], text: `${bad}\n` });
+  });
+});

@@ -25,7 +25,7 @@ const SUMMARY_ORDER: StepState[] = [
 ];
 
 /**
- * Live per-step status, fed by the same engine log events as the canvas
+ * Live per-step status, fed by the same engine run events as the canvas
  * badges: one row per engine step (a wildcard node shows one per file).
  */
 export function StepStatusPanel({
@@ -88,12 +88,21 @@ export function StepStatusPanel({
 
 function rowDetails(row: StatusRow): string {
   if (row.state === 'failed') return row.message || 'Step failed';
+  const parts: string[] = [];
   if (row.state === 'retrying' && row.attempt && row.maxAttempts) {
-    return `attempt ${row.attempt} of ${row.maxAttempts} failed, waiting to retry`;
+    const wait =
+      row.delaySecs && row.delaySecs > 0
+        ? `retrying in ${row.delaySecs}s`
+        : 'retrying now';
+    parts.push(`attempt ${row.attempt}/${row.maxAttempts} failed, ${wait}`);
+  } else if (row.attempt && row.maxAttempts && row.maxAttempts > 1) {
+    parts.push(`attempt ${row.attempt}/${row.maxAttempts}`);
   }
-  if (row.attempt && row.maxAttempts && row.maxAttempts > 1) {
-    return `attempt ${row.attempt} of ${row.maxAttempts}`;
+  if (row.state === 'skipped') {
+    parts.push(row.message || 'finished in an earlier run, or not reached');
   }
-  if (row.state === 'skipped') return 'finished in an earlier run, or not reached';
-  return '';
+  if (row.warnings && row.warnings.length > 0) {
+    parts.push(`check warning: ${row.warnings.join('; ')}`);
+  }
+  return parts.join(' | ');
 }

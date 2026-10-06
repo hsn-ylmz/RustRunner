@@ -121,6 +121,61 @@ test('a two-step workflow runs to success and both steps show as succeeded', asy
   expect(consoleErrors).toEqual([]);
 });
 
+test('a failing step shows as retrying with its attempt, then succeeds', async ({ page, sandbox }) => {
+  // Fails on the first attempt (creating the marker), succeeds on the second.
+  await buildChain(page, [
+    {
+      label: 'Flaky',
+      command: 'if [ -f flaky.ok ]; then echo ok > {output}; else touch flaky.ok; exit 1; fi',
+      output: 'flaky.txt',
+    },
+  ]);
+  await selectNode(page, 'Flaky');
+  await page.getByTestId('prop-retries').fill('1');
+  await page.getByTestId('prop-retry-delay').fill('4');
+
+  await page.getByTestId('run').click();
+  await openStepStatus(page);
+
+  // The engine waits 4 s between the attempts; the typed event keeps the
+  // state visible for that whole time.
+  const row = stepRow(page, 'flaky');
+  await expect(row).toHaveAttribute('data-state', 'retrying');
+  await expect(row.locator('.step-row-details')).toContainText('attempt 1/2 failed, retrying in 4s');
+  await expect(page.getByTestId('step-status')).toContainText('1 retrying');
+  await expect(nodes(page).filter({ hasText: 'Flaky' })).toHaveAttribute('data-state', 'retrying');
+
+  await expect(row).toHaveAttribute('data-state', 'succeeded');
+  await expect(row.locator('.step-row-details')).toContainText('attempt 2/2');
+  expect(fs.readFileSync(path.join(sandbox.workDir, 'flaky.txt'), 'utf-8').trim()).toBe('ok');
+
+  // Raw logs keep streaming, without the event lines.
+  await page.getByTestId('tab-logs').click();
+  await expect(
+    page.getByTestId('log-entry').filter({ hasText: 'Starting step: flaky' })
+  ).not.toHaveCount(0);
+  await expect(page.getByTestId('log-entry').filter({ hasText: 'RUSTRUNNER_EVENT' })).toHaveCount(0);
+});
+
+test('a failed blocking output check fails the step and skips the one after it', async ({ page }) => {
+  await buildChain(page, [
+    { label: 'Empty', command: 'touch {output}', output: 'empty.txt' },
+    { label: 'Next', command: 'cp {input} {output}', input: 'empty.txt', output: 'next.txt' },
+  ]);
+  await selectNode(page, 'Empty');
+  await page.getByTestId('prop-check-non-empty').check();
+
+  await page.getByTestId('run').click();
+  await openStepStatus(page);
+
+  const failed = stepRow(page, 'empty');
+  await expect(failed).toHaveAttribute('data-state', 'failed');
+  await expect(failed.locator('.step-row-details')).toContainText('output check failed');
+  await expect(stepRow(page, 'next')).toHaveAttribute('data-state', 'skipped');
+  await expect(stepRow(page, 'next').locator('.step-row-details')).toContainText('not run');
+  await expect(page.getByTestId('run')).toBeEnabled();
+});
+
 test('Stop during a long step ends the run and leaves no sleep process', async ({ page }) => {
   const marker = 'sleep 71.37';
   await buildChain(page, [

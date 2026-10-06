@@ -151,7 +151,14 @@ function CustomNode({ id, data, selected }: any) {
         style={{ background: nodeColor }}
         data-testid="workflow-node"
         data-state={state}
-        title={status?.message || invalidReason || undefined}
+        title={
+          status?.message ||
+          (state === 'retrying' && status?.attempt && status.maxAttempts
+            ? `Retrying: attempt ${status.attempt}/${status.maxAttempts} failed`
+            : undefined) ||
+          invalidReason ||
+          undefined
+        }
       >
         <Handle type="target" position={Position.Top} />
 

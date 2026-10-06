@@ -1,28 +1,17 @@
 /**
- * Step Event Parsing
+ * Step run state
  *
- * Derives per-step execution state from the engine's log output so the canvas
- * can show live progress.
+ * Folds the engine's typed run events (`--json-events`, parsed in the main
+ * process by src/main/engineEvents.ts and forwarded on 'workflow-event') into
+ * per-step state, so the canvas badges and the status panel can show live
+ * progress. The raw log is a separate stream and is never parsed here.
  *
- * The Rust engine has no structured event stream; it writes human-readable
- * lines via `env_logger`, configured in RustRunner/src/main.rs to emit the bare
- * message for info/debug and `[LEVEL] message` for warn/error. Both stdout and
- * stderr are forwarded to the renderer on the 'workflow-output' channel, so the
- * lines below are all we have to work with:
- *
- *   Starting step: <id>                        engine.rs  (info)
- *   Step '<id>': attempt <n>/<max>             step.rs    (info)
- *   [WARN] Step '<id>': attempt <n>/<max> failed (...); will retry
- *   Skipping previously completed step: <id>   planner.rs (info, resumed runs)
- *   Step '<id>' completed successfully         engine.rs  (info)
- *   [ERROR] Step '<id>' failed: <message>      engine.rs  (error)
- *   [DRY RUN] Step: <id>                       engine.rs  (stdout)
- *
- * This is inherently coupled to engine wording, so parsing MUST fail soft:
- * an unrecognized line simply returns null and flows to the log pane as before.
- * The durable fix is a machine-readable `--json-events` stream from the engine;
- * when that lands, only this file changes.
+ * The engine only reports steps it knows about, so an event for a step id that
+ * does not belong to any canvas node is ignored by the callers rather than
+ * guessed at (see `resolveBaseStepId`).
  */
+
+import type { EngineEvent } from '../main/engineEvents';
 
 export type StepState =
   | 'pending'
@@ -33,75 +22,69 @@ export type StepState =
   | 'skipped';
 
 export type StepEvent =
-  | { kind: 'start'; stepId: string }
+  | { kind: 'start'; stepId: string; attempt?: number; maxAttempts?: number }
   | { kind: 'attempt'; stepId: string; attempt: number; maxAttempts: number }
-  | { kind: 'retry'; stepId: string; attempt: number; maxAttempts: number }
+  | {
+      kind: 'retry';
+      stepId: string;
+      /** The attempt that failed. */
+      attempt: number;
+      maxAttempts: number;
+      /** Seconds the engine waits before the next attempt. */
+      delaySecs?: number;
+    }
   | { kind: 'done'; stepId: string }
-  | { kind: 'skipped'; stepId: string }
-  | { kind: 'failed'; stepId: string; message: string };
-
-const PATTERNS: Array<{
-  re: RegExp;
-  build: (m: RegExpMatchArray) => StepEvent;
-}> = [
-  {
-    re: /^Starting step:\s*(.+?)\s*$/,
-    build: (m) => ({ kind: 'start', stepId: m[1] }),
-  },
-  {
-    // Printed by the engine for every attempt of a step that has retries.
-    re: /^Step '(.+?)': attempt (\d+)\/(\d+)\s*$/,
-    build: (m) => ({
-      kind: 'attempt',
-      stepId: m[1],
-      attempt: Number(m[2]),
-      maxAttempts: Number(m[3]),
-    }),
-  },
-  {
-    // A failed attempt that will be retried (step.rs, warn level).
-    re: /^\[WARN\]\s*Step '(.+?)': attempt (\d+)\/(\d+) failed\b.*will retry\s*$/,
-    build: (m) => ({
-      kind: 'retry',
-      stepId: m[1],
-      attempt: Number(m[2]),
-      maxAttempts: Number(m[3]),
-    }),
-  },
-  {
-    // A step a resumed run does not repeat (planner.rs, info level).
-    re: /^Skipping previously completed step:\s*(.+?)\s*$/,
-    build: (m) => ({ kind: 'skipped', stepId: m[1] }),
-  },
-  {
-    re: /^\[DRY RUN\] Step:\s*(.+?)\s*$/,
-    build: (m) => ({ kind: 'done', stepId: m[1] }),
-  },
-  {
-    re: /^Step '(.+?)' completed successfully\s*$/,
-    build: (m) => ({ kind: 'done', stepId: m[1] }),
-  },
-  {
-    re: /^\[ERROR\]\s*Step '(.+?)' failed:\s*(.*)$/,
-    build: (m) => ({ kind: 'failed', stepId: m[1], message: m[2] }),
-  },
-];
+  | { kind: 'skipped'; stepId: string; reason?: string }
+  | { kind: 'failed'; stepId: string; message: string }
+  | { kind: 'check'; stepId: string; blocking: boolean; message: string };
 
 /**
- * Parses a single log line into a step event, or null if it isn't one.
- * Timestamps/level prefixes beyond the engine's own format are not expected,
- * but leading whitespace is tolerated.
+ * Translates an engine event into a step event, or null for the events that do
+ * not concern a single step (`run_started`, `run_finished`).
+ *
+ * The first attempt of a step is a 'start' (it resets whatever an earlier run
+ * left), later attempts are 'attempt's.
  */
-export function parseStepEvent(line: string): StepEvent | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-
-  for (const { re, build } of PATTERNS) {
-    const match = trimmed.match(re);
-    if (match) return build(match);
+export function toStepEvent(event: EngineEvent): StepEvent | null {
+  switch (event.event) {
+    case 'step_started':
+      return event.attempt <= 1
+        ? {
+            kind: 'start',
+            stepId: event.step,
+            attempt: event.attempt,
+            maxAttempts: event.max_attempts,
+          }
+        : {
+            kind: 'attempt',
+            stepId: event.step,
+            attempt: event.attempt,
+            maxAttempts: event.max_attempts,
+          };
+    case 'step_retrying':
+      return {
+        kind: 'retry',
+        stepId: event.step,
+        attempt: event.attempt,
+        maxAttempts: event.max_attempts,
+        delaySecs: event.delay_secs,
+      };
+    case 'step_succeeded':
+      return { kind: 'done', stepId: event.step };
+    case 'step_failed':
+      return { kind: 'failed', stepId: event.step, message: event.reason };
+    case 'step_skipped':
+      return { kind: 'skipped', stepId: event.step, reason: event.reason };
+    case 'check_failed':
+      return {
+        kind: 'check',
+        stepId: event.step,
+        blocking: event.blocking,
+        message: event.message,
+      };
+    default:
+      return null;
   }
-
-  return null;
 }
 
 /**
@@ -140,8 +123,12 @@ export interface StepRun {
   /** Latest attempt number, when the engine reported one. */
   attempt?: number;
   maxAttempts?: number;
-  /** Failure message, when state is 'failed'. */
+  /** Seconds until the next attempt, while 'retrying'. */
+  delaySecs?: number;
+  /** Why the step failed or was skipped. */
   message?: string;
+  /** Non-blocking output checks that failed. */
+  warnings?: string[];
 }
 
 /** Engine step id -> what is known about it, in the order first seen. */
@@ -154,7 +141,11 @@ export function applyRunEvent(runs: StepRuns, event: StepEvent): StepRuns {
 
   switch (event.kind) {
     case 'start':
-      next = { state: 'running' };
+      next = {
+        state: 'running',
+        attempt: event.attempt,
+        maxAttempts: event.maxAttempts,
+      };
       break;
     case 'attempt':
       next = {
@@ -162,6 +153,7 @@ export function applyRunEvent(runs: StepRuns, event: StepEvent): StepRuns {
         state: 'running',
         attempt: event.attempt,
         maxAttempts: event.maxAttempts,
+        delaySecs: undefined,
       };
       break;
     case 'retry':
@@ -170,16 +162,27 @@ export function applyRunEvent(runs: StepRuns, event: StepEvent): StepRuns {
         state: 'retrying',
         attempt: event.attempt,
         maxAttempts: event.maxAttempts,
+        delaySecs: event.delaySecs,
       };
       break;
     case 'done':
-      next = { ...prev, state: 'succeeded', message: undefined };
+      next = { ...prev, state: 'succeeded', message: undefined, delaySecs: undefined };
       break;
     case 'skipped':
-      next = { state: 'skipped' };
+      next = { state: 'skipped', message: event.reason };
       break;
     case 'failed':
-      next = { ...prev, state: 'failed', message: event.message };
+      next = { ...prev, state: 'failed', message: event.message, delaySecs: undefined };
+      break;
+    case 'check':
+      // A blocking failure is followed by the step's own failure; only the
+      // advisory ones are kept, as warnings on a step that goes on.
+      if (event.blocking) return runs;
+      next = {
+        state: 'running',
+        ...prev,
+        warnings: [...(prev?.warnings ?? []), event.message],
+      };
       break;
   }
 
@@ -195,6 +198,9 @@ export interface NodeStatus {
   total: number;
   /** First failure message, when state is 'failed'. */
   message?: string;
+  /** The failed attempt of the first retrying instance, when 'retrying'. */
+  attempt?: number;
+  maxAttempts?: number;
 }
 
 const FINISHED: ReadonlySet<StepState> = new Set(['succeeded', 'failed', 'skipped']);
@@ -223,6 +229,7 @@ export function rollupNodeStatuses(
   for (const [baseId, instances] of grouped) {
     const finished = instances.filter((r) => FINISHED.has(r.state)).length;
     const failed = instances.find((r) => r.state === 'failed');
+    const retrying = instances.find((r) => r.state === 'retrying');
     let state: StepState;
     if (failed) state = 'failed';
     else if (instances.some((r) => r.state === 'retrying')) state = 'retrying';
@@ -235,6 +242,8 @@ export function rollupNodeStatuses(
       finished,
       total: instances.length,
       message: failed?.message,
+      attempt: state === 'retrying' ? retrying?.attempt : undefined,
+      maxAttempts: state === 'retrying' ? retrying?.maxAttempts : undefined,
     };
   }
   return out;
@@ -249,7 +258,9 @@ export interface StatusRow {
   state: StepState;
   attempt?: number;
   maxAttempts?: number;
+  delaySecs?: number;
   message?: string;
+  warnings?: string[];
 }
 
 /** Where a run is: before any run, running, or finished. */

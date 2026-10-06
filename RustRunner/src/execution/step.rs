@@ -20,6 +20,7 @@ use log::{debug, error, info, warn};
 use crate::environment::conda::{MAMBA_ROOT_PREFIX, MICROMAMBA_PATH};
 use crate::workflow::Step;
 
+use super::events::{Event, EventSink};
 use super::process::{is_shutting_down, run_tracked_with_timeout, TrackedOutput};
 use super::tools::is_system_tool;
 
@@ -87,11 +88,34 @@ const WAIT_SLICE: Duration = Duration::from_millis(100);
 /// GUI's Pause). A termination signal (the GUI's Stop) aborts the wait and
 /// any further attempts. Failures that retrying cannot fix (for example a
 /// missing conda environment) are not retried.
+///
+/// This is [`execute_step_with_events`] without events.
 pub fn execute_step_with_retries(
     step: &Step,
     tool_env_map: &HashMap<String, String>,
     working_dir: &Option<PathBuf>,
     pause_flag: Option<&Path>,
+) -> StepRun {
+    execute_step_with_events(
+        step,
+        tool_env_map,
+        working_dir,
+        pause_flag,
+        &EventSink::disabled(),
+    )
+}
+
+/// Like [`execute_step_with_retries`], and also reports run events.
+///
+/// `events` receives `step_retrying` for each failed attempt that will be
+/// repeated and `step_started` for every attempt after the first; the caller
+/// announces the first attempt and the final outcome.
+pub fn execute_step_with_events(
+    step: &Step,
+    tool_env_map: &HashMap<String, String>,
+    working_dir: &Option<PathBuf>,
+    pause_flag: Option<&Path>,
+    events: &EventSink,
 ) -> StepRun {
     let step_name = &step.id;
 
@@ -149,6 +173,13 @@ pub fn execute_step_with_retries(
         if max_attempts > 1 {
             info!("Step '{}': attempt {}/{}", step_name, attempt, max_attempts);
         }
+        if attempt > 1 {
+            events.emit(Event::StepStarted {
+                step: step_name.clone(),
+                attempt,
+                max_attempts,
+            });
+        }
 
         match run_attempt(step, &command_text, tool_env_map, working_dir, timeout) {
             Ok(()) => {
@@ -185,6 +216,13 @@ pub fn execute_step_with_retries(
                     "Step '{}': attempt {}/{} failed ({}); will retry",
                     step_name, attempt, max_attempts, msg
                 );
+                events.emit(Event::StepRetrying {
+                    step: step_name.clone(),
+                    attempt,
+                    max_attempts,
+                    delay_secs: step.retry_delay(attempt).as_secs(),
+                    reason: msg,
+                });
             }
         }
     }

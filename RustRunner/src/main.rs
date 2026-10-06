@@ -20,6 +20,9 @@
 //! # Ignore saved state and run every step again
 //! rustrunner workflow.yaml --fresh
 //!
+//! # Machine-readable events on stderr, one JSON object per line
+//! rustrunner workflow.yaml --json-events
+//!
 //! # Set maximum parallel jobs
 //! rustrunner workflow.yaml --parallel 8
 //! ```
@@ -30,6 +33,7 @@ use std::process::ExitCode;
 
 use log::{error, info};
 
+use rustrunner::execution::events::{EventSink, RunStatus};
 use rustrunner::execution::process::install_signal_handlers;
 use rustrunner::execution::step::cleanup_scripts;
 use rustrunner::execution::Engine;
@@ -52,6 +56,7 @@ struct Config {
     max_parallel: usize,
     verbose: bool,
     fresh: bool,
+    json_events: bool,
 }
 
 impl Default for Config {
@@ -64,6 +69,7 @@ impl Default for Config {
             max_parallel: DEFAULT_MAX_PARALLEL,
             verbose: false,
             fresh: false,
+            json_events: false,
         }
     }
 }
@@ -110,6 +116,8 @@ fn print_usage() {
         DEFAULT_MAX_PARALLEL
     );
     println!("  --fresh             Discard saved state and run every step again");
+    println!("  --json-events       Also write machine-readable run events to stderr,");
+    println!("                      one JSON object per line prefixed with RUSTRUNNER_EVENT");
     println!("  --verbose           Enable debug logging");
     println!("  --help              Show this help message");
     println!("  --version           Show version information");
@@ -143,6 +151,9 @@ fn parse_arguments(args: &[String]) -> Result<Config, String> {
             }
             "--fresh" => {
                 config.fresh = true;
+            }
+            "--json-events" => {
+                config.json_events = true;
             }
             "--verbose" | "-v" => {
                 config.verbose = true;
@@ -277,8 +288,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Make SIGINT/SIGTERM (e.g. the GUI's Stop button) terminate the running
     // steps' process groups instead of leaving them orphaned.
-    install_signal_handlers(cleanup_scripts)
-        .map_err(|e| format!("Failed to install signal handlers: {}", e))?;
+    let events = if config.json_events {
+        EventSink::stderr()
+    } else {
+        EventSink::disabled()
+    };
+    let signal_events = events.clone();
+    install_signal_handlers(move || {
+        // The handler exits the process, so the run's own `run_finished` would
+        // never be written: report the stop here (written once at most).
+        signal_events.finish(
+            RunStatus::Stopped,
+            Some("terminated by a signal".to_string()),
+        );
+        cleanup_scripts();
+    })
+    .map_err(|e| format!("Failed to install signal handlers: {}", e))?;
 
     // Create and configure engine
     let mut engine = Engine::new(workflow);
@@ -286,6 +311,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     engine.set_max_parallel(config.max_parallel);
     engine.set_dry_run(config.dry_run);
     engine.set_fresh(config.fresh);
+    engine.set_event_sink(events);
 
     if let Some(pause_path) = config.pause_flag_path {
         engine.set_pause_flag_path(pause_path);

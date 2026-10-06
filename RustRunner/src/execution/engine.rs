@@ -22,7 +22,9 @@ use crate::monitoring::{EventType, ExecutionTimeline, ResourceMonitor};
 use crate::workflow::{ExecutionPlanner, Workflow, WorkflowState};
 
 use super::checks::run_checks;
-use super::step::execute_step_with_retries;
+use super::events::{new_run_id, Event, EventSink, RunStatus, RunSummary};
+use super::process::is_shutting_down;
+use super::step::execute_step_with_events;
 use super::tools::is_system_tool;
 
 /// Interval for checking the pause flag file.
@@ -47,11 +49,18 @@ struct StepCompletion {
 fn apply_checks(
     step: &crate::workflow::Step,
     working_dir: &Option<PathBuf>,
+    events: &EventSink,
 ) -> (Result<(), String>, Vec<String>) {
     let failures = run_checks(step, working_dir);
     let mut blocking = Vec::new();
     let mut warnings = Vec::new();
     for failure in failures {
+        events.emit(Event::CheckFailed {
+            step: step.id.clone(),
+            kind: failure.kind.as_str().to_string(),
+            blocking: failure.blocking,
+            message: failure.render(),
+        });
         if failure.blocking {
             blocking.push(failure.render());
         } else {
@@ -126,6 +135,7 @@ pub struct Engine {
     pause_flag_path: Option<String>,
     working_dir: Option<PathBuf>,
     fresh: bool,
+    events: EventSink,
 }
 
 impl Engine {
@@ -139,7 +149,14 @@ impl Engine {
             pause_flag_path: None,
             working_dir: None,
             fresh: false,
+            events: EventSink::disabled(),
         }
+    }
+
+    /// Sets where machine-readable run events go (`--json-events`). Events are
+    /// off by default.
+    pub fn set_event_sink(&mut self, events: EventSink) {
+        self.events = events;
     }
 
     /// When set, the state of any earlier run is discarded and every step runs
@@ -188,12 +205,84 @@ impl Engine {
     /// * `Ok(())` - Workflow completed successfully
     /// * `Err` - A step failed or an error occurred
     pub fn run(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let start_time = Instant::now();
-
         // Generate workflow path if not set
         if self.workflow_path.is_empty() {
             self.workflow_path = "workflow.yaml".to_string();
         }
+
+        let total = self.workflow.steps.len();
+        self.events.update_tally(|t| {
+            *t = RunSummary {
+                total,
+                ..RunSummary::default()
+            }
+        });
+        self.events.emit(Event::RunStarted {
+            workflow: self.display_name(),
+            run_id: new_run_id(),
+            steps: self.workflow.steps.iter().map(|s| s.id.clone()).collect(),
+            dry_run: self.dry_run,
+        });
+
+        let result = self.execute();
+
+        match &result {
+            Ok(()) => self.events.finish(RunStatus::Succeeded, None),
+            Err(e) => {
+                let status = if is_shutting_down() {
+                    RunStatus::Stopped
+                } else {
+                    RunStatus::Failed
+                };
+                self.events.finish(status, Some(e.to_string()));
+            }
+        }
+        result
+    }
+
+    /// The workflow's name for events: its metadata name, else the file stem.
+    fn display_name(&self) -> String {
+        self.workflow
+            .metadata
+            .as_ref()
+            .and_then(|m| m.name.clone())
+            .filter(|n| !n.is_empty())
+            .or_else(|| {
+                Path::new(&self.workflow_path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+            })
+            .unwrap_or_else(|| "workflow".to_string())
+    }
+
+    /// Reports a finished step: its event and the run totals.
+    fn report_completion(&self, step_id: &str, attempts: u32, result: &Result<(), String>) {
+        match result {
+            Ok(()) => self.events.emit(Event::StepSucceeded {
+                step: step_id.to_string(),
+                attempts,
+            }),
+            Err(reason) => self.events.emit(Event::StepFailed {
+                step: step_id.to_string(),
+                reason: reason.clone(),
+                attempts,
+            }),
+        }
+        self.events.update_tally(|t| {
+            if result.is_ok() {
+                t.succeeded += 1;
+            } else {
+                t.failed += 1;
+            }
+            if attempts > 1 {
+                t.retried += 1;
+            }
+        });
+    }
+
+    /// The body of [`Engine::run`], between `run_started` and `run_finished`.
+    fn execute(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let start_time = Instant::now();
 
         // Setup conda environments for all tools (skip in dry run)
         if !self.dry_run {
@@ -293,6 +382,23 @@ impl Engine {
             ExecutionPlanner::new(self.workflow.clone(), self.dry_run, self.max_parallel)?
         };
 
+        // Steps a resumed run does not repeat.
+        let mut not_run: HashSet<String> = HashSet::new();
+        if state.is_resume() {
+            for step in &self.workflow.steps {
+                if state.completed_steps.contains(&step.id) {
+                    self.events.emit(Event::StepSkipped {
+                        step: step.id.clone(),
+                        reason: "completed in an earlier run".to_string(),
+                    });
+                    self.events.update_tally(|t| t.skipped += 1);
+                    not_run.insert(step.id.clone());
+                }
+            }
+        }
+        // Steps that were handed to a worker (or the dry run) in this run.
+        let mut started: HashSet<String> = HashSet::new();
+
         // Load environment mappings
         let env_map = ToolEnvMap::load();
 
@@ -340,6 +446,12 @@ impl Engine {
                     }
 
                     info!("Starting step: {}", step.id);
+                    started.insert(step.id.clone());
+                    self.events.emit(Event::StepStarted {
+                        step: step.id.clone(),
+                        attempt: 1,
+                        max_attempts: step.retries.saturating_add(1),
+                    });
                     timeline.add_event(step.id.clone(), EventType::Started);
                     planner.mark_step_running(&step.id);
 
@@ -369,6 +481,7 @@ impl Engine {
 
                         timeline.add_event(step.id.clone(), EventType::Completed);
                         planner.mark_step_completed(&step.id);
+                        self.report_completion(&step.id, 1, &Ok(()));
                         continue;
                     }
 
@@ -378,18 +491,21 @@ impl Engine {
                     let env_map_clone = env_map.as_map().clone();
                     let working_dir_clone = self.working_dir.clone();
                     let pause_clone = self.pause_flag_path.clone();
+                    let events_clone = self.events.clone();
 
                     thread::spawn(move || {
-                        let run = execute_step_with_retries(
+                        let run = execute_step_with_events(
                             &step_clone,
                             &env_map_clone,
                             &working_dir_clone,
                             pause_clone.as_deref().map(Path::new),
+                            &events_clone,
                         );
                         let mut result = run.result.map_err(|e| e.to_string());
                         let mut warnings = Vec::new();
                         if result.is_ok() {
-                            let (checked, warned) = apply_checks(&step_clone, &working_dir_clone);
+                            let (checked, warned) =
+                                apply_checks(&step_clone, &working_dir_clone, &events_clone);
                             result = checked;
                             warnings = warned;
                         }
@@ -447,9 +563,12 @@ impl Engine {
                 };
 
                 running_count -= 1;
+                self.events
+                    .update_tally(|t| t.check_warnings += warnings.len());
                 check_warnings.extend(warnings);
                 planner.record_attempts(&step_id, attempts);
                 state.record_attempts(&step_id, attempts);
+                self.report_completion(&step_id, attempts, &result);
 
                 match result {
                     Ok(()) => {
@@ -494,9 +613,12 @@ impl Engine {
             while running_count > 0 {
                 let Ok(done) = rx.recv() else { break };
                 running_count -= 1;
+                self.events
+                    .update_tally(|t| t.check_warnings += done.warnings.len());
                 check_warnings.extend(done.warnings);
                 planner.record_attempts(&done.step_id, done.attempts);
                 state.record_attempts(&done.step_id, done.attempts);
+                self.report_completion(&done.step_id, done.attempts, &done.result);
                 match done.result {
                     Ok(()) => {
                         info!("Step '{}' completed successfully", done.step_id);
@@ -516,6 +638,23 @@ impl Engine {
                 }
                 if let Err(e) = state.save() {
                     warn!("Failed to persist state: {}", e);
+                }
+            }
+        }
+
+        // Steps that never started because the run stopped early.
+        if run_error.is_some() {
+            let reason = match &state.failed_step {
+                Some(failed) => format!("not run: the workflow stopped at step '{}'", failed),
+                None => "not run: the workflow stopped early".to_string(),
+            };
+            for step in &self.workflow.steps {
+                if !started.contains(&step.id) && !not_run.contains(&step.id) {
+                    self.events.emit(Event::StepSkipped {
+                        step: step.id.clone(),
+                        reason: reason.clone(),
+                    });
+                    self.events.update_tally(|t| t.skipped += 1);
                 }
             }
         }
@@ -868,7 +1007,11 @@ mod tests {
             .with_output("missing.txt")
             .with_check(OutputCheck::new(CheckKind::Exists).non_blocking())
             .with_check(OutputCheck::new(CheckKind::NonEmpty));
-        let (result, warnings) = apply_checks(&step, &Some(dir.path().to_path_buf()));
+        let (result, warnings) = apply_checks(
+            &step,
+            &Some(dir.path().to_path_buf()),
+            &EventSink::disabled(),
+        );
         assert!(result.unwrap_err().contains("non_empty"));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].starts_with("s: exists"));
@@ -912,5 +1055,239 @@ mod tests {
         // Should not error for system tools only
         let result = engine.setup_environments();
         assert!(result.is_ok());
+    }
+
+    // ---- run events -------------------------------------------------------
+
+    use crate::execution::events::testing::SharedBuffer;
+    use serde_json::Value;
+
+    /// Runs `workflow` in `dir` with events captured.
+    fn run_with_events_in(
+        workflow: Workflow,
+        dir: &Path,
+        dry_run: bool,
+    ) -> (Result<(), String>, Vec<Value>) {
+        let buf = SharedBuffer::default();
+        let mut engine = Engine::new(workflow);
+        engine.set_working_dir(dir.to_path_buf());
+        engine.set_workflow_path(dir.join("wf.yaml").to_str().unwrap());
+        engine.set_dry_run(dry_run);
+        engine.set_event_sink(EventSink::to_writer(buf.clone()));
+        let result = engine.run().map_err(|e| e.to_string());
+        (result, buf.events())
+    }
+
+    /// One short token per event, e.g. `step_started:a:1`, to assert on order.
+    fn outline(events: &[Value]) -> Vec<String> {
+        events
+            .iter()
+            .map(|e| {
+                let name = e["event"].as_str().unwrap();
+                let step = e["step"].as_str().unwrap_or("");
+                match name {
+                    "step_started" | "step_retrying" => {
+                        format!("{}:{}:{}", name, step, e["attempt"])
+                    }
+                    "run_finished" => format!("{}:{}", name, e["status"].as_str().unwrap()),
+                    _ => format!("{}:{}", name, step)
+                        .trim_end_matches(':')
+                        .to_string(),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_events_for_a_successful_run_are_ordered() {
+        let dir = tempdir().unwrap();
+        let wf =
+            two_step_workflow(Step::new("ev_ok", "bash", "echo up > up.txt").with_output("up.txt"))
+                .with_metadata(crate::workflow::WorkflowMetadata::new(Some("Demo"), None));
+        let (result, events) = run_with_events_in(wf, dir.path(), false);
+        result.unwrap();
+
+        assert_eq!(
+            outline(&events),
+            [
+                "run_started",
+                "step_started:ev_ok:1",
+                "step_succeeded:ev_ok",
+                "step_started:ev_ok_down:1",
+                "step_succeeded:ev_ok_down",
+                "run_finished:succeeded",
+            ]
+        );
+        assert!(events.iter().all(|e| e["v"] == 1));
+        assert_eq!(events[0]["workflow"], "Demo");
+        assert_eq!(
+            events[0]["steps"],
+            serde_json::json!(["ev_ok", "ev_ok_down"])
+        );
+        assert_eq!(events[0]["dry_run"], false);
+        assert!(!events[0]["run_id"].as_str().unwrap().is_empty());
+        let summary = &events[5]["summary"];
+        assert_eq!(summary["total"], 2);
+        assert_eq!(summary["succeeded"], 2);
+        assert_eq!(summary["failed"], 0);
+        assert_eq!(summary["skipped"], 0);
+    }
+
+    #[test]
+    fn test_events_for_a_retried_step() {
+        let dir = tempdir().unwrap();
+        // Fails until the marker file exists, which the first attempt creates.
+        let wf = Workflow::from_steps(vec![Step::new(
+            "ev_retry",
+            "bash",
+            "if [ -f marker ]; then exit 0; fi; touch marker; exit 3",
+        )
+        .with_retries(2)
+        .with_retry_backoff(crate::workflow::RetryBackoff::Fixed, 0)]);
+        let (result, events) = run_with_events_in(wf, dir.path(), false);
+        result.unwrap();
+
+        assert_eq!(
+            outline(&events),
+            [
+                "run_started",
+                "step_started:ev_retry:1",
+                "step_retrying:ev_retry:1",
+                "step_started:ev_retry:2",
+                "step_succeeded:ev_retry",
+                "run_finished:succeeded",
+            ]
+        );
+        assert_eq!(events[1]["max_attempts"], 3);
+        assert_eq!(events[2]["max_attempts"], 3);
+        assert_eq!(events[2]["delay_secs"], 0);
+        assert!(events[2]["reason"].as_str().unwrap().contains("failed"));
+        assert_eq!(events[4]["attempts"], 2);
+        assert_eq!(events[5]["summary"]["retried"], 1);
+    }
+
+    #[test]
+    fn test_events_for_a_step_that_exhausts_its_retries() {
+        let dir = tempdir().unwrap();
+        let wf = Workflow::from_steps(vec![Step::new("ev_giveup", "bash", "exit 1")
+            .with_retries(1)
+            .with_retry_backoff(crate::workflow::RetryBackoff::Fixed, 0)]);
+        let (result, events) = run_with_events_in(wf, dir.path(), false);
+        assert!(result.is_err());
+
+        assert_eq!(
+            outline(&events),
+            [
+                "run_started",
+                "step_started:ev_giveup:1",
+                "step_retrying:ev_giveup:1",
+                "step_started:ev_giveup:2",
+                "step_failed:ev_giveup",
+                "run_finished:failed",
+            ]
+        );
+        assert_eq!(events[4]["attempts"], 2);
+        assert!(events[4]["reason"].as_str().unwrap().contains("Gave up"));
+        let summary = &events[5]["summary"];
+        assert_eq!(summary["failed"], 1);
+        assert!(summary["error"]
+            .as_str()
+            .unwrap()
+            .contains("Workflow failed at step 'ev_giveup'"));
+    }
+
+    #[test]
+    fn test_events_for_a_blocking_check_failure() {
+        let dir = tempdir().unwrap();
+        let wf = two_step_workflow(
+            Step::new("ev_chk", "bash", "touch empty.txt")
+                .with_output("empty.txt")
+                .with_retries(2)
+                .with_check(OutputCheck::new(CheckKind::NonEmpty)),
+        );
+        let (result, events) = run_with_events_in(wf, dir.path(), false);
+        assert!(result.is_err());
+
+        // The tool ran once (no retry for a check), the check is reported
+        // before the step fails, and the downstream step is skipped.
+        assert_eq!(
+            outline(&events),
+            [
+                "run_started",
+                "step_started:ev_chk:1",
+                "check_failed:ev_chk",
+                "step_failed:ev_chk",
+                "step_skipped:ev_chk_down",
+                "run_finished:failed",
+            ]
+        );
+        assert_eq!(events[2]["kind"], "non_empty");
+        assert_eq!(events[2]["blocking"], true);
+        assert!(events[2]["message"].as_str().unwrap().contains("is empty"));
+        assert!(events[3]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("output check failed"));
+        assert!(events[4]["reason"].as_str().unwrap().contains("ev_chk"));
+        let summary = &events[5]["summary"];
+        assert_eq!(summary["failed"], 1);
+        assert_eq!(summary["skipped"], 1);
+        assert_eq!(summary["retried"], 0);
+    }
+
+    #[test]
+    fn test_events_for_a_non_blocking_check_failure() {
+        let dir = tempdir().unwrap();
+        let wf = Workflow::from_steps(vec![Step::new("ev_warn", "bash", "echo one > few.txt")
+            .with_output("few.txt")
+            .with_check(OutputCheck::min_lines(5).non_blocking())]);
+        let (result, events) = run_with_events_in(wf, dir.path(), false);
+        result.unwrap();
+
+        assert_eq!(
+            outline(&events),
+            [
+                "run_started",
+                "step_started:ev_warn:1",
+                "check_failed:ev_warn",
+                "step_succeeded:ev_warn",
+                "run_finished:succeeded",
+            ]
+        );
+        assert_eq!(events[2]["kind"], "min_lines");
+        assert_eq!(events[2]["blocking"], false);
+        assert_eq!(events[4]["summary"]["check_warnings"], 1);
+    }
+
+    #[test]
+    fn test_events_for_a_dry_run() {
+        let dir = tempdir().unwrap();
+        let wf = Workflow::from_steps(vec![Step::new("ev_dry", "bash", "echo hi")]);
+        let (result, events) = run_with_events_in(wf, dir.path(), true);
+        result.unwrap();
+        assert_eq!(
+            outline(&events),
+            [
+                "run_started",
+                "step_started:ev_dry:1",
+                "step_succeeded:ev_dry",
+                "run_finished:succeeded",
+            ]
+        );
+        assert_eq!(events[0]["dry_run"], true);
+    }
+
+    #[test]
+    fn test_no_events_without_a_sink() {
+        // The default sink is disabled; the run behaves as before.
+        let dir = tempdir().unwrap();
+        let wf = Workflow::from_steps(vec![Step::new("ev_none", "bash", "echo hi")]);
+        let (result, _dir) = {
+            let mut engine = Engine::new(wf);
+            engine.set_working_dir(dir.path().to_path_buf());
+            engine.set_workflow_path(dir.path().join("wf.yaml").to_str().unwrap());
+            (engine.run().map_err(|e| e.to_string()), ())
+        };
+        result.unwrap();
     }
 }

@@ -15,6 +15,8 @@ use crate::workflow::{CheckKind, OutputCheck, Step};
 /// One check that did not pass.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckFailure {
+    /// Which kind of check failed.
+    pub kind: CheckKind,
     /// The check, as returned by [`OutputCheck::describe`].
     pub check: String,
     /// What was wrong.
@@ -47,6 +49,7 @@ pub fn run_checks(step: &Step, working_dir: &Option<PathBuf>) -> Vec<CheckFailur
         if targets.is_empty() {
             // Normally caught by the validator; report rather than pass silently.
             failures.push(CheckFailure {
+                kind: check.kind,
                 check: check.describe(),
                 message: "no matching output to check".to_string(),
                 blocking: check.blocking,
@@ -60,6 +63,7 @@ pub fn run_checks(step: &Step, working_dir: &Option<PathBuf>) -> Vec<CheckFailur
             };
             if let Err(message) = evaluate(check, &path) {
                 failures.push(CheckFailure {
+                    kind: check.kind,
                     check: check.describe(),
                     message: format!("{}: {}", target, message),
                     blocking: check.blocking,

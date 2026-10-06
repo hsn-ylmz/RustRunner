@@ -24,6 +24,7 @@ import MenuBuilder from './menu';
 import { setupAutoUpdater } from './updater';
 import { resolveHtmlPath } from './util';
 import { readResumeInfo, workflowFileStem } from './resumeState';
+import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
 
 // =============================================================================
 // Types
@@ -341,7 +342,9 @@ ipcMain.on(
       // Rust CLI has no --wildcards flag and rejects unknown options. They
       // travel inside the YAML as per-step `wildcard_files`, which
       // load_workflow() merges and expands before validation.
-      const args = [workflowPath, pauseFlagPath];
+      // --json-events makes the engine also write typed run events to stderr
+      // (engineEvents.ts); the human log keeps flowing next to them.
+      const args = [workflowPath, pauseFlagPath, '--json-events'];
       if (dryRun) args.push('--dry-run');
       // Without --fresh the engine resumes from the saved state of an earlier
       // run (completed steps are skipped).
@@ -361,16 +364,29 @@ ipcMain.on(
         event.reply('workflow-output', output);
       });
 
+      // stderr carries the engine's log *and* its event lines. Events are
+      // forwarded typed on 'workflow-event'; everything else is log text.
+      const stderrSplitter = new EngineOutputSplitter();
+      const forwardStderr = ({ events, text }: SplitOutput) => {
+        for (const runEvent of events) {
+          event.reply('workflow-event', runEvent);
+        }
+        if (text) {
+          log.error('Rust stderr:', text);
+          event.reply('workflow-output', text);
+        }
+      };
       rustProcess.stderr.on('data', (data: Buffer) => {
-        const error = data.toString();
-        log.error('Rust stderr:', error);
-        event.reply('workflow-output', error);
+        forwardStderr(stderrSplitter.push(data.toString()));
       });
 
       // Handle completion
       rustProcess.on('close', (code: number | null) => {
         log.info(`Rust process exited with code ${code}`);
         currentRustProcess = null;
+
+        // A last line without a newline is still waiting in the splitter.
+        forwardStderr(stderrSplitter.flush());
 
         // Cleanup
         try {

@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   applyRunEvent,
   buildStatusRows,
-  parseStepEvent,
   resolveBaseStepId,
   rollupNodeStatuses,
   summarizeRows,
+  toStepEvent,
   type StepEvent,
   type StepRuns,
 } from '../stepEvents';
@@ -13,41 +13,79 @@ import {
 const fold = (events: StepEvent[], runs: StepRuns = {}) =>
   events.reduce((acc, e) => applyRunEvent(acc, e), runs);
 
-describe('parseStepEvent', () => {
-  it('recognizes the engine lines that already drove the canvas', () => {
-    expect(parseStepEvent('Starting step: align')).toEqual({ kind: 'start', stepId: 'align' });
-    expect(parseStepEvent("Step 'align' completed successfully")).toEqual({
+describe('toStepEvent', () => {
+  const at = { v: 1 as const, ts: '2026-01-01T00:00:00.000Z' };
+
+  it('maps the first attempt to a start and later attempts to attempts', () => {
+    expect(
+      toStepEvent({ ...at, event: 'step_started', step: 'align', attempt: 1, max_attempts: 3 })
+    ).toEqual({ kind: 'start', stepId: 'align', attempt: 1, maxAttempts: 3 });
+    expect(
+      toStepEvent({ ...at, event: 'step_started', step: 'align', attempt: 2, max_attempts: 3 })
+    ).toEqual({ kind: 'attempt', stepId: 'align', attempt: 2, maxAttempts: 3 });
+  });
+
+  it('maps retries, outcomes, skips and checks', () => {
+    expect(
+      toStepEvent({
+        ...at,
+        event: 'step_retrying',
+        step: 'align',
+        attempt: 1,
+        max_attempts: 3,
+        delay_secs: 5,
+        reason: 'exit 2',
+      })
+    ).toEqual({ kind: 'retry', stepId: 'align', attempt: 1, maxAttempts: 3, delaySecs: 5 });
+    expect(toStepEvent({ ...at, event: 'step_succeeded', step: 'align', attempts: 1 })).toEqual({
       kind: 'done',
       stepId: 'align',
     });
-    expect(parseStepEvent("[ERROR] Step 'align' failed: exit 1")).toEqual({
-      kind: 'failed',
-      stepId: 'align',
-      message: 'exit 1',
-    });
-    expect(parseStepEvent('[DRY RUN] Step: align')).toEqual({ kind: 'done', stepId: 'align' });
-  });
-
-  it('recognizes retries, attempts and skipped steps', () => {
     expect(
-      parseStepEvent("[WARN] Step 'align': attempt 1/3 failed (exit status 2); will retry")
-    ).toEqual({ kind: 'retry', stepId: 'align', attempt: 1, maxAttempts: 3 });
-    expect(parseStepEvent("Step 'align': attempt 2/3")).toEqual({
-      kind: 'attempt',
-      stepId: 'align',
-      attempt: 2,
-      maxAttempts: 3,
-    });
-    expect(parseStepEvent('Skipping previously completed step: align_a')).toEqual({
-      kind: 'skipped',
-      stepId: 'align_a',
-    });
+      toStepEvent({ ...at, event: 'step_failed', step: 'align', reason: 'exit 1', attempts: 1 })
+    ).toEqual({ kind: 'failed', stepId: 'align', message: 'exit 1' });
+    expect(
+      toStepEvent({ ...at, event: 'step_skipped', step: 'align_a', reason: 'earlier run' })
+    ).toEqual({ kind: 'skipped', stepId: 'align_a', reason: 'earlier run' });
+    expect(
+      toStepEvent({
+        ...at,
+        event: 'check_failed',
+        step: 'align',
+        kind: 'min_lines',
+        blocking: false,
+        message: 'too short',
+      })
+    ).toEqual({ kind: 'check', stepId: 'align', blocking: false, message: 'too short' });
   });
 
-  it('ignores unrelated lines, including a final-attempt failure warning', () => {
-    expect(parseStepEvent('')).toBeNull();
-    expect(parseStepEvent('some tool output')).toBeNull();
-    expect(parseStepEvent("Step 'align' succeeded on attempt 2/3")).toBeNull();
+  it('returns null for run-level events', () => {
+    expect(
+      toStepEvent({
+        ...at,
+        event: 'run_started',
+        workflow: 'demo',
+        run_id: 'r',
+        steps: ['align'],
+        dry_run: false,
+      })
+    ).toBeNull();
+    expect(
+      toStepEvent({
+        ...at,
+        event: 'run_finished',
+        status: 'succeeded',
+        summary: {
+          total: 1,
+          succeeded: 1,
+          failed: 0,
+          skipped: 0,
+          retried: 0,
+          check_warnings: 0,
+          duration_secs: 0.1,
+        },
+      })
+    ).toBeNull();
   });
 });
 
@@ -72,6 +110,49 @@ describe('applyRunEvent', () => {
     ]);
     expect(runs.a.state).toBe('skipped');
     expect(runs.b).toMatchObject({ state: 'failed', message: 'boom' });
+  });
+});
+
+describe('retrying with attempt N/M', () => {
+  it('shows the failed attempt and delay while retrying, then the next attempt', () => {
+    let runs = fold([
+      { kind: 'start', stepId: 'a', attempt: 1, maxAttempts: 3 },
+      { kind: 'retry', stepId: 'a', attempt: 1, maxAttempts: 3, delaySecs: 5 },
+    ]);
+    expect(runs.a).toMatchObject({ state: 'retrying', attempt: 1, maxAttempts: 3, delaySecs: 5 });
+    expect(rollupNodeStatuses(runs, ['a']).a).toMatchObject({
+      state: 'retrying',
+      attempt: 1,
+      maxAttempts: 3,
+    });
+    const rows = buildStatusRows(runs, [{ stepId: 'a', label: 'A' }], 'active');
+    expect(rows[0]).toMatchObject({ state: 'retrying', attempt: 1, maxAttempts: 3, delaySecs: 5 });
+
+    runs = fold([{ kind: 'attempt', stepId: 'a', attempt: 2, maxAttempts: 3 }], runs);
+    expect(runs.a).toMatchObject({ state: 'running', attempt: 2, delaySecs: undefined });
+  });
+
+  it('keeps non-blocking check warnings on a step that goes on, and ignores blocking ones', () => {
+    let runs = fold([
+      { kind: 'start', stepId: 'a' },
+      { kind: 'check', stepId: 'a', blocking: false, message: 'few lines' },
+    ]);
+    expect(runs.a).toMatchObject({ state: 'running', warnings: ['few lines'] });
+    runs = fold([{ kind: 'done', stepId: 'a' }], runs);
+    expect(runs.a).toMatchObject({ state: 'succeeded', warnings: ['few lines'] });
+
+    const blocked = fold([
+      { kind: 'start', stepId: 'b' },
+      { kind: 'check', stepId: 'b', blocking: true, message: 'empty' },
+      { kind: 'failed', stepId: 'b', message: 'output check failed: empty' },
+    ]);
+    expect(blocked.b.warnings).toBeUndefined();
+    expect(blocked.b.state).toBe('failed');
+  });
+
+  it('keeps the reason of a skipped step', () => {
+    const runs = fold([{ kind: 'skipped', stepId: 'a', reason: 'completed in an earlier run' }]);
+    expect(runs.a).toEqual({ state: 'skipped', message: 'completed in an earlier run' });
   });
 });
 

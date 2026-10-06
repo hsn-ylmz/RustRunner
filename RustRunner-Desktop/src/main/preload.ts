@@ -7,6 +7,7 @@
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { ResumeInfo } from './resumeState';
+import type { EngineEvent } from './engineEvents';
 
 // Type definitions
 export type Channels = 'ipc-example';
@@ -141,6 +142,11 @@ const electronHandler = {
     // Event listeners. All return an unsubscribe function.
     onWorkflowOutput(callback: (output: string) => void) {
       return subscribe('workflow-output', callback);
+    },
+
+    /** Typed run events from the engine (`--json-events`). */
+    onWorkflowEvent(callback: (event: EngineEvent) => void) {
+      return subscribe('workflow-event', callback);
     },
 
     onWorkflowComplete(
