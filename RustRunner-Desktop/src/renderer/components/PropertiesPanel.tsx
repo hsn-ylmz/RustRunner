@@ -1,4 +1,16 @@
-import { generatePattern, hasWildcards, labelToId, normalizeThreads } from '../workflowConversion';
+import {
+  MAX_RETRIES,
+  MAX_RETRY_DELAY_SECS,
+  DEFAULT_RETRY_DELAY_SECS,
+  generatePattern,
+  hasWildcards,
+  labelToId,
+  normalizeBackoff,
+  normalizeRetries,
+  normalizeRetryDelay,
+  normalizeThreads,
+  normalizeTimeout,
+} from '../workflowConversion';
 
 export function PropertiesPanel({
   selectedNode,
@@ -194,6 +206,79 @@ export function PropertiesPanel({
         />
         <div className="property-hint">
           CPU threads this step requests from the scheduler.
+        </div>
+      </div>
+
+      <div className="property-group">
+        <label className="property-label">Retries:</label>
+        <input
+          type="number"
+          min={0}
+          max={MAX_RETRIES}
+          step={1}
+          className="property-input"
+          value={selectedNode.data.retries ?? 0}
+          onChange={(e) => handleInputChange('retries', e.target.value)}
+          onBlur={(e) =>
+            handleInputChange('retries', String(normalizeRetries(e.target.value)))
+          }
+        />
+        <div className="property-hint">
+          Extra attempts after a failure or timeout. 0 runs the step once.
+        </div>
+      </div>
+
+      {normalizeRetries(selectedNode.data.retries) > 0 && (
+        <>
+          <div className="property-group">
+            <label className="property-label">Retry Delay Mode:</label>
+            <select
+              className="property-input"
+              value={normalizeBackoff(selectedNode.data.retryBackoff)}
+              onChange={(e) => handleInputChange('retryBackoff', e.target.value)}
+            >
+              <option value="fixed">Fixed</option>
+              <option value="exponential">Exponential (doubles each retry)</option>
+            </select>
+          </div>
+
+          <div className="property-group">
+            <label className="property-label">Retry Delay (seconds):</label>
+            <input
+              type="number"
+              min={0}
+              max={MAX_RETRY_DELAY_SECS}
+              step={1}
+              className="property-input"
+              value={selectedNode.data.retryDelaySecs ?? DEFAULT_RETRY_DELAY_SECS}
+              onChange={(e) => handleInputChange('retryDelaySecs', e.target.value)}
+              onBlur={(e) =>
+                handleInputChange('retryDelaySecs', String(normalizeRetryDelay(e.target.value)))
+              }
+            />
+            <div className="property-hint">
+              Wait before the first retry; exponential mode doubles it each time.
+            </div>
+          </div>
+        </>
+      )}
+
+      <div className="property-group">
+        <label className="property-label">Timeout (seconds):</label>
+        <input
+          type="number"
+          min={1}
+          step={1}
+          className="property-input"
+          value={selectedNode.data.timeoutSecs ?? ''}
+          onChange={(e) => handleInputChange('timeoutSecs', e.target.value)}
+          onBlur={(e) =>
+            handleInputChange('timeoutSecs', String(normalizeTimeout(e.target.value) ?? ''))
+          }
+          placeholder="No limit"
+        />
+        <div className="property-hint">
+          Each attempt is killed if it runs longer than this. Leave empty for no limit.
         </div>
       </div>
     </div>

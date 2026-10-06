@@ -6,7 +6,7 @@
 //! State is saved to `.rustrunner/{workflow_name}.state` after each
 //! step completion.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
 use std::path::Path;
@@ -32,6 +32,11 @@ pub struct WorkflowState {
 
     /// Last time the state was updated
     pub timestamp: SystemTime,
+
+    /// Number of attempts the most recent run of each step needed
+    /// (absent in state files written before retries existed).
+    #[serde(default)]
+    pub step_attempts: HashMap<String, u32>,
 }
 
 impl WorkflowState {
@@ -42,7 +47,13 @@ impl WorkflowState {
             completed_steps: HashSet::new(),
             failed_step: None,
             timestamp: SystemTime::now(),
+            step_attempts: HashMap::new(),
         }
+    }
+
+    /// Records how many attempts a step used.
+    pub fn record_attempts(&mut self, step_id: &str, attempts: u32) {
+        self.step_attempts.insert(step_id.to_string(), attempts);
     }
 
     /// Saves the state to a file.
@@ -120,6 +131,7 @@ impl WorkflowState {
     pub fn clear(&mut self) {
         self.completed_steps.clear();
         self.failed_step = None;
+        self.step_attempts.clear();
         self.timestamp = SystemTime::now();
     }
 
@@ -145,6 +157,21 @@ mod tests {
         assert_eq!(state.workflow_path, "test.yaml");
         assert!(state.completed_steps.is_empty());
         assert!(!state.is_resume());
+    }
+
+    #[test]
+    fn test_record_attempts_roundtrip_and_old_state_compat() {
+        let mut state = WorkflowState::new("t.yaml");
+        state.record_attempts("align", 3);
+        let json = serde_json::to_string(&state).unwrap();
+        let loaded: WorkflowState = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.step_attempts.get("align"), Some(&3));
+
+        // A state file written before `step_attempts` existed still loads.
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value.as_object_mut().unwrap().remove("step_attempts");
+        let old: WorkflowState = serde_json::from_value(value).unwrap();
+        assert!(old.step_attempts.is_empty());
     }
 
     #[test]

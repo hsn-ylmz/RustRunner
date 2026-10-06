@@ -7,7 +7,11 @@ import {
   generatePattern,
   hasWildcards,
   labelToId,
+  normalizeBackoff,
+  normalizeRetries,
+  normalizeRetryDelay,
   normalizeThreads,
+  normalizeTimeout,
   validateWorkflow,
 } from '../workflowConversion';
 
@@ -147,5 +151,71 @@ describe('wildcard helpers', () => {
     expect(hasWildcards('{sample}.fq')).toBe(true);
     expect(hasWildcards('plain.fq')).toBe(false);
     expect(hasWildcards('{open')).toBe(false);
+  });
+});
+
+describe('retry and timeout settings', () => {
+  it('omits all retry keys for a plain step', () => {
+    const { steps } = convertNodesToWorkflow([node('a', 'A')], []);
+    expect(steps[0]).not.toHaveProperty('retries');
+    expect(steps[0]).not.toHaveProperty('retry_backoff');
+    expect(steps[0]).not.toHaveProperty('retry_delay_secs');
+    expect(steps[0]).not.toHaveProperty('timeout_secs');
+  });
+
+  it('emits retries, backoff, delay and timeout as snake_case YAML keys', () => {
+    const { steps } = convertNodesToWorkflow(
+      [node('a', 'A', { retries: '3', retryBackoff: 'exponential', retryDelaySecs: '2', timeoutSecs: '90' })],
+      []
+    );
+    expect(steps[0]).toMatchObject({
+      retries: 3,
+      retry_backoff: 'exponential',
+      retry_delay_secs: 2,
+      timeout_secs: 90,
+    });
+    const parsed: any = yaml.load(yaml.dump({ steps }));
+    expect(parsed.steps[0].retry_backoff).toBe('exponential');
+    expect(parsed.steps[0].timeout_secs).toBe(90);
+  });
+
+  it('uses defaults for backoff and delay when only retries is set', () => {
+    const { steps } = convertNodesToWorkflow([node('a', 'A', { retries: 1 })], []);
+    expect(steps[0].retry_backoff).toBe('fixed');
+    expect(steps[0].retry_delay_secs).toBe(5);
+  });
+
+  it('does not emit backoff or delay when retries is 0, but still emits a timeout', () => {
+    const { steps } = convertNodesToWorkflow(
+      [node('a', 'A', { retries: 0, retryBackoff: 'exponential', retryDelaySecs: 9, timeoutSecs: 30 })],
+      []
+    );
+    expect(steps[0]).not.toHaveProperty('retries');
+    expect(steps[0]).not.toHaveProperty('retry_backoff');
+    expect(steps[0].timeout_secs).toBe(30);
+  });
+
+  it.each([
+    [3, 3], ['4', 4], [-1, 0], ['x', 0], [undefined, 0], [1000, 100], [2.7, 2],
+  ])('normalizeRetries(%p) -> %p', (input, expected) => {
+    expect(normalizeRetries(input)).toBe(expected);
+  });
+
+  it.each([
+    ['exponential', 'exponential'], ['fixed', 'fixed'], ['linear', 'fixed'], [undefined, 'fixed'],
+  ])('normalizeBackoff(%p) -> %p', (input, expected) => {
+    expect(normalizeBackoff(input)).toBe(expected);
+  });
+
+  it.each([
+    [0, 0], ['7', 7], ['', 5], [undefined, 5], [-3, 5], ['x', 5], [99999, 3600],
+  ])('normalizeRetryDelay(%p) -> %p', (input, expected) => {
+    expect(normalizeRetryDelay(input)).toBe(expected);
+  });
+
+  it.each([
+    ['60', 60], [1, 1], ['', undefined], [0, undefined], [-5, undefined], ['abc', undefined], [null, undefined],
+  ])('normalizeTimeout(%p) -> %p', (input, expected) => {
+    expect(normalizeTimeout(input)).toBe(expected);
   });
 });

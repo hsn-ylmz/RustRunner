@@ -21,7 +21,7 @@ use crate::environment::conda::{create_env, ToolEnvMap};
 use crate::monitoring::{EventType, ExecutionTimeline, ResourceMonitor};
 use crate::workflow::{ExecutionPlanner, Workflow, WorkflowState};
 
-use super::step::execute_step;
+use super::step::execute_step_with_retries;
 use super::tools::is_system_tool;
 
 /// Interval for checking the pause flag file.
@@ -29,6 +29,23 @@ const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Interval for resource monitoring samples.
 const MONITOR_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Message a worker thread sends when its step is done: step id, attempts
+/// used and the final result.
+type StepCompletion = (String, u32, Result<(), String>);
+
+/// Formats the "retried steps" section of the run summary, or `None` when no
+/// step needed more than one attempt.
+fn format_retry_summary(retried: &[(String, u32)]) -> Option<String> {
+    if retried.is_empty() {
+        return None;
+    }
+    let mut out = String::from("Retried steps:");
+    for (id, attempts) in retried {
+        out.push_str(&format!("\n  {}: {} attempts", id, attempts));
+    }
+    Some(out)
+}
 
 /// Workflow execution engine.
 ///
@@ -184,10 +201,7 @@ impl Engine {
         let env_map = ToolEnvMap::load();
 
         // Create channel for step completion
-        let (tx, rx): (
-            Sender<(String, Result<(), String>)>,
-            Receiver<(String, Result<(), String>)>,
-        ) = channel();
+        let (tx, rx): (Sender<StepCompletion>, Receiver<StepCompletion>) = channel();
 
         // Start resource monitoring
         let monitor_running = Arc::new(AtomicBool::new(true));
@@ -241,6 +255,17 @@ impl Engine {
                         println!("  Input: {:?}", step.input);
                         println!("  Output: {:?}", step.output);
                         println!("  Threads: {}", step.threads);
+                        if step.retries > 0 {
+                            println!(
+                                "  Retries: {} ({}, {}s delay)",
+                                step.retries,
+                                step.retry_backoff.as_str(),
+                                step.retry_delay_secs
+                            );
+                        }
+                        if let Some(secs) = step.timeout_secs {
+                            println!("  Timeout: {}s", secs);
+                        }
 
                         timeline.add_event(step.id.clone(), EventType::Completed);
                         planner.mark_step_completed(&step.id);
@@ -252,12 +277,18 @@ impl Engine {
                     let step_clone = step.clone();
                     let env_map_clone = env_map.as_map().clone();
                     let working_dir_clone = self.working_dir.clone();
+                    let pause_clone = self.pause_flag_path.clone();
 
                     thread::spawn(move || {
-                        let result = execute_step(&step_clone, &env_map_clone, &working_dir_clone)
-                            .map_err(|e| e.to_string());
+                        let run = execute_step_with_retries(
+                            &step_clone,
+                            &env_map_clone,
+                            &working_dir_clone,
+                            pause_clone.as_deref().map(Path::new),
+                        );
+                        let result = run.result.map_err(|e| e.to_string());
 
-                        if let Err(e) = tx.send((step_clone.id.clone(), result)) {
+                        if let Err(e) = tx.send((step_clone.id.clone(), run.attempts, result)) {
                             error!("Failed to send completion signal: {}", e);
                         }
                     });
@@ -290,7 +321,7 @@ impl Engine {
 
             // Wait for step completion (skip in dry run)
             if running_count > 0 && !self.dry_run {
-                let (step_id, result) = match rx.recv() {
+                let (step_id, attempts, result) = match rx.recv() {
                     Ok(msg) => msg,
                     Err(e) => {
                         run_error =
@@ -300,6 +331,8 @@ impl Engine {
                 };
 
                 running_count -= 1;
+                planner.record_attempts(&step_id, attempts);
+                state.record_attempts(&step_id, attempts);
 
                 match result {
                     Ok(()) => {
@@ -349,6 +382,10 @@ impl Engine {
         println!("Workflow completed successfully");
         println!("Total execution time: {:.2?}", total_time);
         println!();
+        if let Some(summary) = format_retry_summary(&planner.retried_steps()) {
+            println!("{}", summary);
+            println!();
+        }
         println!("{}", final_monitor.get_summary());
 
         Ok(())
@@ -476,6 +513,14 @@ mod tests {
         }
 
         workflow
+    }
+
+    #[test]
+    fn test_format_retry_summary() {
+        assert_eq!(format_retry_summary(&[]), None);
+        let text = format_retry_summary(&[("align".to_string(), 3)]).unwrap();
+        assert!(text.starts_with("Retried steps:"));
+        assert!(text.contains("align: 3 attempts"));
     }
 
     #[test]

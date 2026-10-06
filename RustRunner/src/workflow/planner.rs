@@ -41,6 +41,8 @@ pub struct StepMetrics {
     pub duration_ms: Option<u128>,
     /// Current status
     pub status: StepStatus,
+    /// Attempts used by the step (1 unless it was retried; 0 if never run)
+    pub attempts: u32,
 }
 
 impl StepMetrics {
@@ -50,6 +52,7 @@ impl StepMetrics {
             end_time: None,
             duration_ms: None,
             status: StepStatus::Pending,
+            attempts: 0,
         }
     }
 }
@@ -225,6 +228,26 @@ impl ExecutionPlanner {
         }
     }
 
+    /// Records how many attempts a step used (retries included).
+    pub fn record_attempts(&mut self, step_id: &str, attempts: u32) {
+        if let Some(metrics) = self.step_metrics.get_mut(step_id) {
+            metrics.attempts = attempts;
+        }
+    }
+
+    /// Steps that needed more than one attempt, in workflow order, as
+    /// `(step_id, attempts)`.
+    pub fn retried_steps(&self) -> Vec<(String, u32)> {
+        self.workflow
+            .steps
+            .iter()
+            .filter_map(|s| {
+                let attempts = self.step_metrics.get(&s.id)?.attempts;
+                (attempts > 1).then(|| (s.id.clone(), attempts))
+            })
+            .collect()
+    }
+
     /// Marks a step as completed.
     pub fn mark_step_completed(&mut self, step_id: &str) {
         self.running_steps.remove(step_id);
@@ -317,6 +340,17 @@ mod tests {
         }
 
         workflow
+    }
+
+    #[test]
+    fn test_record_attempts_and_retried_steps() {
+        let mut planner = ExecutionPlanner::new(create_test_workflow(), false, 4).unwrap();
+        planner.record_attempts("step1", 1);
+        planner.record_attempts("step2", 3);
+        assert_eq!(planner.get_metrics()["step2"].attempts, 3);
+        assert_eq!(planner.retried_steps(), vec![("step2".to_string(), 3)]);
+        // Unknown ids are ignored.
+        planner.record_attempts("nope", 5);
     }
 
     #[test]

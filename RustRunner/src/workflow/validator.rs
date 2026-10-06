@@ -10,7 +10,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use log::{debug, info, warn};
 
-use super::model::{Step, Workflow};
+use super::model::{Step, Workflow, MAX_RETRY_DELAY_SECS};
+
+/// Largest `retries` value accepted for a single step.
+pub const MAX_RETRIES: u32 = 100;
 
 /// Validation error types for user-friendly error messages.
 #[derive(Debug, Clone)]
@@ -23,6 +26,9 @@ pub enum ValidationError {
     InvalidReference { step: String, reference: String },
     CyclicDependency,
     UnusedPlaceholder { step: String, placeholder: String },
+    TooManyRetries { step: String, retries: u32 },
+    RetryDelayTooLong { step: String, secs: u64 },
+    ZeroTimeout(String),
 }
 
 impl std::fmt::Display for ValidationError {
@@ -49,8 +55,45 @@ impl std::fmt::Display for ValidationError {
                     step, placeholder
                 )
             }
+            Self::TooManyRetries { step, retries } => write!(
+                f,
+                "Step '{}': retries is {} but at most {} are allowed",
+                step, retries, MAX_RETRIES
+            ),
+            Self::RetryDelayTooLong { step, secs } => write!(
+                f,
+                "Step '{}': retry_delay_secs is {} but at most {} are allowed",
+                step, secs, MAX_RETRY_DELAY_SECS
+            ),
+            Self::ZeroTimeout(step) => write!(
+                f,
+                "Step '{}': timeout_secs must be greater than 0 (leave it empty for no timeout)",
+                step
+            ),
         }
     }
+}
+
+/// Validates a step's retry and timeout settings.
+fn validate_retry_settings(step: &Step) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    if step.retries > MAX_RETRIES {
+        errors.push(ValidationError::TooManyRetries {
+            step: step.id.clone(),
+            retries: step.retries,
+        });
+    }
+    if step.retry_delay_secs > MAX_RETRY_DELAY_SECS {
+        errors.push(ValidationError::RetryDelayTooLong {
+            step: step.id.clone(),
+            secs: step.retry_delay_secs,
+        });
+    }
+    if step.timeout_secs == Some(0) {
+        errors.push(ValidationError::ZeroTimeout(step.id.clone()));
+    }
+
+    errors
 }
 
 /// Validates a single step's fields.
@@ -82,6 +125,8 @@ fn validate_step(step: &Step) -> Vec<ValidationError> {
     if step.command.trim().is_empty() {
         errors.push(ValidationError::EmptyCommand(step.id.clone()));
     }
+
+    errors.extend(validate_retry_settings(step));
 
     // Warn about placeholder mismatches
     if step.command.contains("{input}") && step.input.is_empty() {
@@ -289,6 +334,8 @@ pub fn quick_validate(workflow: &Workflow) -> Vec<String> {
             ));
         }
 
+        errors.extend(validate_retry_settings(step).iter().map(|e| e.to_string()));
+
         for prev_id in &step.previous {
             if !step_ids.contains(prev_id.as_str()) {
                 errors.push(format!(
@@ -305,6 +352,42 @@ pub fn quick_validate(workflow: &Workflow) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_retry_settings_valid() {
+        let mut wf = Workflow::from_steps(vec![Step::new("a", "bash", "echo hi")
+            .with_retries(3)
+            .with_timeout_secs(60)]);
+        assert!(validate_workflow(&mut wf).is_ok());
+    }
+
+    #[test]
+    fn test_retry_settings_rejected() {
+        let cases = [
+            (
+                Step::new("a", "bash", "x").with_retries(MAX_RETRIES + 1),
+                "retries",
+            ),
+            (
+                Step::new("a", "bash", "x").with_retry_backoff(
+                    crate::workflow::RetryBackoff::Fixed,
+                    MAX_RETRY_DELAY_SECS + 1,
+                ),
+                "retry_delay_secs",
+            ),
+            (
+                Step::new("a", "bash", "x").with_timeout_secs(0),
+                "timeout_secs",
+            ),
+        ];
+        for (step, needle) in cases {
+            let mut wf = Workflow::from_steps(vec![step.clone()]);
+            let err = validate_workflow(&mut wf).unwrap_err();
+            assert!(err.contains(needle), "{err}");
+            let quick = quick_validate(&wf);
+            assert!(quick.iter().any(|m| m.contains(needle)), "{quick:?}");
+        }
+    }
 
     #[test]
     fn test_valid_workflow() {

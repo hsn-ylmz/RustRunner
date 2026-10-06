@@ -54,6 +54,20 @@ export function convertNodesToWorkflow(
       threads: normalizeThreads(node.data.threads),
     };
 
+    // Retry / timeout settings are emitted only when they change behaviour so
+    // YAML for plain steps stays exactly as it was. Keys are snake_case: they
+    // go straight into the YAML the Rust `Step` struct deserializes.
+    const retries = normalizeRetries(node.data.retries);
+    if (retries > 0) {
+      step.retries = retries;
+      step.retry_backoff = normalizeBackoff(node.data.retryBackoff);
+      step.retry_delay_secs = normalizeRetryDelay(node.data.retryDelaySecs);
+    }
+    const timeoutSecs = normalizeTimeout(node.data.timeoutSecs);
+    if (timeoutSecs !== undefined) {
+      step.timeout_secs = timeoutSecs;
+    }
+
     // Omit the key entirely when empty — Rust skips serializing empty maps and
     // an empty mapping would just be noise in the YAML.
     if (files.length > 0) {
@@ -70,6 +84,40 @@ export function convertNodesToWorkflow(
 export function normalizeThreads(value: unknown): number {
   const n = Math.floor(Number(value));
   return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+/** Limits mirrored from the Rust validator (`MAX_RETRIES`, `MAX_RETRY_DELAY_SECS`). */
+export const MAX_RETRIES = 100;
+export const MAX_RETRY_DELAY_SECS = 3600;
+export const DEFAULT_RETRY_DELAY_SECS = 5;
+
+export type RetryBackoff = 'fixed' | 'exponential';
+
+/** Coerces a retries value into an integer in [0, MAX_RETRIES]. */
+export function normalizeRetries(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(n, MAX_RETRIES);
+}
+
+/** Anything other than 'exponential' means a fixed delay. */
+export function normalizeBackoff(value: unknown): RetryBackoff {
+  return value === 'exponential' ? 'exponential' : 'fixed';
+}
+
+/** Coerces the base retry delay into an integer in [0, MAX_RETRY_DELAY_SECS]. */
+export function normalizeRetryDelay(value: unknown): number {
+  if (value === undefined || value === null || value === '') return DEFAULT_RETRY_DELAY_SECS;
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_RETRY_DELAY_SECS;
+  return Math.min(n, MAX_RETRY_DELAY_SECS);
+}
+
+/** A positive whole number of seconds, or undefined for "no timeout". */
+export function normalizeTimeout(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n >= 1 ? n : undefined;
 }
 
 /**

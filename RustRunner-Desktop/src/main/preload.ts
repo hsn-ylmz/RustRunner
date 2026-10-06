@@ -20,6 +20,12 @@ interface WorkflowData {
     previous: string[];
     next: string[];
     threads?: number;
+    /** Re-runs after a failure or timeout (0 = single attempt). */
+    retries?: number;
+    retry_backoff?: 'fixed' | 'exponential';
+    retry_delay_secs?: number;
+    /** Per-attempt wall-clock limit; the step is killed when exceeded. */
+    timeout_secs?: number;
     /** Per-step wildcard mappings; serialized straight into the workflow YAML. */
     wildcard_files?: Record<string, string[]>;
   }>;

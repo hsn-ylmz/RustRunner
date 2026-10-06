@@ -15,12 +15,11 @@
 
 #[cfg(unix)]
 use std::collections::HashSet;
-use std::io;
+use std::io::{self, Read};
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
-#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use log::{info, warn};
@@ -33,6 +32,9 @@ const TERMINATION_GRACE: Duration = Duration::from_secs(3);
 /// Poll interval while waiting for terminated children to disappear.
 const TERMINATION_POLL: Duration = Duration::from_millis(50);
 
+/// Poll interval while waiting for a child that has a timeout.
+const TIMEOUT_POLL: Duration = Duration::from_millis(20);
+
 /// Process ids (== process group ids on unix) of the currently running steps.
 static RUNNING: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
@@ -44,13 +46,39 @@ fn running() -> std::sync::MutexGuard<'static, Vec<u32>> {
     RUNNING.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Result of a tracked run: the captured output and whether the run was
+/// stopped because it exceeded its timeout.
+#[derive(Debug)]
+pub struct TrackedOutput {
+    pub output: Output,
+    /// True when the process group was terminated for running past the timeout.
+    pub timed_out: bool,
+}
+
+/// True once a termination signal has been received. Callers that sleep or
+/// loop (e.g. retry back-off) use this to give up promptly.
+pub fn is_shutting_down() -> bool {
+    SHUTTING_DOWN.load(Ordering::SeqCst)
+}
+
 /// Runs `cmd` to completion, capturing its output, as a tracked process group.
 ///
 /// Behaves like [`Command::output`] (stdin is closed, stdout/stderr captured)
 /// but registers the child so that a termination signal received by this
 /// process also terminates the child and everything it spawned.
-pub fn run_tracked(mut cmd: Command) -> io::Result<Output> {
-    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+pub fn run_tracked(cmd: Command) -> io::Result<Output> {
+    run_tracked_with_timeout(cmd, None).map(|t| t.output)
+}
+
+/// Like [`run_tracked`], but terminates the child's whole process group
+/// (SIGTERM, then SIGKILL after a grace period) once `timeout` has elapsed.
+/// The partial output captured up to that point is still returned, with
+/// `timed_out` set.
+pub fn run_tracked_with_timeout(
+    mut cmd: Command,
+    timeout: Option<Duration>,
+) -> io::Result<TrackedOutput> {
+    if is_shutting_down() {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
             "rustrunner is shutting down; step not started",
@@ -68,19 +96,69 @@ pub fn run_tracked(mut cmd: Command) -> io::Result<Output> {
         cmd.process_group(0);
     }
 
-    let child = cmd.spawn()?;
+    let mut child = cmd.spawn()?;
     let pid = child.id();
     running().push(pid);
 
     // A signal may have arrived between the check above and registration, in
     // which case the handler's snapshot missed this child: stop it ourselves.
-    if SHUTTING_DOWN.load(Ordering::SeqCst) {
+    if is_shutting_down() {
         terminate_groups(&[pid]);
     }
 
-    let output = child.wait_with_output();
+    // Drain both pipes concurrently so a chatty child can't block on a full
+    // pipe while we poll for its exit.
+    let stdout_reader = drain(child.stdout.take());
+    let stderr_reader = drain(child.stderr.take());
+
+    let mut timed_out = false;
+    let status = match timeout {
+        None => child.wait(),
+        Some(limit) => {
+            let deadline = Instant::now() + limit;
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break Ok(status),
+                    Ok(None) => {}
+                    Err(e) => break Err(e),
+                }
+                if !timed_out && Instant::now() >= deadline {
+                    timed_out = true;
+                    warn!(
+                        "Process group {} exceeded its {}s timeout; terminating",
+                        pid,
+                        limit.as_secs()
+                    );
+                    terminate_groups(&[pid]);
+                    continue;
+                }
+                thread::sleep(TIMEOUT_POLL);
+            }
+        }
+    };
     running().retain(|p| *p != pid);
-    output
+
+    let status = status?;
+    Ok(TrackedOutput {
+        output: Output {
+            status,
+            stdout: stdout_reader.join().unwrap_or_default(),
+            stderr: stderr_reader.join().unwrap_or_default(),
+        },
+        timed_out,
+    })
+}
+
+/// Reads a pipe to the end on its own thread.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut pipe) = pipe {
+            // A read error just truncates the captured output.
+            let _ = pipe.read_to_end(&mut buf);
+        }
+        buf
+    })
 }
 
 /// Returns the process ids of all currently running tracked children.
@@ -236,6 +314,34 @@ mod tests {
         let mut bad = Command::new("bash");
         bad.args(["-c", "exit 3"]);
         assert_eq!(run_tracked(bad).unwrap().status.code(), Some(3));
+    }
+
+    #[test]
+    fn test_timeout_kills_process_group_and_reports_it() {
+        let mut cmd = Command::new("bash");
+        cmd.args(["-c", "echo started; sleep 60 & echo $!; wait"]);
+        let started = Instant::now();
+        let out = run_tracked_with_timeout(cmd, Some(Duration::from_millis(300))).unwrap();
+        assert!(out.timed_out);
+        assert!(!out.output.status.success());
+        assert!(started.elapsed() < Duration::from_secs(20));
+
+        let stdout = String::from_utf8_lossy(&out.output.stdout).to_string();
+        let grandchild: i32 = stdout.lines().nth(1).unwrap().trim().parse().unwrap();
+        assert!(
+            wait_until(|| !pid_alive(grandchild)),
+            "grandchild {grandchild} survived the timeout"
+        );
+    }
+
+    #[test]
+    fn test_timeout_not_hit_for_fast_command() {
+        let mut cmd = Command::new("bash");
+        cmd.args(["-c", "echo quick"]);
+        let out = run_tracked_with_timeout(cmd, Some(Duration::from_secs(30))).unwrap();
+        assert!(!out.timed_out);
+        assert!(out.output.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.output.stdout).trim(), "quick");
     }
 
     #[test]

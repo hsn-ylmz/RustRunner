@@ -29,6 +29,27 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// How the delay between retry attempts grows.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RetryBackoff {
+    /// Wait `retry_delay_secs` before every retry.
+    #[default]
+    Fixed,
+    /// Wait `retry_delay_secs`, then twice that, then four times, and so on.
+    Exponential,
+}
+
+impl RetryBackoff {
+    /// The YAML spelling of this mode.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::Exponential => "exponential",
+        }
+    }
+}
+
 /// Represents a single step in a workflow.
 ///
 /// Each step defines a command to execute, along with its inputs, outputs,
@@ -72,6 +93,42 @@ pub struct Step {
     /// Wildcard file mappings (wildcard_name -> list of concrete files)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub wildcard_files: HashMap<String, Vec<String>>,
+
+    /// How many times a failed (or timed-out) step is re-run before the
+    /// workflow gives up. `0` means a single attempt.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retries: u32,
+
+    /// Whether the delay between retries stays fixed or doubles each time.
+    #[serde(default, skip_serializing_if = "is_default_backoff")]
+    pub retry_backoff: RetryBackoff,
+
+    /// Base delay in seconds before a retry.
+    #[serde(default = "default_retry_delay_secs")]
+    pub retry_delay_secs: u64,
+
+    /// Wall-clock limit per attempt in seconds; the step's process group is
+    /// killed when it is exceeded. `None` means no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+fn is_default_backoff(b: &RetryBackoff) -> bool {
+    *b == RetryBackoff::Fixed
+}
+
+/// Upper bound for any single wait between retries (one hour).
+pub const MAX_RETRY_DELAY_SECS: u64 = 3600;
+
+/// Default base delay between retries.
+pub const DEFAULT_RETRY_DELAY_SECS: u64 = 5;
+
+fn default_retry_delay_secs() -> u64 {
+    DEFAULT_RETRY_DELAY_SECS
 }
 
 /// Default thread count for steps that don't specify
@@ -131,7 +188,44 @@ impl Step {
             threads: 1,
             color: None,
             wildcard_files: HashMap::new(),
+            retries: 0,
+            retry_backoff: RetryBackoff::Fixed,
+            retry_delay_secs: DEFAULT_RETRY_DELAY_SECS,
+            timeout_secs: None,
         }
+    }
+
+    /// Sets how many times a failed step is retried.
+    pub fn with_retries(mut self, retries: u32) -> Self {
+        self.retries = retries;
+        self
+    }
+
+    /// Sets the retry back-off mode and base delay in seconds.
+    pub fn with_retry_backoff(mut self, backoff: RetryBackoff, delay_secs: u64) -> Self {
+        self.retry_backoff = backoff;
+        self.retry_delay_secs = delay_secs;
+        self
+    }
+
+    /// Sets the per-attempt timeout in seconds.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
+        self
+    }
+
+    /// Delay before retry number `retry` (1 = first retry), capped at
+    /// [`MAX_RETRY_DELAY_SECS`].
+    pub fn retry_delay(&self, retry: u32) -> std::time::Duration {
+        let factor = match self.retry_backoff {
+            RetryBackoff::Fixed => 1,
+            // 2^(retry-1), saturating so absurd retry counts can't overflow.
+            RetryBackoff::Exponential => 1u64
+                .checked_shl(retry.saturating_sub(1))
+                .unwrap_or(u64::MAX),
+        };
+        let secs = self.retry_delay_secs.saturating_mul(factor);
+        std::time::Duration::from_secs(secs.min(MAX_RETRY_DELAY_SECS))
     }
 
     /// Sets the input file(s) for this step.
@@ -389,6 +483,60 @@ impl Default for Workflow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_old_yaml_without_retry_fields_gets_defaults() {
+        let step: Step = serde_yaml::from_str("id: a\ntool: bash\ncommand: echo hi\n").unwrap();
+        assert_eq!(step.retries, 0);
+        assert_eq!(step.retry_backoff, RetryBackoff::Fixed);
+        assert_eq!(step.retry_delay_secs, DEFAULT_RETRY_DELAY_SECS);
+        assert_eq!(step.timeout_secs, None);
+    }
+
+    #[test]
+    fn test_retry_fields_parse_from_yaml() {
+        let yaml = "id: a\ntool: bash\ncommand: x\nretries: 3\n\
+                    retry_backoff: exponential\nretry_delay_secs: 2\ntimeout_secs: 90\n";
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.retries, 3);
+        assert_eq!(step.retry_backoff, RetryBackoff::Exponential);
+        assert_eq!(step.retry_delay_secs, 2);
+        assert_eq!(step.timeout_secs, Some(90));
+    }
+
+    #[test]
+    fn test_unknown_backoff_is_rejected() {
+        let yaml = "id: a\ntool: bash\ncommand: x\nretry_backoff: linear\n";
+        assert!(serde_yaml::from_str::<Step>(yaml).is_err());
+    }
+
+    #[test]
+    fn test_default_retry_fields_are_not_serialized_noise() {
+        let yaml = serde_yaml::to_string(&Step::new("a", "bash", "echo")).unwrap();
+        assert!(!yaml.contains("retries"));
+        assert!(!yaml.contains("timeout_secs"));
+        let yaml = serde_yaml::to_string(&Step::new("a", "bash", "echo").with_retries(2)).unwrap();
+        assert!(yaml.contains("retries: 2"));
+    }
+
+    #[test]
+    fn test_retry_delay_fixed_and_exponential() {
+        let fixed = Step::new("a", "bash", "x").with_retry_backoff(RetryBackoff::Fixed, 5);
+        assert_eq!(fixed.retry_delay(1).as_secs(), 5);
+        assert_eq!(fixed.retry_delay(4).as_secs(), 5);
+
+        let exp = Step::new("a", "bash", "x").with_retry_backoff(RetryBackoff::Exponential, 5);
+        assert_eq!(exp.retry_delay(1).as_secs(), 5);
+        assert_eq!(exp.retry_delay(2).as_secs(), 10);
+        assert_eq!(exp.retry_delay(4).as_secs(), 40);
+    }
+
+    #[test]
+    fn test_retry_delay_is_capped_and_never_overflows() {
+        let exp = Step::new("a", "bash", "x").with_retry_backoff(RetryBackoff::Exponential, 5);
+        assert_eq!(exp.retry_delay(200).as_secs(), MAX_RETRY_DELAY_SECS);
+        assert_eq!(exp.retry_delay(u32::MAX).as_secs(), MAX_RETRY_DELAY_SECS);
+    }
 
     #[test]
     fn test_step_creation() {
