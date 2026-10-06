@@ -1008,6 +1008,144 @@
 }
 
 /* =============================================================================
+   Tool catalog: palette, parameter form and typed edges
+   ============================================================================= */
+
+.tool-palette {
+  position: absolute;
+  top: 80px;
+  left: 150px;
+  z-index: 20;
+  width: 340px;
+  max-height: calc(100% - 170px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  color: #333;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.tool-palette-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tool-palette-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.tool-palette-close {
+  border: none;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: inherit;
+}
+
+.tool-palette-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-palette-item {
+  display: flex;
+  gap: 10px;
+  padding: 8px;
+  text-align: left;
+  background: #fafafa;
+  color: inherit;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.tool-palette-item:hover,
+.tool-palette-item:focus-visible {
+  border-color: var(--blue-dark);
+  background: #f0f6fb;
+}
+
+.tool-palette-swatch {
+  flex: none;
+  width: 6px;
+  border-radius: 3px;
+}
+
+.tool-palette-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tool-palette-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.tool-palette-category {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #666;
+}
+
+.tool-palette-description {
+  font-size: 12px;
+  color: #444;
+}
+
+.tool-palette-types {
+  font-size: 11px;
+  font-family: monospace;
+  color: #666;
+}
+
+.tool-palette-empty,
+.tool-palette-footer {
+  font-size: 12px;
+  color: #666;
+}
+
+.catalog-section {
+  padding: 8px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+}
+
+.catalog-param {
+  margin-top: 10px;
+}
+
+.catalog-param-label {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+/* Edge colours for the file-type check. Orange and green differ in lightness
+   as well as hue, and the tooltip spells the result out. */
+.typed-edge-match .react-flow__edge-path {
+  stroke: #1f9d55;
+  stroke-width: 3;
+}
+
+.typed-edge-mismatch .react-flow__edge-path {
+  stroke: #e8590c;
+  stroke-width: 3;
+}
+
+/* =============================================================================
    Dark Mode
    ============================================================================= */
 
@@ -1046,6 +1184,41 @@
 
   .top-toolbar {
     background: rgba(44, 62, 80, 0.95);
+  }
+
+  .tool-palette {
+    background: var(--panel-background);
+    color: var(--panel-text);
+  }
+
+  .tool-palette-item {
+    background: #34495e;
+    border-color: #34495e;
+  }
+
+  .tool-palette-item:hover,
+  .tool-palette-item:focus-visible {
+    background: #3d566e;
+  }
+
+  .tool-palette-description,
+  .tool-palette-category,
+  .tool-palette-types,
+  .tool-palette-empty,
+  .tool-palette-footer {
+    color: var(--gray-light);
+  }
+
+  .catalog-section {
+    border-color: #34495e;
+  }
+
+  .typed-edge-match .react-flow__edge-path {
+    stroke: #4ade80;
+  }
+
+  .typed-edge-mismatch .react-flow__edge-path {
+    stroke: #fb923c;
   }
 
   .workflow-title {

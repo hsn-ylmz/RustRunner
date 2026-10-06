@@ -17,6 +17,16 @@ import {
   normalizeThreads,
   normalizeTimeout,
 } from '../workflowConversion';
+import {
+  applyParamChange,
+  coerceNumber,
+  defaultParams,
+  findTool,
+  missingRequiredParams,
+  renderCommand,
+  type ParamValue,
+  type ToolParam,
+} from '../tools/catalog';
 
 /** Checkbox state may be a boolean or, from loose data, the string 'true'. */
 const checksOn = (value: unknown) => value === true || value === 'true';
@@ -24,6 +34,7 @@ const checksOn = (value: unknown) => value === true || value === 'true';
 export function PropertiesPanel({
   selectedNode,
   onNodeUpdate,
+  onNodePatch,
   nodeFiles,
   onNodeFilesUpdate,
   addLog,
@@ -45,6 +56,68 @@ export function PropertiesPanel({
 
   const handleInputChange = (field: string, value: string | boolean) => {
     onNodeUpdate(selectedNode.id, field, value);
+  };
+
+  // A node made from the tool catalog shows its parameter form; the command is
+  // rendered from the parameters until the user edits the command by hand.
+  const catalogTool = findTool(selectedNode.data.catalogId);
+  const catalogParams: Record<string, ParamValue> = catalogTool
+    ? { ...defaultParams(catalogTool), ...(selectedNode.data.catalogParams ?? {}) }
+    : {};
+  const commandIsCustom = selectedNode.data.catalogCommandCustom === true;
+  const missingParams = catalogTool ? missingRequiredParams(catalogTool, catalogParams) : [];
+
+  /** Changing the tool away from the catalog's package turns the node into a free-form one. */
+  const handleToolChange = (value: string) => {
+    if (catalogTool && value.trim() !== catalogTool.conda.package) {
+      onNodePatch(selectedNode.id, {
+        tool: value,
+        catalogId: undefined,
+        catalogParams: undefined,
+        catalogCommandCustom: undefined,
+      });
+      return;
+    }
+    handleInputChange('tool', value);
+  };
+
+  /** Typing in the command box takes it over from the parameter form. */
+  const handleCommandChange = (value: string) => {
+    if (catalogTool) {
+      onNodePatch(selectedNode.id, { command: value, catalogCommandCustom: true });
+      return;
+    }
+    handleInputChange('command', value);
+  };
+
+  const handleParamChange = (param: ToolParam, value: ParamValue) => {
+    if (!catalogTool) return;
+    onNodePatch(
+      selectedNode.id,
+      applyParamChange(catalogTool, selectedNode.data, {
+        params: { ...catalogParams, [param.id]: value },
+      })
+    );
+  };
+
+  /** The thread count also appears in a catalog command, so it re-renders it. */
+  const handleThreadsChange = (value: string) => {
+    if (!catalogTool) {
+      handleInputChange('threads', value);
+      return;
+    }
+    onNodePatch(selectedNode.id, {
+      threads: value,
+      ...applyParamChange(catalogTool, selectedNode.data, { threads: value }),
+    });
+  };
+
+  const handleRegenerateCommand = () => {
+    if (!catalogTool) return;
+    onNodePatch(selectedNode.id, {
+      command: renderCommand(catalogTool, catalogParams, selectedNode.data.threads),
+      catalogCommandCustom: false,
+    });
   };
 
   /**
@@ -125,10 +198,112 @@ export function PropertiesPanel({
           className="property-input"
           value={selectedNode.data.tool || ''}
           data-testid="prop-tool"
-          onChange={(e) => handleInputChange('tool', e.target.value)}
+          onChange={(e) => handleToolChange(e.target.value)}
           placeholder="e.g., bash, fastqc, bowtie2"
         />
+        {catalogTool && (
+          <div className="property-hint">
+            From the tool catalog. Changing the tool makes this a free-form step.
+          </div>
+        )}
       </div>
+
+      {catalogTool && (
+        <div className="property-group catalog-section" data-testid="catalog-params">
+          <label className="property-label">{catalogTool.name} options:</label>
+          <div className="property-hint" data-testid="catalog-types">
+            {catalogTool.description} Conda package: {catalogTool.conda.package}. File types:{' '}
+            {catalogTool.inputTypes.join(', ')} {'→'} {catalogTool.outputTypes.join(', ')}.
+          </div>
+
+          {catalogTool.params.map((param) => {
+            const testId = `catalog-param-${param.id}`;
+            const value = catalogParams[param.id];
+            if (param.type === 'boolean') {
+              return (
+                <div key={param.id} className="catalog-param">
+                  <label className="property-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={value === true || value === 'true'}
+                      data-testid={testId}
+                      onChange={(e) => handleParamChange(param, e.target.checked)}
+                    />{' '}
+                    {param.label}
+                  </label>
+                  <div className="property-hint">{param.description}</div>
+                </div>
+              );
+            }
+            return (
+              <div key={param.id} className="catalog-param">
+                <label className="property-label catalog-param-label">
+                  {param.label}
+                  {param.required ? ' (required)' : ''}:
+                </label>
+                {param.type === 'select' ? (
+                  <select
+                    className="property-input"
+                    value={String(value)}
+                    data-testid={testId}
+                    onChange={(e) => handleParamChange(param, e.target.value)}
+                  >
+                    {param.options?.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                ) : param.type === 'number' ? (
+                  <input
+                    type="number"
+                    className="property-input"
+                    min={param.min}
+                    max={param.max}
+                    step={1}
+                    value={String(value ?? '')}
+                    data-testid={testId}
+                    onChange={(e) => handleParamChange(param, e.target.value)}
+                    onBlur={(e) => handleParamChange(param, coerceNumber(param, e.target.value))}
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    className="property-input"
+                    value={String(value ?? '')}
+                    data-testid={testId}
+                    placeholder={param.required ? 'Required' : undefined}
+                    onChange={(e) => handleParamChange(param, e.target.value)}
+                  />
+                )}
+                <div className="property-hint">{param.description}</div>
+              </div>
+            );
+          })}
+
+          {missingParams.length > 0 && !commandIsCustom && (
+            <div className="property-error" data-testid="catalog-missing">
+              ⚠ Fill in:{' '}
+              {missingParams
+                .map((id) => catalogTool.params.find((p) => p.id === id)?.label ?? id)
+                .join(', ')}
+            </div>
+          )}
+
+          {commandIsCustom && (
+            <div className="property-hint" data-testid="catalog-custom-note">
+              The command was edited by hand, so these options no longer change it.{' '}
+              <button
+                className="property-button property-button-secondary"
+                onClick={handleRegenerateCommand}
+                data-testid="catalog-regenerate"
+              >
+                Rebuild command from options
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="property-group">
         <label className="property-label">Command:</label>
@@ -136,7 +311,7 @@ export function PropertiesPanel({
           className="property-textarea"
           value={selectedNode.data.command || ''}
           data-testid="prop-command"
-          onChange={(e) => handleInputChange('command', e.target.value)}
+          onChange={(e) => handleCommandChange(e.target.value)}
           placeholder="Enter command to execute"
           rows={4}
         />
@@ -256,10 +431,8 @@ export function PropertiesPanel({
           className="property-input"
           value={selectedNode.data.threads ?? 1}
           data-testid="prop-threads"
-          onChange={(e) => handleInputChange('threads', e.target.value)}
-          onBlur={(e) =>
-            handleInputChange('threads', String(normalizeThreads(e.target.value)))
-          }
+          onChange={(e) => handleThreadsChange(e.target.value)}
+          onBlur={(e) => handleThreadsChange(String(normalizeThreads(e.target.value)))}
         />
         <div className="property-hint">
           CPU threads this step requests from the scheduler.

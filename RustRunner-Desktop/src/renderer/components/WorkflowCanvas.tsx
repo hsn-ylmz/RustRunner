@@ -12,10 +12,14 @@ import {
   NodeToolbar,
   useReactFlow,
   MiniMap,
+  BaseEdge,
+  getBezierPath,
+  type EdgeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { NodeStatus } from '../stepEvents';
 import { firstFreePosition, type Rect } from '../nodePlacement';
+import type { TypeCheck } from '../tools/catalog';
 
 export const COLOR_OPTIONS = [
   '#a8e6cf', '#88c5f7', '#d4a5f7', '#f5efe9',
@@ -189,8 +193,58 @@ function CustomNode({ id, data, selected }: any) {
   );
 }
 
+/**
+ * An edge coloured by its file-type check: green when an output type of the
+ * source is an input type of the target, orange when not, neutral when either
+ * end is not a catalog tool. The editor injects the check under `__typeCheck`
+ * (like `__status` on nodes), so it never reaches a saved workflow. The title
+ * is the tooltip. The check only informs; it never blocks a connection.
+ */
+function TypedEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  markerEnd,
+  style,
+  interactionWidth,
+  data,
+}: EdgeProps) {
+  const [path] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+  const check = (data as { __typeCheck?: TypeCheck } | undefined)?.__typeCheck;
+  const status = check?.status ?? 'unknown';
+
+  return (
+    <g
+      className={`typed-edge typed-edge-${status}`}
+      data-testid="typed-edge"
+      data-type-match={status}
+    >
+      {check && <title>{check.message}</title>}
+      <BaseEdge
+        id={id}
+        path={path}
+        markerEnd={markerEnd}
+        style={style}
+        interactionWidth={interactionWidth}
+      />
+    </g>
+  );
+}
+
 const nodeTypes = { custom: CustomNode };
-const defaultEdgeOptions = { animated: true };
+const edgeTypes = { typed: TypedEdge };
+const defaultEdgeOptions = { animated: true, type: 'typed' };
 
 export function WorkflowCanvas({
   nodes,
@@ -217,6 +271,7 @@ export function WorkflowCanvas({
       onConnect={onConnect}
       onSelectionChange={onSelectionChange}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       fitView
       // A lone first node would otherwise be fitted at React Flow's 2x maximum
       // zoom, which makes it huge and throws off where later nodes land.

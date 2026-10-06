@@ -38,6 +38,13 @@ import { UpdateBanner, type UpdateStatus } from './components/UpdateBanner';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { ExecutionLogs, type ExecutionTab } from './components/ExecutionLogs';
 import { StepStatusPanel } from './components/StepStatusPanel';
+import { ToolPalette } from './components/ToolPalette';
+import {
+  buildCatalogNodeData,
+  checkEdge,
+  validateCatalogNodes,
+  type CatalogTool,
+} from './tools/catalog';
 import {
   WorkflowCanvas,
   DEFAULT_COLOR,
@@ -91,6 +98,7 @@ function WorkflowEditorInner() {
   const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   /** The canvas viewport, for placing new nodes where they're actually visible. */
   const flowWrapperRef = useRef<HTMLDivElement>(null);
   const { screenToFlowPosition } = useReactFlow();
@@ -302,6 +310,19 @@ function WorkflowEditorInner() {
     [markDirty]
   );
 
+  /** Changes several fields of a node at once, so no render sees a half-applied edit. */
+  const onNodePatch = useCallback(
+    (nodeId: string, patch: Record<string, unknown>) => {
+      setNodes((nds) =>
+        nds.map((node: any) =>
+          node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+        )
+      );
+      markDirty();
+    },
+    [markDirty]
+  );
+
   const handleNodeFilesUpdate = useCallback(
     (nodeId: string, files: string[]) => {
       setNodeWildcardFiles((prev) => ({ ...prev, [nodeId]: files }));
@@ -403,6 +424,36 @@ function WorkflowEditorInner() {
     setNodes((nds) => [...nds, newNode]);
     markDirty();
   }, [nodes, screenToFlowPosition, pushHistory, markDirty]);
+
+  /** Adds a node prefilled from a catalog tool and selects it, so its options show. */
+  const addCatalogNode = useCallback(
+    (tool: CatalogTool) => {
+      pushHistory();
+
+      const position = nextNodePosition(
+        flowWrapperRef.current,
+        nodes.length,
+        screenToFlowPosition,
+        occupiedRects(nodes)
+      );
+
+      const newNode = {
+        id: `node_${Date.now()}`,
+        position,
+        selected: true,
+        data: buildCatalogNodeData(
+          tool,
+          nodes.map((n: any) => n.data?.label || '')
+        ),
+        type: 'custom',
+      };
+      setNodes((nds) => [...nds.map((n: any) => ({ ...n, selected: false })), newNode]);
+      setSelectedNodeId(newNode.id);
+      setPaletteOpen(false);
+      markDirty();
+    },
+    [nodes, screenToFlowPosition, pushHistory, markDirty]
+  );
 
   const deleteSelectedNodes = useCallback(() => {
     const selectedIds = nodes.filter((n: any) => n.selected).map((n: any) => n.id);
@@ -657,7 +708,7 @@ function WorkflowEditorInner() {
         keepGoing,
       });
 
-      const errors = validateWorkflow(workflow);
+      const errors = [...validateWorkflow(workflow), ...validateCatalogNodes(nodes)];
       if (errors.length > 0) {
         addLog('Workflow validation failed:');
         errors.forEach((err) => addLog(`  - ${err}`));
@@ -841,6 +892,17 @@ function WorkflowEditorInner() {
     [stepRuns, nodes, runPhase]
   );
 
+  // Edges carry their file-type check under a reserved `__` key for the same
+  // reason: it is derived from the nodes and must not be saved.
+  const decoratedEdges = useMemo(
+    () =>
+      edges.map((edge: any) => ({
+        ...edge,
+        data: { ...edge.data, __typeCheck: checkEdge(edge, nodes) },
+      })),
+    [edges, nodes]
+  );
+
   const decoratedNodes = nodes.map((node: any) => {
     const status = stepStatus[nodeIdToStepId(node.id)];
     const invalidReason = invalidNodeIds[node.id];
@@ -900,6 +962,15 @@ function WorkflowEditorInner() {
             </div>
 
             <div className="edit-buttons">
+              <button
+                className="toolbar-button"
+                onClick={() => setPaletteOpen((open) => !open)}
+                data-testid="open-palette"
+                aria-expanded={paletteOpen}
+                title="Search the bundled catalog of common bioinformatics tools"
+              >
+                Tool Catalog
+              </button>
               <button className="toolbar-button add-button" onClick={addNode}
               data-testid="add-node">+ Add Node</button>
               <button className="toolbar-button delete-button" onClick={deleteSelectedNodes}
@@ -967,9 +1038,13 @@ function WorkflowEditorInner() {
           </div>
 
 
+          {paletteOpen && (
+            <ToolPalette onAdd={addCatalogNode} onClose={() => setPaletteOpen(false)} />
+          )}
+
           <WorkflowCanvas
             nodes={decoratedNodes}
-            edges={edges}
+            edges={decoratedEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -981,6 +1056,7 @@ function WorkflowEditorInner() {
           <PropertiesPanel
             selectedNode={selectedNode}
             onNodeUpdate={onNodeUpdate}
+            onNodePatch={onNodePatch}
             nodeFiles={nodeWildcardFiles[selectedNode.id] || []}
             onNodeFilesUpdate={handleNodeFilesUpdate}
             addLog={addLog}

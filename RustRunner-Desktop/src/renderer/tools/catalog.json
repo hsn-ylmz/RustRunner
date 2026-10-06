@@ -1,0 +1,465 @@
+{
+  "schemaVersion": 1,
+  "version": "2026.10.0",
+  "fileTypes": ["fastq", "fasta", "sam", "bam", "bai", "vcf", "gtf", "tsv", "txt", "html", "zip"],
+  "categories": {
+    "qc": { "label": "Quality control", "color": "#a8e6cf" },
+    "trimming": { "label": "Trimming", "color": "#f5efe9" },
+    "alignment": { "label": "Alignment", "color": "#88c5f7" },
+    "processing": { "label": "BAM processing", "color": "#d4a5f7" },
+    "variant_calling": { "label": "Variant calling", "color": "#f97316" },
+    "quantification": { "label": "Quantification", "color": "#eab308" }
+  },
+  "tools": [
+    {
+      "id": "fastqc",
+      "name": "FastQC",
+      "description": "Quality report for raw sequencing reads.",
+      "category": "qc",
+      "conda": { "package": "fastqc" },
+      "command": "mkdir -p {outdir} && fastqc -t {threads} -o {outdir} {input}",
+      "defaultThreads": 2,
+      "inputTypes": ["fastq"],
+      "outputTypes": ["html", "zip"],
+      "defaultInput": "reads.fastq.gz",
+      "defaultOutput": "qc/reads_fastqc.html",
+      "params": [
+        {
+          "id": "outdir",
+          "label": "Report folder",
+          "type": "string",
+          "default": "qc",
+          "description": "Folder FastQC writes into. Keep it the same as the folder of the Output path."
+        }
+      ]
+    },
+    {
+      "id": "multiqc",
+      "name": "MultiQC",
+      "description": "Combines the reports of many tools into one HTML page.",
+      "category": "qc",
+      "conda": { "package": "multiqc" },
+      "command": "multiqc --force -o {outdir} -n {report_name} {input}",
+      "defaultThreads": 1,
+      "inputTypes": ["zip", "txt", "tsv"],
+      "outputTypes": ["html"],
+      "defaultInput": "qc/reads_fastqc.zip",
+      "defaultOutput": "multiqc/multiqc_report.html",
+      "params": [
+        {
+          "id": "outdir",
+          "label": "Report folder",
+          "type": "string",
+          "default": "multiqc",
+          "description": "Folder for the combined report. Keep it the same as the folder of the Output path."
+        },
+        {
+          "id": "report_name",
+          "label": "Report name",
+          "type": "string",
+          "default": "multiqc_report",
+          "description": "File name without .html. Keep it the same as the Output file name."
+        }
+      ]
+    },
+    {
+      "id": "fastp",
+      "name": "fastp",
+      "description": "Fast adapter and quality trimming for FASTQ reads.",
+      "category": "trimming",
+      "conda": { "package": "fastp" },
+      "command": "fastp -i {input} -o {output} -w {threads} -q {min_quality} -l {min_length} --html {html_report} --json {json_report}",
+      "defaultThreads": 4,
+      "inputTypes": ["fastq"],
+      "outputTypes": ["fastq"],
+      "defaultInput": "reads.fastq.gz",
+      "defaultOutput": "trimmed.fastq.gz",
+      "params": [
+        {
+          "id": "min_quality",
+          "label": "Minimum base quality",
+          "type": "number",
+          "default": 15,
+          "min": 0,
+          "max": 60,
+          "description": "Bases below this Phred quality count as unqualified."
+        },
+        {
+          "id": "min_length",
+          "label": "Minimum read length",
+          "type": "number",
+          "default": 15,
+          "min": 0,
+          "description": "Reads shorter than this after trimming are dropped."
+        },
+        {
+          "id": "html_report",
+          "label": "HTML report",
+          "type": "string",
+          "default": "fastp.html",
+          "description": "Where fastp writes its HTML report."
+        },
+        {
+          "id": "json_report",
+          "label": "JSON report",
+          "type": "string",
+          "default": "fastp.json",
+          "description": "Where fastp writes its JSON report."
+        }
+      ]
+    },
+    {
+      "id": "cutadapt",
+      "name": "Cutadapt",
+      "description": "Removes adapter sequences and low-quality ends from reads.",
+      "category": "trimming",
+      "conda": { "package": "cutadapt" },
+      "command": "cutadapt -j {threads} -a {adapter} -m {min_length} -q {quality_cutoff} -o {output} {input}",
+      "defaultThreads": 4,
+      "inputTypes": ["fastq"],
+      "outputTypes": ["fastq"],
+      "defaultInput": "reads.fastq.gz",
+      "defaultOutput": "trimmed.fastq.gz",
+      "params": [
+        {
+          "id": "adapter",
+          "label": "3' adapter sequence",
+          "type": "string",
+          "default": "AGATCGGAAGAGC",
+          "required": true,
+          "description": "Adapter to cut from the 3' end. The default is the Illumina universal adapter."
+        },
+        {
+          "id": "min_length",
+          "label": "Minimum read length",
+          "type": "number",
+          "default": 20,
+          "min": 0,
+          "description": "Reads shorter than this after trimming are discarded."
+        },
+        {
+          "id": "quality_cutoff",
+          "label": "Quality cutoff",
+          "type": "number",
+          "default": 20,
+          "min": 0,
+          "max": 60,
+          "description": "Trim low-quality bases from the 3' end below this Phred score."
+        }
+      ]
+    },
+    {
+      "id": "bwa-mem",
+      "name": "BWA MEM",
+      "description": "Aligns reads to a reference genome. Writes SAM.",
+      "category": "alignment",
+      "conda": { "package": "bwa" },
+      "command": "bwa mem -t {threads} {mark_secondary} -k {min_seed_length} {ref} {input} > {output}",
+      "defaultThreads": 4,
+      "inputTypes": ["fastq"],
+      "outputTypes": ["sam"],
+      "defaultInput": "reads.fastq.gz",
+      "defaultOutput": "aligned.sam",
+      "params": [
+        {
+          "id": "ref",
+          "label": "Reference FASTA",
+          "type": "string",
+          "default": "",
+          "required": true,
+          "description": "Reference genome. It must be indexed first with `bwa index`."
+        },
+        {
+          "id": "mark_secondary",
+          "label": "Mark shorter split hits as secondary",
+          "type": "boolean",
+          "default": true,
+          "flag": "-M",
+          "description": "Needed by Picard and GATK."
+        },
+        {
+          "id": "min_seed_length",
+          "label": "Minimum seed length",
+          "type": "number",
+          "default": 19,
+          "min": 1,
+          "description": "Matches shorter than this are dropped. Smaller is more sensitive and slower."
+        }
+      ]
+    },
+    {
+      "id": "bowtie2",
+      "name": "Bowtie2",
+      "description": "Aligns single-end reads to an indexed genome. Writes SAM.",
+      "category": "alignment",
+      "conda": { "package": "bowtie2" },
+      "command": "bowtie2 -p {threads} --{preset} -x {index} -U {input} -S {output}",
+      "defaultThreads": 4,
+      "inputTypes": ["fastq"],
+      "outputTypes": ["sam"],
+      "defaultInput": "reads.fastq.gz",
+      "defaultOutput": "aligned.sam",
+      "params": [
+        {
+          "id": "index",
+          "label": "Index prefix",
+          "type": "string",
+          "default": "",
+          "required": true,
+          "description": "Path prefix of the index made with `bowtie2-build`."
+        },
+        {
+          "id": "preset",
+          "label": "Preset",
+          "type": "select",
+          "default": "sensitive",
+          "options": ["very-fast", "fast", "sensitive", "very-sensitive"],
+          "description": "Speed against sensitivity."
+        }
+      ]
+    },
+    {
+      "id": "star",
+      "name": "STAR",
+      "description": "Splice-aware RNA-seq aligner. Writes a coordinate-sorted BAM.",
+      "category": "alignment",
+      "conda": { "package": "star" },
+      "command": "STAR --runThreadN {threads} --genomeDir {genome_dir} --readFilesIn {input} --readFilesCommand {read_command} --outSAMtype BAM SortedByCoordinate --outFileNamePrefix {prefix}",
+      "defaultThreads": 8,
+      "inputTypes": ["fastq"],
+      "outputTypes": ["bam"],
+      "defaultInput": "reads.fastq.gz",
+      "defaultOutput": "star/Aligned.sortedByCoord.out.bam",
+      "params": [
+        {
+          "id": "genome_dir",
+          "label": "Genome index folder",
+          "type": "string",
+          "default": "",
+          "required": true,
+          "description": "Folder made with `STAR --runMode genomeGenerate`."
+        },
+        {
+          "id": "read_command",
+          "label": "Read decompression",
+          "type": "select",
+          "default": "zcat",
+          "options": ["zcat", "cat"],
+          "description": "zcat for .gz files, cat for plain FASTQ."
+        },
+        {
+          "id": "prefix",
+          "label": "Output prefix",
+          "type": "string",
+          "default": "star/",
+          "description": "STAR adds Aligned.sortedByCoord.out.bam to this. Keep it the same as the Output path."
+        }
+      ]
+    },
+    {
+      "id": "samtools-sort",
+      "name": "samtools sort",
+      "description": "Sorts alignments by coordinate (or by read name).",
+      "category": "processing",
+      "conda": { "package": "samtools" },
+      "command": "samtools sort -@ {threads} {by_name} -m {memory_per_thread} -o {output} {input}",
+      "defaultThreads": 4,
+      "inputTypes": ["sam", "bam"],
+      "outputTypes": ["bam"],
+      "defaultInput": "aligned.sam",
+      "defaultOutput": "sorted.bam",
+      "params": [
+        {
+          "id": "by_name",
+          "label": "Sort by read name",
+          "type": "boolean",
+          "default": false,
+          "flag": "-n",
+          "description": "Off sorts by genome coordinate."
+        },
+        {
+          "id": "memory_per_thread",
+          "label": "Memory per thread",
+          "type": "string",
+          "default": "768M",
+          "description": "For example 768M or 2G."
+        }
+      ]
+    },
+    {
+      "id": "samtools-index",
+      "name": "samtools index",
+      "description": "Builds the .bai index of a coordinate-sorted BAM.",
+      "category": "processing",
+      "conda": { "package": "samtools" },
+      "command": "samtools index -@ {threads} {input} {output}",
+      "defaultThreads": 2,
+      "inputTypes": ["bam"],
+      "outputTypes": ["bai"],
+      "defaultInput": "sorted.bam",
+      "defaultOutput": "sorted.bam.bai",
+      "params": []
+    },
+    {
+      "id": "samtools-view",
+      "name": "samtools view",
+      "description": "Filters alignments and converts them to BAM.",
+      "category": "processing",
+      "conda": { "package": "samtools" },
+      "command": "samtools view -@ {threads} -b -q {min_mapq} {mapped_only} -o {output} {input}",
+      "defaultThreads": 2,
+      "inputTypes": ["sam", "bam"],
+      "outputTypes": ["bam"],
+      "defaultInput": "sorted.bam",
+      "defaultOutput": "filtered.bam",
+      "params": [
+        {
+          "id": "min_mapq",
+          "label": "Minimum mapping quality",
+          "type": "number",
+          "default": 20,
+          "min": 0,
+          "max": 255,
+          "description": "Alignments below this MAPQ are dropped."
+        },
+        {
+          "id": "mapped_only",
+          "label": "Keep mapped reads only",
+          "type": "boolean",
+          "default": true,
+          "flag": "-F 4",
+          "description": "Drops reads that did not align."
+        }
+      ]
+    },
+    {
+      "id": "samtools-flagstat",
+      "name": "samtools flagstat",
+      "description": "Counts reads by alignment flag. Writes a text summary.",
+      "category": "processing",
+      "conda": { "package": "samtools" },
+      "command": "samtools flagstat -@ {threads} {input} > {output}",
+      "defaultThreads": 2,
+      "inputTypes": ["sam", "bam"],
+      "outputTypes": ["txt"],
+      "defaultInput": "sorted.bam",
+      "defaultOutput": "flagstat.txt",
+      "params": []
+    },
+    {
+      "id": "bcftools-call",
+      "name": "bcftools call",
+      "description": "Calls SNPs and indels from a sorted BAM (mpileup then call).",
+      "category": "variant_calling",
+      "conda": { "package": "bcftools" },
+      "command": "set -o pipefail; bcftools mpileup --threads {threads} -Ou -f {ref} -q {min_mapq} {input} | bcftools call --threads {threads} -mv -Ov -o {output}",
+      "defaultThreads": 2,
+      "inputTypes": ["bam"],
+      "outputTypes": ["vcf"],
+      "defaultInput": "sorted.bam",
+      "defaultOutput": "variants.vcf",
+      "params": [
+        {
+          "id": "ref",
+          "label": "Reference FASTA",
+          "type": "string",
+          "default": "",
+          "required": true,
+          "description": "The reference the reads were aligned to. It needs a .fai index (samtools faidx)."
+        },
+        {
+          "id": "min_mapq",
+          "label": "Minimum mapping quality",
+          "type": "number",
+          "default": 20,
+          "min": 0,
+          "max": 255,
+          "description": "Alignments below this MAPQ are ignored."
+        }
+      ]
+    },
+    {
+      "id": "salmon-quant",
+      "name": "Salmon quant",
+      "description": "Quantifies transcript abundance from single-end reads.",
+      "category": "quantification",
+      "conda": { "package": "salmon" },
+      "command": "salmon quant -i {index} -l {libtype} -r {input} -p {threads} -o {outdir}",
+      "defaultThreads": 4,
+      "inputTypes": ["fastq"],
+      "outputTypes": ["tsv"],
+      "defaultInput": "reads.fastq.gz",
+      "defaultOutput": "salmon_out/quant.sf",
+      "params": [
+        {
+          "id": "index",
+          "label": "Salmon index folder",
+          "type": "string",
+          "default": "",
+          "required": true,
+          "description": "Folder made with `salmon index`."
+        },
+        {
+          "id": "libtype",
+          "label": "Library type",
+          "type": "select",
+          "default": "A",
+          "options": ["A", "U", "SF", "SR"],
+          "description": "A detects the type automatically."
+        },
+        {
+          "id": "outdir",
+          "label": "Result folder",
+          "type": "string",
+          "default": "salmon_out",
+          "description": "Salmon writes quant.sf here. Keep it the same as the folder of the Output path."
+        }
+      ]
+    },
+    {
+      "id": "featurecounts",
+      "name": "featureCounts",
+      "description": "Counts reads per gene from alignments and an annotation.",
+      "category": "quantification",
+      "conda": { "package": "subread" },
+      "command": "featureCounts -T {threads} -a {annotation} -t {feature_type} -g {attribute} {paired} -o {output} {input}",
+      "defaultThreads": 4,
+      "inputTypes": ["bam", "sam"],
+      "outputTypes": ["tsv"],
+      "defaultInput": "sorted.bam",
+      "defaultOutput": "counts.tsv",
+      "params": [
+        {
+          "id": "annotation",
+          "label": "Annotation (GTF)",
+          "type": "string",
+          "default": "",
+          "required": true,
+          "description": "Gene annotation file in GTF format."
+        },
+        {
+          "id": "feature_type",
+          "label": "Feature type",
+          "type": "string",
+          "default": "exon",
+          "description": "The GTF feature that reads are counted on."
+        },
+        {
+          "id": "attribute",
+          "label": "Group by attribute",
+          "type": "string",
+          "default": "gene_id",
+          "description": "The GTF attribute that names each counted unit."
+        },
+        {
+          "id": "paired",
+          "label": "Paired-end reads",
+          "type": "boolean",
+          "default": false,
+          "flag": "-p",
+          "description": "Count fragments instead of reads."
+        }
+      ]
+    }
+  ]
+}
