@@ -181,7 +181,14 @@ pub fn execute_step_with_events(
             });
         }
 
-        match run_attempt(step, &command_text, tool_env_map, working_dir, timeout) {
+        match run_attempt(
+            step,
+            &command_text,
+            tool_env_map,
+            working_dir,
+            timeout,
+            events,
+        ) {
             Ok(()) => {
                 if attempt > 1 {
                     info!(
@@ -271,6 +278,7 @@ fn run_attempt(
     tool_env_map: &HashMap<String, String>,
     working_dir: &Option<PathBuf>,
     timeout: Option<Duration>,
+    events: &EventSink,
 ) -> Result<(), AttemptError> {
     let step_name = &step.id;
 
@@ -295,6 +303,7 @@ fn run_attempt(
 
     if tracked.timed_out {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        events.note_stderr(step_name, &stderr);
         error!(
             "Step '{}' exceeded its {}s timeout and was killed",
             step_name,
@@ -323,6 +332,7 @@ fn run_attempt(
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
+        events.note_stderr(step_name, &stderr);
 
         error!(
             "Step '{}' failed with exit code: {:?}",

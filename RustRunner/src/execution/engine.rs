@@ -26,6 +26,7 @@ use crate::workflow::{
 use super::checks::run_checks;
 use super::events::{new_run_id, Event, EventSink, RunStatus, RunSummary};
 use super::process::is_shutting_down;
+use super::report::{RunContext, StepInfo, RUNS_DIR};
 use super::step::execute_step_with_events;
 use super::tools::is_system_tool;
 
@@ -244,6 +245,9 @@ impl Engine {
                 ..RunSummary::default()
             }
         });
+        if !self.dry_run {
+            self.events.enable_report(self.report_context());
+        }
         self.events.emit(Event::RunStarted {
             workflow: self.display_name(),
             run_id: new_run_id(),
@@ -280,6 +284,41 @@ impl Engine {
                     .map(|s| s.to_string_lossy().into_owned())
             })
             .unwrap_or_else(|| "workflow".to_string())
+    }
+
+    /// What the run report needs to know about the workflow and where to put
+    /// the report: `<working dir>/.rustrunner/runs`.
+    fn report_context(&self) -> RunContext {
+        let base = match &self.working_dir {
+            Some(dir) => std::path::absolute(dir).unwrap_or_else(|_| dir.clone()),
+            None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        };
+        let metadata = self.workflow.metadata.as_ref();
+        RunContext {
+            runs_dir: base.join(RUNS_DIR),
+            workflow_name: self.display_name(),
+            workflow_id: metadata.and_then(|m| m.id.clone()),
+            workflow_version: metadata.and_then(|m| m.version.clone()),
+            keep_going: self.keep_going || self.workflow.keep_going,
+            working_dir: base.to_string_lossy().into_owned(),
+            steps: self
+                .workflow
+                .steps
+                .iter()
+                .map(|s| StepInfo {
+                    id: s.id.clone(),
+                    tool: s.tool.clone(),
+                    command: s.command.clone(),
+                    threads: s.threads,
+                    depends_on: s.previous.clone(),
+                    checks: s
+                        .checks
+                        .iter()
+                        .map(|c| (c.kind.as_str().to_string(), c.describe()))
+                        .collect(),
+                })
+                .collect(),
+        }
     }
 
     /// Reports a finished step: its event and the run totals.
@@ -489,11 +528,19 @@ impl Engine {
         // Start resource monitoring
         let monitor_running = Arc::new(AtomicBool::new(true));
         let monitor_flag = Arc::clone(&monitor_running);
+        let monitor_events = self.events.clone();
 
         let monitor_handle = thread::spawn(move || {
             let mut monitor = ResourceMonitor::new();
+            let mut reported = 0;
             while monitor_flag.load(Ordering::Relaxed) {
                 monitor.sample();
+                // Hand new samples to the run report as they are taken, so a
+                // stopped run keeps the ones up to the stop.
+                for sample in &monitor.get_samples()[reported..] {
+                    monitor_events.record_resource(sample.cpu_usage, sample.memory_mb);
+                }
+                reported = monitor.get_samples().len();
                 thread::sleep(MONITOR_SAMPLE_INTERVAL);
             }
             monitor
@@ -1768,5 +1815,130 @@ mod tests {
             (engine.run().map_err(|e| e.to_string()), ())
         };
         result.unwrap();
+    }
+
+    // ---- run report -------------------------------------------------------
+
+    use crate::execution::report::{read_index, RUNS_DIR};
+
+    /// The single run directory under `dir`, and its `run.json`.
+    fn only_run(dir: &Path) -> (PathBuf, Value) {
+        let index = read_index(&dir.join(RUNS_DIR));
+        assert_eq!(index.len(), 1, "{:?}", index);
+        let run_dir = dir.join(RUNS_DIR).join(&index[0].run_id);
+        let json = fs::read_to_string(run_dir.join("run.json")).unwrap();
+        (run_dir, serde_json::from_str(&json).unwrap())
+    }
+
+    #[test]
+    fn test_a_real_run_writes_a_report_and_names_it_in_run_finished() {
+        let dir = tempdir().unwrap();
+        let up = Step::new("rep_up", "bash", "echo up > up.txt")
+            .with_output("up.txt")
+            .with_check(OutputCheck::new(CheckKind::Exists));
+        let (result, events) = run_with_events_in(two_step_workflow(up), dir.path(), false);
+        result.unwrap();
+
+        let (run_dir, run) = only_run(dir.path());
+        let report = run_dir.join("report.html");
+        assert!(report.is_file());
+        let finished = events.last().unwrap();
+        assert_eq!(finished["event"], "run_finished");
+        let reported = PathBuf::from(finished["report"].as_str().unwrap());
+        assert!(reported.is_absolute());
+        assert_eq!(
+            reported.canonicalize().unwrap(),
+            report.canonicalize().unwrap()
+        );
+
+        // The record agrees with the events and the totals.
+        assert_eq!(run["status"], "succeeded");
+        assert_eq!(run["run_id"], events[0]["run_id"]);
+        assert_eq!(run["summary"], finished["summary"]);
+        assert_eq!(run["steps"].as_array().unwrap().len(), 2);
+        assert_eq!(run["steps"][0]["id"], "rep_up");
+        assert_eq!(run["steps"][0]["status"], "succeeded");
+        assert_eq!(run["steps"][0]["attempts"], 1);
+        assert_eq!(run["steps"][0]["checks"][0]["passed"], true);
+        assert_eq!(run["steps"][1]["depends_on"][0], "rep_up");
+
+        let html = fs::read_to_string(report).unwrap();
+        assert!(html.contains("rep_up") && html.contains("rep_up_down"));
+    }
+
+    #[test]
+    fn test_a_dry_run_writes_no_report() {
+        let dir = tempdir().unwrap();
+        let wf = Workflow::from_steps(vec![Step::new("rep_dry", "bash", "echo hi")]);
+        let (result, events) = run_with_events_in(wf, dir.path(), true);
+        result.unwrap();
+        assert!(!dir.path().join(RUNS_DIR).exists());
+        assert!(!dir.path().join(".rustrunner").exists());
+        assert!(events.last().unwrap().get("report").is_none());
+    }
+
+    #[test]
+    fn test_a_failed_run_reports_the_failure_with_its_stderr_tail() {
+        let dir = tempdir().unwrap();
+        let bad = Step::new("rep_bad", "bash", "echo 'disk on fire' >&2; exit 3");
+        let (result, events) = run_with_events_in(two_step_workflow(bad), dir.path(), false);
+        assert!(result.is_err());
+
+        let (_, run) = only_run(dir.path());
+        assert_eq!(run["status"], "failed");
+        assert_eq!(run["steps"][0]["status"], "failed");
+        assert_eq!(run["steps"][0]["stderr_tail"], "disk on fire");
+        assert!(run["steps"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("rep_bad"));
+        assert_eq!(run["steps"][1]["status"], "skipped");
+        assert!(run["steps"][1]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("rep_bad"));
+        assert!(run["summary"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("rep_bad"));
+        assert!(events.last().unwrap()["report"].is_string());
+    }
+
+    #[test]
+    fn test_a_report_is_written_without_a_listener_and_escapes_step_names() {
+        let dir = tempdir().unwrap();
+        let evil = "<script>alert(1)</script>";
+        let wf = Workflow::from_steps(vec![Step::new(evil, "bash", "echo '<b>x</b>' >&2; exit 1")])
+            .with_metadata(crate::workflow::WorkflowMetadata::new(Some(evil), None));
+        let mut engine = Engine::new(wf);
+        engine.set_working_dir(dir.path().to_path_buf());
+        engine.set_workflow_path(dir.path().join("wf.yaml").to_str().unwrap());
+        assert!(engine.run().is_err());
+
+        let (run_dir, _) = only_run(dir.path());
+        let html = fs::read_to_string(run_dir.join("report.html")).unwrap();
+        assert!(
+            !html.contains("<script"),
+            "unescaped step name in the report"
+        );
+        assert!(!html.contains("<b>x</b>"));
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+    }
+
+    #[test]
+    fn test_runs_are_listed_newest_first() {
+        let dir = tempdir().unwrap();
+        for n in 0..2 {
+            let wf = Workflow::from_steps(vec![Step::new(format!("rep_hist{n}"), "bash", "true")]);
+            // The run id has one-second resolution plus the process id, so a
+            // second run in this process would reuse it; wait it out.
+            std::thread::sleep(Duration::from_millis(1100));
+            let (result, _) = run_with_events_in(wf, dir.path(), false);
+            result.unwrap();
+        }
+        let index = read_index(&dir.path().join(RUNS_DIR));
+        assert_eq!(index.len(), 2);
+        assert!(index[0].started_at >= index[1].started_at);
+        assert_ne!(index[0].run_id, index[1].run_id);
     }
 }

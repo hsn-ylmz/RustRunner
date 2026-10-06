@@ -27,10 +27,13 @@
 //! | `step_failed` | `step`, `reason`, `attempts` |
 //! | `step_skipped` | `step`, `reason` (`up_to_date` when its outputs are current, else why it was never reached) |
 //! | `check_failed` | `step`, `kind`, `blocking`, `message` |
-//! | `run_finished` | `status` (`succeeded`, `failed`, `stopped`), `summary` |
+//! | `run_finished` | `status` (`succeeded`, `failed`, `stopped`), `summary`, `report` (optional) |
 //!
 //! `summary` holds `total`, `succeeded`, `failed`, `skipped`, `retried`,
 //! `check_warnings`, `duration_secs` and, unless the run succeeded, `error`.
+//! `report` is the absolute path of the run's `report.html` (see
+//! [`super::report`]); it is absent for a dry run and when the report could not
+//! be written.
 //!
 //! A step's events always appear in order: `step_started`, then for each failed
 //! attempt that will be repeated `step_retrying` followed by `step_started`
@@ -45,7 +48,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use chrono::{SecondsFormat, Utc};
+use log::warn;
 use serde::Serialize;
+
+use super::report::{self, RunContext, RunLog};
 
 /// Marks an event line on stderr.
 pub const EVENT_PREFIX: &str = "RUSTRUNNER_EVENT ";
@@ -127,6 +133,9 @@ pub enum Event {
     RunFinished {
         status: RunStatus,
         summary: RunSummary,
+        /// Where the run's HTML report was written, if it was.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        report: Option<String>,
     },
 }
 
@@ -160,6 +169,16 @@ struct Inner {
     /// path; the CLI's signal handler reads them to report a stopped run.
     tally: Mutex<RunSummary>,
     started: Instant,
+    /// Serializes `emit` so that the "nothing after `run_finished`" rule and
+    /// the run log see the same order as the writer, with or without one.
+    gate: Mutex<()>,
+    /// What the events said, kept for the run report.
+    log: Mutex<RunLog>,
+    /// Where and how to write the run report; `None` for a dry run.
+    report: Mutex<Option<RunContext>>,
+    /// Held while the run is being finished, so two finishers (the engine and
+    /// the signal handler) never race and the loser waits for the winner.
+    finishing: Mutex<()>,
 }
 
 /// Where run events go. Cheap to clone; clones share the writer and tallies.
@@ -192,6 +211,10 @@ impl EventSink {
                 finished: AtomicBool::new(false),
                 tally: Mutex::new(RunSummary::default()),
                 started: Instant::now(),
+                gate: Mutex::new(()),
+                log: Mutex::new(RunLog::default()),
+                report: Mutex::new(None),
+                finishing: Mutex::new(()),
             }),
         }
     }
@@ -221,15 +244,13 @@ impl EventSink {
     /// `run_finished` is written at most once, and nothing is written after
     /// it: on a Stop the signal handler finishes the run while worker threads
     /// may still be reporting the steps it is killing.
+    ///
+    /// Every event is also folded into the run log the report is built from,
+    /// whether or not a writer is attached.
     pub fn emit(&self, event: Event) {
-        let Some(writer) = &self.inner.writer else {
-            return;
-        };
-        let mut line = render_line(&event);
-        line.push('\n');
-        // The flag is checked under the writer lock, so no event can slip in
+        // The flag is checked under the gate, so no event can slip in
         // between `run_finished` being decided and being written.
-        let mut writer = writer.lock().unwrap_or_else(|e| e.into_inner());
+        let _gate = self.inner.gate.lock().unwrap_or_else(|e| e.into_inner());
         let is_finish = matches!(event, Event::RunFinished { .. });
         if is_finish {
             if self.inner.finished.swap(true, Ordering::SeqCst) {
@@ -238,8 +259,46 @@ impl EventSink {
         } else if self.inner.finished.load(Ordering::SeqCst) {
             return;
         }
+        self.inner
+            .log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .apply(&event, Utc::now());
+
+        let Some(writer) = &self.inner.writer else {
+            return;
+        };
+        let mut line = render_line(&event);
+        line.push('\n');
+        let mut writer = writer.lock().unwrap_or_else(|e| e.into_inner());
         let _ = writer.write_all(line.as_bytes());
         let _ = writer.flush();
+    }
+
+    /// Turns on the run report: when the run finishes, `run.json` and
+    /// `report.html` are written to `ctx.runs_dir` and `run_finished` carries
+    /// the path. Left off, as for a dry run, nothing is written.
+    pub fn enable_report(&self, ctx: RunContext) {
+        *self.inner.report.lock().unwrap_or_else(|e| e.into_inner()) = Some(ctx);
+    }
+
+    /// Remembers what a failed attempt of `step` wrote to stderr, for the report.
+    pub fn note_stderr(&self, step: &str, stderr: &str) {
+        self.inner
+            .log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .note_stderr(step, stderr);
+    }
+
+    /// Records one resource sample of the engine process, for the report.
+    pub fn record_resource(&self, cpu_percent: f32, memory_mb: u64) {
+        let t = self.inner.started.elapsed().as_secs_f64();
+        self.inner
+            .log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .add_sample(t, cpu_percent, memory_mb);
     }
 
     /// Updates the running totals.
@@ -259,12 +318,51 @@ impl EventSink {
 
     /// Emits `run_finished` with the current totals (once; later calls do
     /// nothing). `error` explains a run that did not succeed.
+    ///
+    /// When the report is enabled it is written first, so the event can name
+    /// it. A report that cannot be written is logged and never fails the run.
     pub fn finish(&self, status: RunStatus, error: Option<String>) {
+        let _finishing = self
+            .inner
+            .finishing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if self.inner.finished.load(Ordering::SeqCst) {
+            return;
+        }
         let mut summary = self.tally();
         summary.duration_secs =
             (self.inner.started.elapsed().as_secs_f64() * 1000.0).round() / 1000.0;
         summary.error = error;
-        self.emit(Event::RunFinished { status, summary });
+        let report = self.write_report(status, &summary);
+        self.emit(Event::RunFinished {
+            status,
+            summary,
+            report,
+        });
+    }
+
+    /// Writes the run report if it is enabled; the path as text on success.
+    fn write_report(&self, status: RunStatus, summary: &RunSummary) -> Option<String> {
+        let ctx = self
+            .inner
+            .report
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()?;
+        let record = self
+            .inner
+            .log
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .build_record(&ctx, status, summary.clone(), Utc::now());
+        match report::write_run(&ctx.runs_dir, &record) {
+            Ok(path) => Some(path.to_string_lossy().into_owned()),
+            Err(e) => {
+                warn!("Could not write the run report: {}", e);
+                None
+            }
+        }
     }
 }
 

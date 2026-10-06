@@ -24,6 +24,7 @@ import MenuBuilder from './menu';
 import { setupAutoUpdater } from './updater';
 import { resolveHtmlPath } from './util';
 import { readResumeInfoFor, workflowFileStem } from './resumeState';
+import { readRunHistory, resolveReportPath, type RunHistoryEntry } from './runHistory';
 import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
 
 // =============================================================================
@@ -439,6 +440,40 @@ ipcMain.handle(
   'get-resume-info',
   (_event, workflowName: string, workingDir: string, workflowId?: string) =>
     readResumeInfoFor(workingDir, workflowName, workflowId)
+);
+
+/** The runs of this workflow in the working directory, newest first. */
+ipcMain.handle(
+  'list-run-history',
+  (_event, workingDir: string, workflowName: string, workflowId?: string): RunHistoryEntry[] =>
+    readRunHistory(workingDir, workflowName, workflowId)
+);
+
+/**
+ * Opens a run's HTML report in the system's default application. Only a
+ * `<run id>/report.html` inside `<working dir>/.rustrunner/runs` is opened:
+ * the renderer's path is resolved (symlinks included) and refused otherwise,
+ * so this cannot be used to open an arbitrary file or program.
+ */
+ipcMain.handle(
+  'open-run-report',
+  async (
+    _event,
+    workingDir: string,
+    reportRef: string
+  ): Promise<{ ok: true; path: string } | { ok: false; error: string }> => {
+    const target = resolveReportPath(workingDir, reportRef);
+    if (!target) {
+      log.warn('Refused to open a report outside the run directory', { workingDir, reportRef });
+      return { ok: false, error: 'That report is not inside this workflow\'s run history.' };
+    }
+    const failure = await shell.openPath(target);
+    if (failure) {
+      log.error('Could not open report', failure);
+      return { ok: false, error: failure };
+    }
+    return { ok: true, path: target };
+  }
 );
 
 ipcMain.on('pause-workflow', (event: IpcMainEvent) => {

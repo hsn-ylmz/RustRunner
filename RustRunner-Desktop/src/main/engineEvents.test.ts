@@ -37,6 +37,12 @@ describe('parseEngineLine', () => {
       { event: 'step_skipped', step: 'c', reason: 'completed in an earlier run' },
       { event: 'check_failed', step: 'b', kind: 'non_empty', blocking: true, message: 'is empty' },
       { event: 'run_finished', status: 'failed', summary: { ...SUMMARY, error: 'x' } },
+      {
+        event: 'run_finished',
+        status: 'succeeded',
+        summary: SUMMARY,
+        report: '/work/.rustrunner/runs/r1/report.html',
+      },
     ];
     for (const body of bodies) {
       const parsed = parseEngineLine(line(body));
@@ -65,6 +71,10 @@ describe('parseEngineLine', () => {
     expect(parseEngineLine(line({ event: 'run_finished', status: 'failed', summary: {} }))).toEqual({
       type: 'text',
     });
+    // The optional report path must be text when present.
+    expect(
+      parseEngineLine(line({ event: 'run_finished', status: 'failed', summary: SUMMARY, report: 7 }))
+    ).toEqual({ type: 'text' });
   });
 
   it('drops events it does not know and events of another schema version', () => {

@@ -9,6 +9,7 @@
 //! - [`checks`]: Post-step output checks
 //! - [`engine`]: Main execution engine orchestrating workflow runs
 //! - [`events`]: Machine-readable run events (`--json-events`)
+//! - [`report`]: Per-run HTML report, `run.json` and the run history index
 //! - [`process`]: Process-group tracking and signal-driven termination
 //! - [`step`]: Individual step execution logic
 //! - [`tools`]: Shared system-tool classification
@@ -17,6 +18,7 @@ pub mod checks;
 pub mod engine;
 pub mod events;
 pub mod process;
+pub mod report;
 pub mod step;
 pub mod tools;
 

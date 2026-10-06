@@ -58,7 +58,13 @@ export type EngineEventBody =
       blocking: boolean;
       message: string;
     }
-  | { event: 'run_finished'; status: RunStatus; summary: RunSummary };
+  | {
+      event: 'run_finished';
+      status: RunStatus;
+      summary: RunSummary;
+      /** Absolute path of the run's HTML report; absent for a dry run. */
+      report?: string;
+    };
 
 /** One event as it arrives over IPC. */
 export type EngineEvent = { v: 1; ts: string } & EngineEventBody;
@@ -115,7 +121,8 @@ const VALIDATORS: Record<string, (o: Obj) => boolean> = {
     isStr(o.step) && isStr(o.kind) && isBool(o.blocking) && isStr(o.message),
   run_finished: (o) =>
     (o.status === 'succeeded' || o.status === 'failed' || o.status === 'stopped') &&
-    validSummary(o.summary),
+    validSummary(o.summary) &&
+    (o.report === undefined || isStr(o.report)),
 };
 
 /** Classifies one line (without its newline) of engine output. */

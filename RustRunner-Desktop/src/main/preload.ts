@@ -8,6 +8,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { ResumeInfo } from './resumeState';
 import type { EngineEvent } from './engineEvents';
+import type { RunHistoryEntry } from './runHistory';
 
 // Type definitions
 export type Channels = 'ipc-example';
@@ -98,6 +99,23 @@ const electronHandler = {
       workflowId?: string
     ): Promise<ResumeInfo> {
       return ipcRenderer.invoke('get-resume-info', workflowName, workingDir, workflowId);
+    },
+
+    // Run history: the runs of a workflow, and opening one's HTML report. The
+    // main process only opens reports inside the working directory's run folder.
+    listRunHistory(
+      workingDir: string,
+      workflowName: string,
+      workflowId?: string
+    ): Promise<RunHistoryEntry[]> {
+      return ipcRenderer.invoke('list-run-history', workingDir, workflowName, workflowId);
+    },
+
+    openRunReport(
+      workingDir: string,
+      reportRef: string
+    ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('open-run-report', workingDir, reportRef);
     },
 
     pauseWorkflow() {

@@ -3,6 +3,9 @@
  */
 
 import type { EngineEvent } from '../main/engineEvents';
+import type { RunHistoryEntry } from '../main/runHistory';
+
+export type { RunHistoryEntry };
 
 interface WorkflowData {
   /** Optional id/name/version; read by the engine's `metadata` field. */
@@ -98,6 +101,21 @@ interface ElectronAPI {
       fresh?: boolean
     ): void;
     getResumeInfo(workflowName: string, workingDir: string, workflowId?: string): Promise<ResumeInfo>;
+    /** The runs of this workflow in the working directory, newest first. */
+    listRunHistory(
+      workingDir: string,
+      workflowName: string,
+      workflowId?: string
+    ): Promise<RunHistoryEntry[]>;
+    /**
+     * Opens a run's HTML report. `reportRef` is `<run id>/report.html` or the
+     * absolute path from `run_finished`; the main process refuses anything
+     * outside `<working dir>/.rustrunner/runs`.
+     */
+    openRunReport(
+      workingDir: string,
+      reportRef: string
+    ): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
     pauseWorkflow(): void;
     resumeWorkflow(): void;
     stopWorkflow(): void;

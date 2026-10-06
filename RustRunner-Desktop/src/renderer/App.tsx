@@ -38,6 +38,8 @@ import { UpdateBanner, type UpdateStatus } from './components/UpdateBanner';
 import { PropertiesPanel } from './components/PropertiesPanel';
 import { ExecutionLogs, type ExecutionTab } from './components/ExecutionLogs';
 import { StepStatusPanel } from './components/StepStatusPanel';
+import { RunHistoryPanel } from './components/RunHistoryPanel';
+import type { RunHistoryEntry } from '../main/runHistory';
 import { ToolPalette } from './components/ToolPalette';
 import {
   buildCatalogNodeData,
@@ -96,6 +98,10 @@ function WorkflowEditorInner() {
   const [runPhase, setRunPhase] = useState<RunPhase>('none');
   const [executionTab, setExecutionTab] = useState<ExecutionTab>('logs');
   const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
+  /** Runs of this workflow in the working directory, newest first. */
+  const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
+  /** HTML report of the last real run (absolute path from the engine). */
+  const [latestReport, setLatestReport] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -178,6 +184,10 @@ function WorkflowEditorInner() {
     // Typed run events drive the canvas badges and the status panel.
     const unsubscribeEvent = window.electron.ipcRenderer.onWorkflowEvent(
       (runEvent) => {
+        if (runEvent.event === 'run_started') setLatestReport(null);
+        if (runEvent.event === 'run_finished' && runEvent.report) {
+          setLatestReport(runEvent.report);
+        }
         const event = toStepEvent(runEvent);
         if (!event || !resolveBaseStepId(event.stepId, baseStepIdsRef.current)) {
           return;
@@ -770,6 +780,43 @@ function WorkflowEditorInner() {
     };
   }, [workflowName, workflowId, workingDirectory, executionState]);
 
+  // The runs of this workflow, from the index the engine keeps in the working
+  // directory; refreshed whenever a run ends.
+  useEffect(() => {
+    if (!workingDirectory) {
+      setRunHistory([]);
+      return;
+    }
+    if (executionState !== 'idle') return;
+    let cancelled = false;
+    window.electron.ipcRenderer
+      .listRunHistory(workingDirectory, workflowName, workflowId)
+      .then((runs) => {
+        if (!cancelled) setRunHistory(runs);
+      })
+      .catch(() => {
+        if (!cancelled) setRunHistory([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowName, workflowId, workingDirectory, executionState]);
+
+  const openReport = useCallback(
+    async (reportRef: string) => {
+      try {
+        const result = await window.electron.ipcRenderer.openRunReport(
+          workingDirectory,
+          reportRef
+        );
+        if (result.ok === false) addLog(`Could not open the report: ${result.error}`);
+      } catch (err) {
+        addLog(`Could not open the report: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [workingDirectory, addLog]
+  );
+
   // Execution. A normal run lets the engine skip every step whose outputs are
   // up to date (they exist, are newer than the inputs, and the step's command
   // is unchanged since it last succeeded); steps that are out of date run
@@ -1075,6 +1122,16 @@ function WorkflowEditorInner() {
         onTabChange={setExecutionTab}
         stepCount={statusRows.length}
         stepsView={<StepStatusPanel rows={statusRows} phase={runPhase} />}
+        historyView={
+          <RunHistoryPanel
+            runs={runHistory}
+            hasWorkingDirectory={Boolean(workingDirectory)}
+            onOpenReport={openReport}
+          />
+        }
+        historyCount={runHistory.length}
+        latestReport={latestReport !== null}
+        onOpenLatestReport={() => latestReport && openReport(latestReport)}
       />
 
       {/* Name / details dialog */}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, type ReactNode } from 'react';
 
-export type ExecutionTab = 'logs' | 'steps';
+export type ExecutionTab = 'logs' | 'steps' | 'history';
 
 /**
  * Picks a severity class for one log line.
@@ -29,6 +29,10 @@ export function ExecutionLogs({
   onTabChange,
   stepCount = 0,
   stepsView,
+  historyView,
+  historyCount = 0,
+  latestReport = false,
+  onOpenLatestReport,
 }: {
   logs: string[];
   visible: boolean;
@@ -39,8 +43,16 @@ export function ExecutionLogs({
   onTabChange?: (tab: ExecutionTab) => void;
   stepCount?: number;
   stepsView?: ReactNode;
+  /** The run history tab; shown when given. */
+  historyView?: ReactNode;
+  historyCount?: number;
+  /** True once a run has produced a report that can be opened. */
+  latestReport?: boolean;
+  onOpenLatestReport?: () => void;
 }) {
+  const showHistory = Boolean(historyView) && tab === 'history';
   const showSteps = Boolean(stepsView) && tab === 'steps';
+  const showLogs = !showSteps && !showHistory;
   const logsEndRef = useRef<HTMLDivElement>(null);
   const logContentRef = useRef<HTMLDivElement>(null);
   /** False while the user has scrolled up, so new output doesn't yank them back. */
@@ -83,12 +95,33 @@ export function ExecutionLogs({
             >
               Step Status{stepCount > 0 ? ` (${stepCount})` : ''}
             </button>
+            {historyView && (
+              <button
+                role="tab"
+                aria-selected={tab === 'history'}
+                data-testid="tab-history"
+                className={`execution-tab ${tab === 'history' ? 'active' : ''}`}
+                onClick={() => onTabChange('history')}
+              >
+                Run History{historyCount > 0 ? ` (${historyCount})` : ''}
+              </button>
+            )}
           </div>
         ) : (
           <h3>Execution Logs</h3>
         )}
         <div className="execution-panel-controls">
-          {!showSteps && (
+          {latestReport && onOpenLatestReport && (
+            <button
+              className="panel-button"
+              data-testid="open-latest-report"
+              onClick={onOpenLatestReport}
+              title="Open the HTML report of the last run"
+            >
+              Open latest report
+            </button>
+          )}
+          {showLogs && (
             <button className="panel-button" onClick={onClear}>Clear</button>
           )}
           <button className="panel-button" onClick={onToggle}>
@@ -99,7 +132,10 @@ export function ExecutionLogs({
       {visible && showSteps && (
         <div className="execution-panel-content">{stepsView}</div>
       )}
-      {visible && !showSteps && (
+      {visible && showHistory && (
+        <div className="execution-panel-content">{historyView}</div>
+      )}
+      {visible && showLogs && (
         <div
           className="execution-panel-content"
           ref={logContentRef}

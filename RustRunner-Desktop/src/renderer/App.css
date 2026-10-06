@@ -781,6 +781,18 @@
   color: var(--red-dark);
 }
 
+.history-succeeded .step-glyph {
+  color: var(--green-dark);
+}
+
+.history-failed .step-glyph {
+  color: var(--red-dark);
+}
+
+.history-stopped .step-glyph {
+  color: #d98a00;
+}
+
 .step-state-pending,
 .step-state-skipped {
   opacity: 0.75;
