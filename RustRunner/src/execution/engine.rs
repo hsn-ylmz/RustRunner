@@ -480,6 +480,46 @@ impl Engine {
             }
         }
 
+        // A failure ends the loop while sibling steps may still be running.
+        // Wait for them rather than returning: once this process exits nothing
+        // could stop their process groups any more (the GUI's Stop signals
+        // only this process), and steps that do finish are recorded so a
+        // resumed run skips them.
+        if running_count > 0 {
+            info!(
+                "Waiting for {} running step(s) to finish before stopping",
+                running_count
+            );
+            let first_failure = state.failed_step.clone();
+            while running_count > 0 {
+                let Ok(done) = rx.recv() else { break };
+                running_count -= 1;
+                check_warnings.extend(done.warnings);
+                planner.record_attempts(&done.step_id, done.attempts);
+                state.record_attempts(&done.step_id, done.attempts);
+                match done.result {
+                    Ok(()) => {
+                        info!("Step '{}' completed successfully", done.step_id);
+                        planner.mark_step_completed(&done.step_id);
+                        timeline.add_event(done.step_id.clone(), EventType::Completed);
+                        state.mark_completed(&done.step_id);
+                    }
+                    Err(e) => {
+                        error!("Step '{}' failed: {}", done.step_id, e);
+                        planner.mark_step_failed(&done.step_id, e);
+                        timeline.add_event(done.step_id.clone(), EventType::Failed);
+                    }
+                }
+                // The run still stopped at the first failure.
+                if let Some(failed) = &first_failure {
+                    state.mark_failed(failed);
+                }
+                if let Err(e) = state.save() {
+                    warn!("Failed to persist state: {}", e);
+                }
+            }
+        }
+
         // Stop monitoring - always run, on both the success and error paths, so
         // the sampling thread is never left detached.
         monitor_running.store(false, Ordering::Relaxed);
@@ -530,13 +570,6 @@ impl Engine {
         }
     }
 
-    /// Sets up conda environments for all tools in the workflow.
-    ///
-    /// For each unique tool in the workflow:
-    /// 1. Skips system tools (bash, cat, etc.)
-    /// 2. Checks if tool is already in env_map
-    /// 3. Creates a new conda environment if needed
-    /// 4. Updates env_map with the new mapping
     /// Returns the unique, sorted tools in the workflow that are not system
     /// tools and therefore need a conda environment.
     pub(crate) fn tools_requiring_environments(&self) -> Vec<String> {
@@ -552,6 +585,13 @@ impl Engine {
         tools
     }
 
+    /// Sets up conda environments for all tools in the workflow.
+    ///
+    /// For each unique tool in the workflow:
+    /// 1. Skips system tools (bash, cat, etc.)
+    /// 2. Checks if tool is already in env_map
+    /// 3. Creates a new conda environment if needed
+    /// 4. Updates env_map with the new mapping
     fn setup_environments(&self) -> Result<(), Box<dyn std::error::Error>> {
         let conda_tools = self.tools_requiring_environments();
 
@@ -836,6 +876,28 @@ mod tests {
             .unwrap()
             .starts_with("Output check warnings:"));
         assert_eq!(format_check_warnings(&[]), None);
+    }
+
+    /// Regression: a failing step used to make `run()` return while sibling
+    /// steps were still running. The CLI then exited, leaving those steps'
+    /// process groups running unattended (out of reach of the GUI's Stop) and
+    /// never recording them as finished for a resume.
+    #[test]
+    fn test_failure_waits_for_running_siblings_and_records_them() {
+        let wf = Workflow::from_steps(vec![
+            Step::new("sib_fail", "bash", "exit 1"),
+            Step::new("sib_slow", "bash", "sleep 1; touch slow.txt").with_output("slow.txt"),
+        ]);
+        let (result, dir) = run_in_tempdir(wf);
+        let err = result.unwrap_err();
+        assert!(err.contains("Workflow failed at step 'sib_fail'"), "{err}");
+        assert!(
+            dir.path().join("slow.txt").exists(),
+            "run() returned before the running sibling finished"
+        );
+        let state = WorkflowState::load_in("wf.yaml", Some(dir.path())).unwrap();
+        assert!(state.completed_steps.contains("sib_slow"));
+        assert_eq!(state.failed_step.as_deref(), Some("sib_fail"));
     }
 
     #[test]

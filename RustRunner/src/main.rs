@@ -200,11 +200,24 @@ fn setup_working_directory(
         return Err(format!("Path is not a directory: {}", dir.display()).into());
     }
 
+    // Make the path absolute before changing into it: a relative path would
+    // otherwise be resolved a second time against itself by everything that
+    // joins it later (outputs, checks, the saved run state).
+    let dir = std::path::absolute(&dir)?;
+
     // Change to working directory for relative path resolution
     env::set_current_dir(&dir)?;
-    info!("Working directory: {}", env::current_dir()?.display());
+    info!("Working directory: {}", dir.display());
 
     Ok(Some(dir))
+}
+
+/// Resolves `path` against the launch directory, so it keeps pointing at the
+/// same file after the working directory changes.
+fn absolute_from_launch_dir(path: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let resolved =
+        std::path::absolute(path).map_err(|e| format!("Cannot resolve path '{}': {}", path, e))?;
+    Ok(resolved.to_string_lossy().into_owned())
 }
 
 /// Main application entry point.
@@ -233,6 +246,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if config.dry_run {
         info!("Mode: DRY RUN (commands will not execute)");
         println!();
+    }
+
+    // Paths given on the command line are relative to where rustrunner was
+    // started; pin them down before changing into the working directory.
+    let mut config = config;
+    config.workflow_path = absolute_from_launch_dir(&config.workflow_path)?;
+    if let Some(pause) = config.pause_flag_path.take() {
+        config.pause_flag_path = Some(absolute_from_launch_dir(&pause)?);
     }
 
     // Setup working directory

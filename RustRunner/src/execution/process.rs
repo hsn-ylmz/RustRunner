@@ -116,26 +116,48 @@ pub fn run_tracked_with_timeout(
         None => child.wait(),
         Some(limit) => {
             let deadline = Instant::now() + limit;
+            // When the group gets SIGKILL if it is still running after the
+            // polite request. Only set once the timeout has fired.
+            let mut kill_at: Option<Instant> = None;
             loop {
+                // Keep reaping while waiting for the group to stop: an
+                // unreaped zombie child would make the group look alive.
                 match child.try_wait() {
                     Ok(Some(status)) => break Ok(status),
                     Ok(None) => {}
                     Err(e) => break Err(e),
                 }
-                if !timed_out && Instant::now() >= deadline {
+                let now = Instant::now();
+                if !timed_out && now >= deadline {
                     timed_out = true;
                     warn!(
                         "Process group {} exceeded its {}s timeout; terminating",
                         pid,
                         limit.as_secs()
                     );
-                    terminate_groups(&[pid]);
+                    kill_at = Some(request_termination(pid));
                     continue;
+                }
+                if let Some(at) = kill_at {
+                    if now >= at {
+                        warn!("Process group {} ignored SIGTERM; sending SIGKILL", pid);
+                        force_kill(pid);
+                        kill_at = None;
+                    }
                 }
                 thread::sleep(TIMEOUT_POLL);
             }
         }
     };
+
+    // The direct child is gone, but on timeout something else in its group
+    // may still hold the output pipes open (which would block the readers
+    // below). The child has been reaped, so this returns at once unless such
+    // a straggler really exists.
+    #[cfg(unix)]
+    if timed_out {
+        terminate_groups(&[pid]);
+    }
     running().retain(|p| *p != pid);
 
     let status = status?;
@@ -213,6 +235,33 @@ pub fn terminate_groups(pids: &[u32]) {
             }
         }
     }
+}
+
+/// Asks a timed-out process group to stop without waiting for it, and returns
+/// when it should be force-killed if it is still running.
+///
+/// On unix this sends SIGTERM to the group. Windows has no polite equivalent
+/// for a console tree, so the tree is killed right away.
+fn request_termination(pid: u32) -> Instant {
+    #[cfg(unix)]
+    {
+        signal_group(pid, libc::SIGTERM);
+        Instant::now() + TERMINATION_GRACE
+    }
+    #[cfg(not(unix))]
+    {
+        terminate_groups(&[pid]);
+        Instant::now()
+    }
+}
+
+/// Force-kills a process group without waiting (no-op on Windows, where
+/// [`request_termination`] already killed the tree).
+fn force_kill(pid: u32) {
+    #[cfg(unix)]
+    signal_group(pid, libc::SIGKILL);
+    #[cfg(not(unix))]
+    let _ = pid;
 }
 
 #[cfg(unix)]
@@ -332,6 +381,34 @@ mod tests {
             wait_until(|| !pid_alive(grandchild)),
             "grandchild {grandchild} survived the timeout"
         );
+    }
+
+    /// Regression: the timeout path used to wait out the whole SIGTERM grace
+    /// period because nobody reaped the terminated child, so its zombie kept
+    /// the process group "alive" and every timeout cost an extra ~3s.
+    #[test]
+    fn test_timeout_returns_promptly_when_child_obeys_sigterm() {
+        let mut cmd = Command::new("bash");
+        cmd.args(["-c", "sleep 60"]);
+        let started = Instant::now();
+        let out = run_tracked_with_timeout(cmd, Some(Duration::from_millis(200))).unwrap();
+        assert!(out.timed_out);
+        assert!(
+            started.elapsed() < TERMINATION_GRACE,
+            "timeout took {:?}, i.e. it waited out the grace period",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn test_timeout_escalates_to_sigkill_for_stubborn_child() {
+        let mut cmd = Command::new("bash");
+        cmd.args(["-c", "trap '' TERM; while true; do sleep 0.1; done"]);
+        let started = Instant::now();
+        let out = run_tracked_with_timeout(cmd, Some(Duration::from_millis(200))).unwrap();
+        assert!(out.timed_out);
+        assert!(!out.output.status.success());
+        assert!(started.elapsed() < Duration::from_secs(20));
     }
 
     #[test]
