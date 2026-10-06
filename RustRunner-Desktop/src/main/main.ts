@@ -23,12 +23,15 @@ import yaml from 'js-yaml';
 import MenuBuilder from './menu';
 import { setupAutoUpdater } from './updater';
 import { resolveHtmlPath } from './util';
+import { readResumeInfo, workflowFileStem } from './resumeState';
 
 // =============================================================================
 // Types
 // =============================================================================
 
 interface WorkflowData {
+  /** Optional name/version, echoed by the engine in its log and run state. */
+  metadata?: { name?: string; version?: string };
   steps: Array<{
     id: string;
     tool: string;
@@ -281,7 +284,8 @@ ipcMain.on(
     event: IpcMainEvent,
     workflowData: WorkflowData,
     dryRun: boolean = false,
-    workingDir: string = ''
+    workingDir: string = '',
+    fresh: boolean = false
   ) => {
     try {
       // Refuse to start a second run while one is active. Overwriting
@@ -295,7 +299,7 @@ ipcMain.on(
         return;
       }
 
-      log.info('Starting workflow execution', { dryRun, workingDir });
+      log.info('Starting workflow execution', { dryRun, workingDir, fresh });
       stoppedByUser = false;
 
       // Serialize workflow to YAML
@@ -307,7 +311,11 @@ ipcMain.on(
         fs.mkdirSync(tempDir, { recursive: true });
       }
 
-      const workflowPath = path.join(tempDir, 'workflow.yaml');
+      // The engine keys its saved run state on this file's stem, so the stem
+      // follows the workflow's name: "Resume last run" then finds the state of
+      // this workflow and not of another one run in the same directory.
+      const stem = workflowFileStem(workflowData.metadata?.name);
+      const workflowPath = path.join(tempDir, `${stem}.yaml`);
       fs.writeFileSync(workflowPath, yamlContent, 'utf-8');
 
       // Setup pause control
@@ -335,6 +343,9 @@ ipcMain.on(
       // load_workflow() merges and expands before validation.
       const args = [workflowPath, pauseFlagPath];
       if (dryRun) args.push('--dry-run');
+      // Without --fresh the engine resumes from the saved state of an earlier
+      // run (completed steps are skipped).
+      if (fresh) args.push('--fresh');
       if (workingDir) args.push('--working-dir', workingDir);
 
       log.info('Spawning Rust process', { rustExecutable, args });
@@ -399,6 +410,16 @@ ipcMain.on(
 );
 
 // Pause workflow
+/**
+ * Reports whether the engine has a saved run for this workflow in the working
+ * directory, so the renderer can enable "Resume last run".
+ */
+ipcMain.handle(
+  'get-resume-info',
+  (_event, workflowName: string, workingDir: string) =>
+    readResumeInfo(workingDir, workflowFileStem(workflowName))
+);
+
 ipcMain.on('pause-workflow', (event: IpcMainEvent) => {
   if (!currentRustProcess || !pauseFlagPath) return;
 

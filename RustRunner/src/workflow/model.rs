@@ -536,11 +536,97 @@ impl Step {
     }
 }
 
+/// Longest accepted metadata name or version, in characters.
+pub const MAX_METADATA_LEN: usize = 200;
+
+/// Optional descriptive information about a workflow, shown in the run log
+/// and recorded in the run summary and the saved run state.
+///
+/// ```yaml
+/// metadata:
+///   name: RNA-seq QC
+///   version: "1.2"
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkflowMetadata {
+    /// Human-readable workflow name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Free-form version label (for example `1.2` or `2024-05-draft`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+impl WorkflowMetadata {
+    /// Creates metadata with the given name and version.
+    pub fn new(name: Option<&str>, version: Option<&str>) -> Self {
+        Self {
+            name: name.map(String::from),
+            version: version.map(String::from),
+        }
+    }
+
+    /// Trims both fields and turns blank ones into `None`.
+    pub fn normalize(&mut self) {
+        for field in [&mut self.name, &mut self.version] {
+            if let Some(value) = field.take() {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    *field = Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    /// Checks the fields are short and free of control characters. Metadata is
+    /// echoed into the log, which front ends parse line by line, so a newline
+    /// must never get through.
+    pub fn validate(&self) -> Result<(), String> {
+        for (label, value) in [("name", &self.name), ("version", &self.version)] {
+            let Some(value) = value else { continue };
+            if value.chars().count() > MAX_METADATA_LEN {
+                return Err(format!(
+                    "Workflow metadata {} is longer than {} characters",
+                    label, MAX_METADATA_LEN
+                ));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(format!(
+                    "Workflow metadata {} contains control characters",
+                    label
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// True when neither a name nor a version is set.
+    pub fn is_empty(&self) -> bool {
+        self.name.is_none() && self.version.is_none()
+    }
+
+    /// One-line description such as `RNA-seq QC (version 1.2)`, or `None` when
+    /// the metadata is empty.
+    pub fn label(&self) -> Option<String> {
+        match (&self.name, &self.version) {
+            (Some(n), Some(v)) => Some(format!("{} (version {})", n, v)),
+            (Some(n), None) => Some(n.clone()),
+            (None, Some(v)) => Some(format!("version {}", v)),
+            (None, None) => None,
+        }
+    }
+}
+
 /// Represents a complete workflow with multiple steps.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Workflow {
     /// Ordered list of steps in the workflow
     pub steps: Vec<Step>,
+
+    /// Optional name and version of the workflow
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<WorkflowMetadata>,
 
     /// List of unique tools used (auto-populated)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -552,6 +638,7 @@ impl Workflow {
     pub fn new() -> Self {
         Self {
             steps: Vec::new(),
+            metadata: None,
             tools: Vec::new(),
         }
     }
@@ -560,10 +647,17 @@ impl Workflow {
     pub fn from_steps(steps: Vec<Step>) -> Self {
         let mut workflow = Self {
             steps,
+            metadata: None,
             tools: Vec::new(),
         };
         workflow.refresh_tools();
         workflow
+    }
+
+    /// Sets the workflow's name and version.
+    pub fn with_metadata(mut self, metadata: WorkflowMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
     }
 
     /// Adds a step to the workflow.
@@ -645,6 +739,55 @@ impl Default for Workflow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_old_yaml_without_metadata_has_none() {
+        let wf: Workflow =
+            serde_yaml::from_str("steps:\n  - id: a\n    tool: bash\n    command: x\n").unwrap();
+        assert!(wf.metadata.is_none());
+        assert!(!serde_yaml::to_string(&wf).unwrap().contains("metadata"));
+    }
+
+    #[test]
+    fn test_metadata_parses_and_round_trips() {
+        let yaml = "metadata:\n  name: RNA-seq QC\n  version: '1.2'\nsteps:\n  - id: a\n    tool: bash\n    command: x\n";
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        let meta = wf.metadata.clone().unwrap();
+        assert_eq!(meta.name.as_deref(), Some("RNA-seq QC"));
+        assert_eq!(meta.version.as_deref(), Some("1.2"));
+        assert_eq!(meta.label().unwrap(), "RNA-seq QC (version 1.2)");
+        let again: Workflow = serde_yaml::from_str(&serde_yaml::to_string(&wf).unwrap()).unwrap();
+        assert_eq!(again.metadata, Some(meta));
+    }
+
+    #[test]
+    fn test_metadata_normalize_and_label() {
+        let mut meta = WorkflowMetadata::new(Some("  qc  "), Some("   "));
+        meta.normalize();
+        assert_eq!(meta.name.as_deref(), Some("qc"));
+        assert_eq!(meta.version, None);
+        assert_eq!(meta.label().as_deref(), Some("qc"));
+        let mut blank = WorkflowMetadata::new(Some(" "), None);
+        blank.normalize();
+        assert!(blank.is_empty());
+        assert_eq!(blank.label(), None);
+        assert_eq!(
+            WorkflowMetadata::new(None, Some("2")).label().as_deref(),
+            Some("version 2")
+        );
+    }
+
+    #[test]
+    fn test_metadata_validate_rejects_newlines_and_overlong() {
+        assert!(WorkflowMetadata::new(Some("ok"), Some("1"))
+            .validate()
+            .is_ok());
+        assert!(WorkflowMetadata::new(Some("a\nStarting step: x"), None)
+            .validate()
+            .is_err());
+        let long = "x".repeat(MAX_METADATA_LEN + 1);
+        assert!(WorkflowMetadata::new(None, Some(&long)).validate().is_err());
+    }
 
     #[test]
     fn test_old_yaml_without_checks_has_none() {

@@ -239,6 +239,16 @@
   background: var(--blue-dark);
 }
 
+/* Resume: outlined so "Run from scratch" stays the primary action. */
+.resume-button {
+  background: var(--panel-background);
+  color: var(--panel-text);
+}
+
+.resume-button:hover:not(:disabled) {
+  background: #1f2d3a;
+}
+
 /* Stop: neutral dark so it reads as distinct from the red Pause button. */
 .stop-button {
   background: #4a4a52;
@@ -308,8 +318,18 @@
   animation: pulse 1.4s ease-in-out infinite;
 }
 
-.custom-node.node-state-done {
+.custom-node.node-state-succeeded {
   border-color: var(--green-dark);
+}
+
+.custom-node.node-state-retrying {
+  border-color: #d98a00;
+  box-shadow: 0 0 0 3px rgba(217, 138, 0, 0.35);
+}
+
+.custom-node.node-state-skipped {
+  border-style: dashed;
+  opacity: 0.7;
 }
 
 .custom-node.node-state-failed {
@@ -337,8 +357,16 @@
   background: var(--blue-dark);
 }
 
-.node-status-done {
+.node-status-succeeded {
   background: var(--green-dark);
+}
+
+.node-status-retrying {
+  background: #d98a00;
+}
+
+.node-status-skipped {
+  background: var(--gray-dark);
 }
 
 .node-status-failed {
@@ -661,6 +689,103 @@
   color: #333;
 }
 
+/* Logs / Step Status tabs in the execution panel header. */
+.execution-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.execution-tab {
+  padding: 4px 12px;
+  background: transparent;
+  color: #555;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.execution-tab.active {
+  color: #333;
+  border-bottom-color: var(--blue-dark);
+}
+
+/* Step Status panel */
+.step-status-empty {
+  padding: 12px;
+  color: #666;
+  font-style: italic;
+}
+
+.step-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 4px 10px;
+}
+
+.step-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.07);
+}
+
+.step-status-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.step-status-table th {
+  text-align: left;
+  padding: 4px 8px;
+  font-weight: 600;
+  opacity: 0.7;
+}
+
+.step-status-table td {
+  padding: 4px 8px;
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
+  vertical-align: top;
+}
+
+.step-row-state {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.step-row-details {
+  opacity: 0.8;
+}
+
+.step-state-running .step-glyph,
+.step-chip.step-state-running {
+  color: var(--blue-dark);
+}
+
+.step-state-retrying .step-glyph,
+.step-chip.step-state-retrying {
+  color: #d98a00;
+}
+
+.step-state-succeeded .step-glyph,
+.step-chip.step-state-succeeded {
+  color: var(--green-dark);
+}
+
+.step-state-failed .step-glyph,
+.step-chip.step-state-failed {
+  color: var(--red-dark);
+}
+
+.step-state-pending,
+.step-state-skipped {
+  opacity: 0.75;
+}
+
 .execution-panel-controls {
   display: flex;
   gap: 8px;
@@ -965,6 +1090,24 @@
   }
 
   .execution-panel-header h3 {
+    color: var(--panel-text);
+  }
+
+  .execution-tab {
+    color: #aab7c4;
+  }
+
+  .execution-tab.active {
+    color: var(--panel-text);
+  }
+
+  .step-chip {
+    background: rgba(255, 255, 255, 0.12);
+    color: var(--panel-text);
+  }
+
+  .step-status-table,
+  .step-status-empty {
     color: var(--panel-text);
   }
 

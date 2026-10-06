@@ -6,6 +6,10 @@ import {
   hasWildcards,
   labelToId,
   isBlocking,
+  MAX_WILDCARD_NAME_LENGTH,
+  normalizeWildcardName,
+  renameWildcardInPattern,
+  wildcardNameError,
   normalizeBackoff,
   normalizeMinLines,
   normalizeRetries,
@@ -35,9 +39,28 @@ export function PropertiesPanel({
   }
 
   const hasOutput = Boolean(selectedNode.data.output);
+  /** The name used inside {braces} for this node's batch files. */
+  const wildcardName = normalizeWildcardName(selectedNode.data.wildcardName);
+  const wildcardNameProblem = wildcardNameError(selectedNode.data.wildcardName);
 
   const handleInputChange = (field: string, value: string | boolean) => {
     onNodeUpdate(selectedNode.id, field, value);
+  };
+
+  /**
+   * Renames the wildcard. Patterns already on the node follow the new name, so
+   * `{sample}` in the input and output becomes `{lane}` without retyping.
+   */
+  const handleWildcardNameChange = (value: string) => {
+    // Only characters a wildcard name can contain are accepted at all.
+    if (!/^[A-Za-z0-9_]*$/.test(value) || value.length > MAX_WILDCARD_NAME_LENGTH) return;
+
+    const next = normalizeWildcardName(value);
+    handleInputChange('wildcardName', value);
+    if (wildcardNameError(value) === null && next !== wildcardName) {
+      handleInputChange('input', renameWildcardInPattern(selectedNode.data.input || '', wildcardName, next));
+      handleInputChange('output', renameWildcardInPattern(selectedNode.data.output || '', wildcardName, next));
+    }
   };
 
   const handleFileSelection = async () => {
@@ -45,7 +68,7 @@ export function PropertiesPanel({
       const files = await window.electron.ipcRenderer.selectFiles();
       if (files && files.length > 0) {
         // Generate pattern automatically
-        const pattern = generatePattern(files);
+        const pattern = generatePattern(files, wildcardName);
         handleInputChange('input', pattern);
         
         // Store files for this node
@@ -56,7 +79,7 @@ export function PropertiesPanel({
         
         // Auto-suggest output pattern if not set
         if (!selectedNode.data.output || selectedNode.data.output === '') {
-          const outputPattern = pattern.replace('{sample}', 'output/{sample}');
+          const outputPattern = pattern.replace(`{${wildcardName}}`, `output/{${wildcardName}}`);
           handleInputChange('output', outputPattern);
         }
       }
@@ -149,7 +172,7 @@ export function PropertiesPanel({
             
             <div className="wildcard-info">
               <div className="property-hint">
-                🔄 Pattern: <code>{generatePattern(nodeFiles)}</code>
+                🔄 Pattern: <code>{generatePattern(nodeFiles, wildcardName)}</code>
               </div>
               <div className="property-hint">
                 ⚡ Will create {nodeFiles.length} step instance(s)
@@ -163,6 +186,26 @@ export function PropertiesPanel({
               Clear Selected Files
             </button>
           </>
+        )}
+      </div>
+
+      <div className="property-group">
+        <label className="property-label">Wildcard Name:</label>
+        <input
+          type="text"
+          className="property-input"
+          value={selectedNode.data.wildcardName ?? ''}
+          onChange={(e) => handleWildcardNameChange(e.target.value)}
+          placeholder="sample"
+          maxLength={MAX_WILDCARD_NAME_LENGTH}
+        />
+        {wildcardNameProblem ? (
+          <div className="property-error">⚠ {wildcardNameProblem}</div>
+        ) : (
+          <div className="property-hint">
+            Write it as <code>{`{${wildcardName}}`}</code> in the input and output patterns; each
+            selected file fills it in. Leave empty for "sample".
+          </div>
         )}
       </div>
 

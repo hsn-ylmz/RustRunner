@@ -1,4 +1,6 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, type ReactNode } from 'react';
+
+export type ExecutionTab = 'logs' | 'steps';
 
 /**
  * Picks a severity class for one log line.
@@ -23,12 +25,22 @@ export function ExecutionLogs({
   visible,
   onClear,
   onToggle,
+  tab = 'logs',
+  onTabChange,
+  stepCount = 0,
+  stepsView,
 }: {
   logs: string[];
   visible: boolean;
   onClear: () => void;
   onToggle: () => void;
+  /** Which view is showing. Without `stepsView` the panel is just the log. */
+  tab?: ExecutionTab;
+  onTabChange?: (tab: ExecutionTab) => void;
+  stepCount?: number;
+  stepsView?: ReactNode;
 }) {
+  const showSteps = Boolean(stepsView) && tab === 'steps';
   const logsEndRef = useRef<HTMLDivElement>(null);
   const logContentRef = useRef<HTMLDivElement>(null);
   /** False while the user has scrolled up, so new output doesn't yank them back. */
@@ -51,15 +63,41 @@ export function ExecutionLogs({
   return (
     <div className={`execution-panel ${visible ? 'visible' : 'hidden'}`}>
       <div className="execution-panel-header">
-        <h3>Execution Logs</h3>
+        {stepsView && onTabChange ? (
+          <div className="execution-tabs" role="tablist">
+            <button
+              role="tab"
+              aria-selected={tab === 'logs'}
+              className={`execution-tab ${tab === 'logs' ? 'active' : ''}`}
+              onClick={() => onTabChange('logs')}
+            >
+              Execution Logs
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === 'steps'}
+              className={`execution-tab ${tab === 'steps' ? 'active' : ''}`}
+              onClick={() => onTabChange('steps')}
+            >
+              Step Status{stepCount > 0 ? ` (${stepCount})` : ''}
+            </button>
+          </div>
+        ) : (
+          <h3>Execution Logs</h3>
+        )}
         <div className="execution-panel-controls">
-          <button className="panel-button" onClick={onClear}>Clear</button>
+          {!showSteps && (
+            <button className="panel-button" onClick={onClear}>Clear</button>
+          )}
           <button className="panel-button" onClick={onToggle}>
             {visible ? 'Hide' : 'Show'}
           </button>
         </div>
       </div>
-      {visible && (
+      {visible && showSteps && (
+        <div className="execution-panel-content">{stepsView}</div>
+      )}
+      {visible && !showSteps && (
         <div
           className="execution-panel-content"
           ref={logContentRef}

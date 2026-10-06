@@ -30,12 +30,14 @@ pub enum ValidationError {
     RetryDelayTooLong { step: String, secs: u64 },
     ZeroTimeout(String),
     InvalidCheck { step: String, reason: String },
+    InvalidMetadata(String),
 }
 
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptyWorkflow => write!(f, "Workflow has no steps"),
+            Self::InvalidMetadata(reason) => write!(f, "{}", reason),
             Self::DuplicateStepId(id) => write!(f, "Duplicate step ID: '{}'", id),
             Self::EmptyStepId => write!(f, "Step has empty or whitespace-only ID"),
             Self::EmptyTool(step) => write!(f, "Step '{}' has no tool specified", step),
@@ -192,6 +194,17 @@ pub fn validate_workflow(workflow: &mut Workflow) -> Result<(), String> {
     // Check for empty workflow
     if workflow.steps.is_empty() {
         return Err(ValidationError::EmptyWorkflow.to_string());
+    }
+
+    // Normalize and check the optional metadata
+    if let Some(metadata) = workflow.metadata.as_mut() {
+        metadata.normalize();
+        metadata
+            .validate()
+            .map_err(|e| ValidationError::InvalidMetadata(e).to_string())?;
+        if metadata.is_empty() {
+            workflow.metadata = None;
+        }
     }
 
     // Refresh tools list
@@ -373,6 +386,29 @@ pub fn quick_validate(workflow: &Workflow) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_metadata_is_normalized_and_blank_metadata_dropped() {
+        use crate::workflow::WorkflowMetadata;
+        let mut wf = Workflow::from_steps(vec![Step::new("a", "bash", "echo hi")])
+            .with_metadata(WorkflowMetadata::new(Some("  qc "), None));
+        validate_workflow(&mut wf).unwrap();
+        assert_eq!(wf.metadata.unwrap().name.as_deref(), Some("qc"));
+
+        let mut blank = Workflow::from_steps(vec![Step::new("a", "bash", "echo hi")])
+            .with_metadata(WorkflowMetadata::new(Some(" "), Some("")));
+        validate_workflow(&mut blank).unwrap();
+        assert!(blank.metadata.is_none());
+    }
+
+    #[test]
+    fn test_metadata_with_newline_is_rejected() {
+        use crate::workflow::WorkflowMetadata;
+        let mut wf = Workflow::from_steps(vec![Step::new("a", "bash", "echo hi")])
+            .with_metadata(WorkflowMetadata::new(Some("x\nStarting step: a"), None));
+        let err = validate_workflow(&mut wf).unwrap_err();
+        assert!(err.contains("control characters"), "{}", err);
+    }
 
     #[test]
     fn test_retry_settings_valid() {

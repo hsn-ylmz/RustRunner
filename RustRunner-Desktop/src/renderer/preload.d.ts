@@ -3,6 +3,8 @@
  */
 
 interface WorkflowData {
+  /** Optional name/version; read by the engine's `metadata` field. */
+  metadata?: { name?: string; version?: string };
   steps: Array<{
     id: string;
     tool: string;
@@ -32,6 +34,16 @@ interface WorkflowData {
      */
     wildcard_files?: Record<string, string[]>;
   }>;
+}
+
+/** Saved-run summary; mirrors ResumeInfo in src/main/resumeState.ts. */
+export interface ResumeInfo {
+  canResume: boolean;
+  completedCount: number;
+  failedStep: string | null;
+  savedAt: number | null;
+  workflowName: string | null;
+  workflowVersion: string | null;
 }
 
 /** Menu selections forwarded from the main process over 'menu-action'. */
@@ -74,7 +86,14 @@ interface ElectronAPI {
     sendMessage(channel: string, ...args: unknown[]): void;
     on(channel: string, func: (...args: unknown[]) => void): () => void;
     once(channel: string, func: (...args: unknown[]) => void): void;
-    runWorkflow(workflowData: WorkflowData, dryRun?: boolean, workingDir?: string): void;
+    /** `fresh` runs every step again; otherwise the engine resumes saved state. */
+    runWorkflow(
+      workflowData: WorkflowData,
+      dryRun?: boolean,
+      workingDir?: string,
+      fresh?: boolean
+    ): void;
+    getResumeInfo(workflowName: string, workingDir: string): Promise<ResumeInfo>;
     pauseWorkflow(): void;
     resumeWorkflow(): void;
     stopWorkflow(): void;

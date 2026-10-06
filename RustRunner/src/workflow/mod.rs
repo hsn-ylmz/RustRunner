@@ -17,7 +17,7 @@ pub mod state;
 pub mod validator;
 pub mod wildcards;
 
-pub use model::{CheckKind, OutputCheck, RetryBackoff, Step, Workflow};
+pub use model::{CheckKind, OutputCheck, RetryBackoff, Step, Workflow, WorkflowMetadata};
 pub use parser::load_workflow;
 pub use planner::ExecutionPlanner;
 pub use state::WorkflowState;

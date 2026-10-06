@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import yaml from 'js-yaml';
 import {
-  WILDCARD_NAME,
+  DEFAULT_WILDCARD_NAME,
   buildChecks,
+  buildMetadata,
+  extractWildcardNames,
+  normalizeMetadataText,
+  normalizeWildcardName,
+  renameWildcardInPattern,
+  wildcardNameError,
   convertNodesToWorkflow,
   isBlocking,
   normalizeMinLines,
@@ -100,7 +106,7 @@ describe('convertNodesToWorkflow', () => {
   it('attaches wildcard_files per step, only for the owning node', () => {
     const files = { n1: ['/d/s1.fq', '/d/s2.fq'] };
     const { steps } = convertNodesToWorkflow(nodes, edges, files);
-    expect(steps[0].wildcard_files).toEqual({ [WILDCARD_NAME]: ['/d/s1.fq', '/d/s2.fq'] });
+    expect(steps[0].wildcard_files).toEqual({ [DEFAULT_WILDCARD_NAME]: ['/d/s1.fq', '/d/s2.fq'] });
     expect('wildcard_files' in steps[1]).toBe(false);
   });
 
@@ -108,6 +114,95 @@ describe('convertNodesToWorkflow', () => {
     const files = { n1: [], ghost: ['/x/a.fq'] };
     const { steps } = convertNodesToWorkflow(nodes, edges, files);
     expect(steps.every((s: any) => !('wildcard_files' in s))).toBe(true);
+  });
+});
+
+describe('user-named wildcards', () => {
+  it('emits each node\'s own wildcard name', () => {
+    const nodes = [
+      node('n1', 'Align', { input: 'in/{sample}.fq', wildcardName: 'sample' }),
+      node('n2', 'Merge', { input: 'lanes/{lane}.fq', wildcardName: ' lane ' }),
+      node('n3', 'Legacy', { input: 'old/{sample}.fq' }),
+    ];
+    const files = { n1: ['/d/a.fq'], n2: ['/l/x.fq', '/l/y.fq'], n3: ['/o/z.fq'] };
+    const { steps } = convertNodesToWorkflow(nodes, [], files);
+    expect(steps[0].wildcard_files).toEqual({ sample: ['/d/a.fq'] });
+    expect(steps[1].wildcard_files).toEqual({ lane: ['/l/x.fq', '/l/y.fq'] });
+    // A node saved before names were configurable keeps "sample".
+    expect(steps[2].wildcard_files).toEqual({ sample: ['/o/z.fq'] });
+  });
+
+  it('falls back to the default for an unusable name', () => {
+    for (const bad of ['', '  ', 'input', 'OUTPUT', '1abc', 'a-b', 'a b', undefined, 5]) {
+      expect(normalizeWildcardName(bad)).toBe(DEFAULT_WILDCARD_NAME);
+    }
+    expect(normalizeWildcardName('lane_2')).toBe('lane_2');
+  });
+
+  it('explains why a name is rejected, and accepts blank as "default"', () => {
+    expect(wildcardNameError('')).toBeNull();
+    expect(wildcardNameError('read1')).toBeNull();
+    expect(wildcardNameError('1abc')).toMatch(/letter or underscore/);
+    expect(wildcardNameError('input')).toMatch(/placeholder/);
+    expect(wildcardNameError('x'.repeat(41))).toMatch(/at most 40/);
+  });
+
+  it('generates patterns with the chosen name', () => {
+    expect(generatePattern(['/d/a.fq', '/d/b.fq'], 'lane')).toBe('/d/{lane}.fq');
+  });
+
+  it('renames a wildcard inside a pattern without touching other braces', () => {
+    expect(renameWildcardInPattern('out/{sample}/{sample}.bam', 'sample', 'lane')).toBe(
+      'out/{lane}/{lane}.bam'
+    );
+    expect(renameWildcardInPattern('{other}.txt', 'sample', 'lane')).toBe('{other}.txt');
+    expect(renameWildcardInPattern('', 'a', 'b')).toBe('');
+  });
+
+  it('extracts the distinct names used in a pattern', () => {
+    expect(extractWildcardNames('{a}/{b}_{a}.txt')).toEqual(['a', 'b']);
+    expect(extractWildcardNames('plain.txt')).toEqual([]);
+  });
+
+  it('validateWorkflow flags a pattern whose name has no files', () => {
+    const step = {
+      id: 's',
+      tool: 'bash',
+      command: 'x',
+      input: ['in/{lane}.fq'],
+      output: [],
+      wildcard_files: { sample: ['a.fq'] },
+    };
+    expect(validateWorkflow({ steps: [step] })).toEqual([
+      'Step s: pattern uses {lane} but the selected files are for {sample}',
+    ]);
+    const noFiles = { ...step, wildcard_files: undefined };
+    expect(validateWorkflow({ steps: [noFiles] })[0]).toMatch(/no files are selected/);
+    const ok = { ...step, wildcard_files: { lane: ['a.fq'] } };
+    expect(validateWorkflow({ steps: [ok] })).toEqual([]);
+  });
+});
+
+describe('workflow metadata', () => {
+  it('is omitted when neither name nor version is set', () => {
+    expect(buildMetadata({})).toBeUndefined();
+    expect(buildMetadata({ name: '  ', version: '' })).toBeUndefined();
+    const wf = convertNodesToWorkflow([node('a', 'A')], [], {}, { name: '', version: '' });
+    expect(wf).not.toHaveProperty('metadata');
+  });
+
+  it('reaches the engine YAML as a metadata block', () => {
+    const wf = convertNodesToWorkflow([node('a', 'A')], [], {}, { name: ' RNA QC ', version: '1.2' });
+    expect(wf.metadata).toEqual({ name: 'RNA QC', version: '1.2' });
+    const parsed: any = yaml.load(yaml.dump(wf));
+    expect(parsed.metadata).toEqual({ name: 'RNA QC', version: '1.2' });
+    expect(buildMetadata({ name: 'only' })).toEqual({ name: 'only' });
+  });
+
+  it('strips control characters and caps the length like the engine requires', () => {
+    expect(normalizeMetadataText('a\nStarting step: x')).toBe('a Starting step: x');
+    expect(normalizeMetadataText('x'.repeat(500))).toHaveLength(200);
+    expect(normalizeMetadataText(undefined)).toBe('');
   });
 });
 

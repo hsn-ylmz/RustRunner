@@ -6,7 +6,7 @@
  * the presentational pieces in ./components.
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   useReactFlow,
   applyEdgeChanges,
@@ -16,20 +16,25 @@ import {
 } from '@xyflow/react';
 import './App.css';
 import {
-  applyStepEvent,
+  applyRunEvent,
+  buildStatusRows,
   parseStepEvent,
-  type NodeStatus,
+  resolveBaseStepId,
+  rollupNodeStatuses,
+  type RunPhase,
+  type StepRuns,
 } from './stepEvents';
 import {
-  WILDCARD_NAME,
   convertNodesToWorkflow,
   findInvalidNodeIds,
   labelToId,
   validateWorkflow,
 } from './workflowConversion';
+import { describeResume, type ResumeInfo } from './resume';
 import { UpdateBanner, type UpdateStatus } from './components/UpdateBanner';
 import { PropertiesPanel } from './components/PropertiesPanel';
-import { ExecutionLogs } from './components/ExecutionLogs';
+import { ExecutionLogs, type ExecutionTab } from './components/ExecutionLogs';
+import { StepStatusPanel } from './components/StepStatusPanel';
 import {
   WorkflowCanvas,
   DEFAULT_COLOR,
@@ -62,13 +67,20 @@ function WorkflowEditorInner() {
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [executionState, setExecutionState] = useState<'idle' | 'running' | 'paused'>('idle');
-  const [showNameDialog, setShowNameDialog] = useState(false);
+  const [workflowVersion, setWorkflowVersion] = useState('');
+  /** 'new' starts a fresh canvas; 'details' only edits the name and version. */
+  const [nameDialog, setNameDialog] = useState<'new' | 'details' | null>(null);
   const [tempWorkflowName, setTempWorkflowName] = useState('');
+  const [tempWorkflowVersion, setTempWorkflowVersion] = useState('');
   const [executionLogs, setExecutionLogs] = useState<string[]>([]);
   const [showExecutionPanel, setShowExecutionPanel] = useState(true);
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [nodeWildcardFiles, setNodeWildcardFiles] = useState<Record<string, string[]>>({});
-  const [stepStatus, setStepStatus] = useState<Record<string, NodeStatus>>({});
+  /** What the engine has reported per engine step during the current/last run. */
+  const [stepRuns, setStepRuns] = useState<StepRuns>({});
+  const [runPhase, setRunPhase] = useState<RunPhase>('none');
+  const [executionTab, setExecutionTab] = useState<ExecutionTab>('logs');
+  const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   /** The canvas viewport, for placing new nodes where they're actually visible. */
@@ -143,15 +155,15 @@ function WorkflowEditorInner() {
       (output: string) => {
         const lines = output.split('\n').filter((line) => line.trim() !== '');
 
-        // Drive canvas status off the same lines. Anything unrecognized just
-        // falls through to the log pane, so wording drift degrades the badges
-        // rather than breaking output.
-        setStepStatus((prev) => {
+        // Drive canvas and status-panel state off the same lines. Anything
+        // unrecognized just falls through to the log pane, so wording drift
+        // degrades the badges rather than breaking output.
+        setStepRuns((prev) => {
           let next = prev;
           for (const line of lines) {
             const event = parseStepEvent(line);
-            if (event) {
-              next = applyStepEvent(next, event, baseStepIdsRef.current);
+            if (event && resolveBaseStepId(event.stepId, baseStepIdsRef.current)) {
+              next = applyRunEvent(next, event);
             }
           }
           return next;
@@ -164,6 +176,7 @@ function WorkflowEditorInner() {
     const unsubscribeComplete = window.electron.ipcRenderer.onWorkflowComplete(
       (success: boolean, message: string, outcome?: string) => {
         setExecutionState('idle');
+        setRunPhase('ended');
         if (outcome === 'stopped') {
           addLog('Workflow stopped by user');
         } else {
@@ -175,6 +188,7 @@ function WorkflowEditorInner() {
     const unsubscribeError = window.electron.ipcRenderer.onWorkflowError(
       (error: string) => {
         setExecutionState('idle');
+        setRunPhase('ended');
         addLog(`Execution error: ${error}`);
       }
     );
@@ -422,13 +436,29 @@ function WorkflowEditorInner() {
   const handleNew = useCallback(async () => {
     if (!(await confirmDiscardIfDirty('Start a new workflow without saving?'))) return;
     setTempWorkflowName('My Workflow');
-    setShowNameDialog(true);
+    setTempWorkflowVersion('');
+    setNameDialog('new');
   }, [confirmDiscardIfDirty]);
+
+  const handleEditDetails = useCallback(() => {
+    setTempWorkflowName(workflowName);
+    setTempWorkflowVersion(workflowVersion);
+    setNameDialog('details');
+  }, [workflowName, workflowVersion]);
+
+  const handleConfirmDetails = useCallback(() => {
+    if (!tempWorkflowName.trim()) return;
+    setWorkflowName(tempWorkflowName);
+    setWorkflowVersion(tempWorkflowVersion);
+    setNameDialog(null);
+    markDirty();
+  }, [tempWorkflowName, tempWorkflowVersion, markDirty]);
 
   const handleConfirmNew = useCallback(() => {
     if (!tempWorkflowName.trim()) return;
     setWorkflowName(tempWorkflowName);
-    setShowNameDialog(false);
+    setWorkflowVersion(tempWorkflowVersion);
+    setNameDialog(null);
     addLog(`New workflow created: ${tempWorkflowName}`);
 
     const templateNodes = [
@@ -451,12 +481,13 @@ function WorkflowEditorInner() {
     setSelectedNodeId(null);
     setExecutionState('idle');
     setNodeWildcardFiles({});
-    setStepStatus({});
+    setStepRuns({});
+    setRunPhase('none');
     setCurrentFilePath(null);
     setIsDirty(false);
     undoStack.current = [];
     redoStack.current = [];
-  }, [tempWorkflowName, addLog]);
+  }, [tempWorkflowName, tempWorkflowVersion, addLog]);
 
   const handleOpen = useCallback(async () => {
     if (!(await confirmDiscardIfDirty('Open another workflow without saving?'))) return;
@@ -481,9 +512,13 @@ function WorkflowEditorInner() {
       setNodes(data.nodes);
       setEdges(data.edges);
       setSelectedNodeId(null);
-      setStepStatus({});
+      setStepRuns({});
+      setRunPhase('none');
       setNodeWildcardFiles(data.wildcardFiles || {});
       if (data.metadata?.name) setWorkflowName(data.metadata.name);
+      setWorkflowVersion(
+        typeof data.metadata?.workflowVersion === 'string' ? data.metadata.workflowVersion : ''
+      );
       setCurrentFilePath(result.path);
       setIsDirty(false);
       undoStack.current = [];
@@ -512,6 +547,8 @@ function WorkflowEditorInner() {
           wildcardFiles: nodeWildcardFiles,
           metadata: {
             name: workflowName,
+            // Version of the workflow itself; `version` below is the file format's.
+            workflowVersion,
             version: '1.1.0',
             createdAt: new Date().toISOString(),
           },
@@ -533,7 +570,7 @@ function WorkflowEditorInner() {
         addLog(`Failed to save workflow: ${error}`);
       }
     },
-    [nodes, edges, nodeWildcardFiles, workflowName, currentFilePath, addLog]
+    [nodes, edges, nodeWildcardFiles, workflowName, workflowVersion, currentFilePath, addLog]
   );
 
   const handleSave = useCallback(() => saveWorkflowTo(false), [saveWorkflowTo]);
@@ -549,7 +586,8 @@ function WorkflowEditorInner() {
     setSelectedNodeId(null);
     setExecutionState('idle');
     setNodeWildcardFiles({});
-    setStepStatus({});
+    setStepRuns({});
+    setRunPhase('none');
     addLog('Canvas cleared');
   }, [nodes.length, edges.length, confirmDiscardIfDirty, pushHistory, addLog]);
 
@@ -580,7 +618,10 @@ function WorkflowEditorInner() {
         addLog(`Working directory set: ${dir}`);
       }
 
-      const workflow = convertNodesToWorkflow(nodes, edges, nodeWildcardFiles);
+      const workflow = convertNodesToWorkflow(nodes, edges, nodeWildcardFiles, {
+        name: workflowName,
+        version: workflowVersion,
+      });
 
       const errors = validateWorkflow(workflow);
       if (errors.length > 0) {
@@ -592,7 +633,12 @@ function WorkflowEditorInner() {
       const wildcardSteps = workflow.steps.filter((s: any) => s.wildcard_files);
       if (wildcardSteps.length > 0) {
         const total = wildcardSteps.reduce(
-          (sum: number, s: any) => sum + s.wildcard_files[WILDCARD_NAME].length,
+          (sum: number, s: any) =>
+            sum +
+            Object.values(s.wildcard_files as Record<string, string[]>).reduce(
+              (n, files) => n + files.length,
+              0
+            ),
           0
         );
         addLog(
@@ -600,33 +646,75 @@ function WorkflowEditorInner() {
         );
       }
 
-      setStepStatus({});
+      setStepRuns({});
+      setRunPhase('active');
       return { workflow, dir };
     },
-    [nodes, edges, nodeWildcardFiles, workingDirectory, addLog]
+    [nodes, edges, nodeWildcardFiles, workflowName, workflowVersion, workingDirectory, addLog]
   );
 
-  // Execution
+  // Which saved run (if any) "Resume last run" would continue. Looked up in
+  // the working directory, where the engine keeps its state, and refreshed
+  // whenever a run ends since the engine writes it after every step.
+  useEffect(() => {
+    if (!workingDirectory || executionState !== 'idle') {
+      if (!workingDirectory) setResumeInfo(null);
+      return;
+    }
+    let cancelled = false;
+    window.electron.ipcRenderer
+      .getResumeInfo(workflowName, workingDirectory)
+      .then((info) => {
+        if (!cancelled) setResumeInfo(info);
+      })
+      .catch(() => {
+        if (!cancelled) setResumeInfo(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowName, workingDirectory, executionState]);
+
+  // Execution. "Run from scratch" asks the engine to ignore any saved state;
+  // "Resume last run" lets it pick the state up and skip finished steps.
+  const startRun = useCallback(
+    async (fresh: boolean) => {
+      const prepared = await prepareRun(fresh ? 'workflow files' : 'resume');
+      if (!prepared) return;
+
+      if (!fresh && resumeInfo?.canResume) {
+        addLog(
+          `Resuming last run: ${resumeInfo.completedCount} step(s) already finished` +
+            (resumeInfo.failedStep ? `, it stopped at "${resumeInfo.failedStep}"` : '')
+        );
+      } else if (fresh) {
+        addLog('Running from scratch: any saved progress is discarded');
+      }
+
+      setExecutionState('running');
+      window.electron.ipcRenderer.runWorkflow(prepared.workflow, false, prepared.dir, fresh);
+    },
+    [prepareRun, resumeInfo, addLog]
+  );
+
   const handleRun = useCallback(async () => {
     if (executionState === 'paused') {
       setExecutionState('running');
       window.electron.ipcRenderer.resumeWorkflow();
       return;
     }
+    await startRun(true);
+  }, [executionState, startRun]);
 
-    const prepared = await prepareRun('workflow files');
-    if (!prepared) return;
-
-    setExecutionState('running');
-    window.electron.ipcRenderer.runWorkflow(prepared.workflow, false, prepared.dir);
-  }, [executionState, prepareRun]);
+  const handleResumeLast = useCallback(() => startRun(false), [startRun]);
 
   const handleDryRun = useCallback(async () => {
     const prepared = await prepareRun('dry run');
     if (!prepared) return;
 
     addLog('Starting dry run (commands will not execute)...');
-    window.electron.ipcRenderer.runWorkflow(prepared.workflow, true, prepared.dir);
+    // Fresh so the preview lists every step; a dry run never touches saved state.
+    window.electron.ipcRenderer.runWorkflow(prepared.workflow, true, prepared.dir, true);
   }, [prepareRun, addLog]);
 
   const handlePause = useCallback(() => {
@@ -685,6 +773,24 @@ function WorkflowEditorInner() {
   // Nodes handed to React Flow carry live status and validation state under
   // reserved `__` keys. Kept out of `nodes` itself so neither ends up in a
   // saved workflow file or in the undo history.
+  const stepStatus = useMemo(
+    () => rollupNodeStatuses(stepRuns, baseStepIdsRef.current),
+    [stepRuns, nodes]
+  );
+
+  const statusRows = useMemo(
+    () =>
+      buildStatusRows(
+        stepRuns,
+        nodes.map((n: any) => ({
+          stepId: labelToId(n.data?.label || ''),
+          label: n.data?.label || 'Node',
+        })),
+        runPhase
+      ),
+    [stepRuns, nodes, runPhase]
+  );
+
   const decoratedNodes = nodes.map((node: any) => {
     const status = stepStatus[nodeIdToStepId(node.id)];
     const invalidReason = invalidNodeIds[node.id];
@@ -696,7 +802,7 @@ function WorkflowEditorInner() {
     const entries = Object.values(stepStatus);
     if (entries.length === 0) return null;
     const finished = entries.filter(
-      (s) => s.state === 'done' || s.state === 'failed'
+      (s) => s.state === 'succeeded' || s.state === 'failed' || s.state === 'skipped'
     ).length;
     return `${finished} / ${nodes.length} steps`;
   })();
@@ -734,6 +840,9 @@ function WorkflowEditorInner() {
               <button className="toolbar-button" onClick={handleSave}>Save</button>
               <button className="toolbar-button" onClick={handleSaveAs}>Save As</button>
               <button className="toolbar-button" onClick={handleClear}>Clear</button>
+              <button className="toolbar-button" onClick={handleEditDetails}>
+                Details
+              </button>
               <button className="toolbar-button" onClick={handleSelectDirectory}>
                 Set Directory
               </button>
@@ -752,7 +861,16 @@ function WorkflowEditorInner() {
               onClick={handleRun}
               disabled={nodes.length === 0 || executionState === 'running'}
             >
-              {executionState === 'paused' ? 'Resume' : 'Run'}
+              {executionState === 'paused' ? 'Continue' : 'Run from scratch'}
+            </button>
+
+            <button
+              className="execution-button resume-button"
+              onClick={handleResumeLast}
+              disabled={nodes.length === 0 || executionState !== 'idle' || !resumeInfo?.canResume}
+              title={describeResume(resumeInfo, Boolean(workingDirectory))}
+            >
+              Resume last run
             </button>
 
             <button
@@ -811,13 +929,17 @@ function WorkflowEditorInner() {
         visible={showExecutionPanel}
         onClear={handleClearLogs}
         onToggle={handleTogglePanel}
+        tab={executionTab}
+        onTabChange={setExecutionTab}
+        stepCount={statusRows.length}
+        stepsView={<StepStatusPanel rows={statusRows} phase={runPhase} />}
       />
 
-      {/* Name Dialog */}
-      {showNameDialog && (
-        <div className="dialog-overlay" onClick={() => setShowNameDialog(false)}>
+      {/* Name / details dialog */}
+      {nameDialog && (
+        <div className="dialog-overlay" onClick={() => setNameDialog(null)}>
           <div className="dialog-box" onClick={(e) => e.stopPropagation()}>
-            <h3>New Workflow</h3>
+            <h3>{nameDialog === 'new' ? 'New Workflow' : 'Workflow Details'}</h3>
             <label>
               Workflow Name:
               <input
@@ -825,19 +947,41 @@ function WorkflowEditorInner() {
                 className="dialog-input"
                 value={tempWorkflowName}
                 onChange={(e) => setTempWorkflowName(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleConfirmNew()}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' &&
+                  (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
+                }
                 autoFocus
               />
             </label>
+            <label>
+              Version (optional):
+              <input
+                type="text"
+                className="dialog-input"
+                value={tempWorkflowVersion}
+                placeholder="e.g. 1.0"
+                onChange={(e) => setTempWorkflowVersion(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' &&
+                  (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
+                }
+              />
+            </label>
             <p className="dialog-hint">
-              You will choose a working directory when you click Run.
+              {nameDialog === 'new'
+                ? 'You will choose a working directory when you click Run.'
+                : 'Shown in the run log and saved with each run. Renaming the workflow starts a new saved run, so "Resume last run" will not find the old one.'}
             </p>
             <div className="dialog-buttons">
-              <button className="dialog-button cancel" onClick={() => setShowNameDialog(false)}>
+              <button className="dialog-button cancel" onClick={() => setNameDialog(null)}>
                 Cancel
               </button>
-              <button className="dialog-button confirm" onClick={handleConfirmNew}>
-                Create
+              <button
+                className="dialog-button confirm"
+                onClick={nameDialog === 'new' ? handleConfirmNew : handleConfirmDetails}
+              >
+                {nameDialog === 'new' ? 'Create' : 'Save'}
               </button>
             </div>
           </div>

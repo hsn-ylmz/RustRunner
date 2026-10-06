@@ -6,11 +6,13 @@
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { ResumeInfo } from './resumeState';
 
 // Type definitions
 export type Channels = 'ipc-example';
 
 interface WorkflowData {
+  metadata?: { name?: string; version?: string };
   steps: Array<{
     id: string;
     tool: string;
@@ -78,8 +80,18 @@ const electronHandler = {
     },
 
     // Workflow execution
-    runWorkflow(workflowData: WorkflowData, dryRun: boolean = false, workingDir: string = '') {
-      ipcRenderer.send('run-workflow', workflowData, dryRun, workingDir);
+    runWorkflow(
+      workflowData: WorkflowData,
+      dryRun: boolean = false,
+      workingDir: string = '',
+      fresh: boolean = false
+    ) {
+      ipcRenderer.send('run-workflow', workflowData, dryRun, workingDir, fresh);
+    },
+
+    // Saved-run info for "Resume last run".
+    getResumeInfo(workflowName: string, workingDir: string): Promise<ResumeInfo> {
+      return ipcRenderer.invoke('get-resume-info', workflowName, workingDir);
     },
 
     pauseWorkflow() {

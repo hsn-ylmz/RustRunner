@@ -125,6 +125,7 @@ pub struct Engine {
     dry_run: bool,
     pause_flag_path: Option<String>,
     working_dir: Option<PathBuf>,
+    fresh: bool,
 }
 
 impl Engine {
@@ -137,7 +138,14 @@ impl Engine {
             dry_run: false,
             pause_flag_path: None,
             working_dir: None,
+            fresh: false,
         }
+    }
+
+    /// When set, the state of any earlier run is discarded and every step runs
+    /// again. By default a run resumes from the saved state.
+    pub fn set_fresh(&mut self, fresh: bool) {
+        self.fresh = fresh;
     }
 
     /// Sets the workflow file path (used for state persistence).
@@ -192,24 +200,52 @@ impl Engine {
             self.setup_environments()?;
         }
 
-        // Load or create state
-        let mut state = match WorkflowState::load(&self.workflow_path) {
-            Ok(state) => state,
-            Err(e) => {
-                // A file that exists but fails to load is corrupt/incompatible.
-                // Warn loudly so completed steps aren't silently re-run.
-                if WorkflowState::state_file_exists(&self.workflow_path) {
-                    warn!(
-                        "Existing state file could not be read ({}). Starting fresh - \
-                         previously completed steps will re-run.",
-                        e
-                    );
+        if let Some(label) = self.workflow.metadata.as_ref().and_then(|m| m.label()) {
+            info!("Workflow: {}", label);
+        }
+
+        // Load or create state. The state lives under the working directory
+        // (the CLI has already changed into it, so this is the same place it
+        // always was).
+        let state_dir = self.working_dir.clone();
+        let mut state = if self.fresh {
+            let fresh = WorkflowState::new(&self.workflow_path).in_dir(state_dir.as_deref());
+            if WorkflowState::state_file_exists_in(&self.workflow_path, state_dir.as_deref()) {
+                if self.dry_run {
+                    info!("Running from scratch (saved state left untouched: dry run)");
                 } else {
-                    info!("Starting fresh workflow execution");
+                    info!("Running from scratch - discarding the saved state of the previous run");
+                    if let Err(e) = fresh.delete() {
+                        warn!("Could not delete the previous run's state: {}", e);
+                    }
                 }
-                WorkflowState::new(&self.workflow_path)
+            } else {
+                info!("Running from scratch");
+            }
+            fresh
+        } else {
+            match WorkflowState::load_in(&self.workflow_path, state_dir.as_deref()) {
+                Ok(state) => state,
+                Err(e) => {
+                    // A file that exists but fails to load is corrupt/incompatible.
+                    // Warn loudly so completed steps aren't silently re-run.
+                    if WorkflowState::state_file_exists_in(
+                        &self.workflow_path,
+                        state_dir.as_deref(),
+                    ) {
+                        warn!(
+                            "Existing state file could not be read ({}). Starting fresh - \
+                             previously completed steps will re-run.",
+                            e
+                        );
+                    } else {
+                        info!("Starting fresh workflow execution");
+                    }
+                    WorkflowState::new(&self.workflow_path).in_dir(state_dir.as_deref())
+                }
             }
         };
+        state.set_metadata(self.workflow.metadata.as_ref());
 
         // Verify completed steps still have outputs
         let steps_to_rerun: Vec<String> = self
@@ -225,6 +261,16 @@ impl Engine {
 
         for step_id in steps_to_rerun {
             state.completed_steps.remove(&step_id);
+        }
+
+        if state.is_resume() {
+            info!(
+                "Resuming previous run: {} step(s) already completed",
+                state.completed_steps.len()
+            );
+            if let Some(failed) = &state.failed_step {
+                info!("The previous run stopped at step '{}'", failed);
+            }
         }
 
         // Initialize monitoring
@@ -451,6 +497,9 @@ impl Engine {
         // Print summary
         println!();
         println!("Workflow completed successfully");
+        if let Some(label) = self.workflow.metadata.as_ref().and_then(|m| m.label()) {
+            println!("Workflow: {}", label);
+        }
         println!("Total execution time: {:.2?}", total_time);
         println!();
         if let Some(summary) = format_retry_summary(&planner.retried_steps()) {

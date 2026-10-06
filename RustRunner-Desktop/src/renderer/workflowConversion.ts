@@ -12,8 +12,56 @@ export function labelToId(label: string): string {
     .replace(/_+/g, '_');
 }
 
-/** The wildcard name the file picker generates patterns for. */
-export const WILDCARD_NAME = 'sample';
+/** The wildcard name a node uses until the user picks another one. */
+export const DEFAULT_WILDCARD_NAME = 'sample';
+
+/** Longest wildcard name the Properties panel accepts. */
+export const MAX_WILDCARD_NAME_LENGTH = 40;
+
+/**
+ * Names the engine reads as command placeholders (`{input}`, `{output}`, ...);
+ * a wildcard called that would rewrite the command, so the engine rejects it.
+ */
+const RESERVED_WILDCARD_NAMES = ['input', 'output', 'inputs', 'outputs'];
+
+/** Why `value` cannot name a wildcard, or null when it can (blank = default). */
+export function wildcardNameError(value: unknown): string | null {
+  const name = typeof value === 'string' ? value.trim() : '';
+  if (name === '') return null;
+  if (name.length > MAX_WILDCARD_NAME_LENGTH) {
+    return `Use at most ${MAX_WILDCARD_NAME_LENGTH} characters`;
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    return 'Start with a letter or underscore, then use only letters, digits and underscores';
+  }
+  if (RESERVED_WILDCARD_NAMES.includes(name.toLowerCase())) {
+    return `"${name}" is a command placeholder; pick another name`;
+  }
+  return null;
+}
+
+/** The wildcard name a node uses: its own when valid, else the default. */
+export function normalizeWildcardName(value: unknown): string {
+  if (typeof value !== 'string' || wildcardNameError(value) !== null) {
+    return DEFAULT_WILDCARD_NAME;
+  }
+  return value.trim() || DEFAULT_WILDCARD_NAME;
+}
+
+/** Replaces `{from}` with `{to}` in a path pattern. */
+export function renameWildcardInPattern(text: string, from: string, to: string): string {
+  if (!text || from === to) return text;
+  return text.split(`{${from}}`).join(`{${to}}`);
+}
+
+/** The `{name}` wildcards used in a path pattern, in order, without repeats. */
+export function extractWildcardNames(text: string): string[] {
+  const names: string[] = [];
+  for (const match of text.matchAll(/\{([^{}]+)\}/g)) {
+    if (!names.includes(match[1])) names.push(match[1]);
+  }
+  return names;
+}
 
 /**
  * Builds the engine-facing workflow from the canvas.
@@ -30,7 +78,8 @@ export const WILDCARD_NAME = 'sample';
 export function convertNodesToWorkflow(
   nodes: any[],
   edges: any[],
-  nodeWildcardFiles: Record<string, string[]> = {}
+  nodeWildcardFiles: Record<string, string[]> = {},
+  details: WorkflowDetails = {}
 ) {
   const nodeIdToStepId = new Map<string, string>();
   nodes.forEach((node: any) => {
@@ -77,13 +126,44 @@ export function convertNodesToWorkflow(
     // Omit the key entirely when empty — Rust skips serializing empty maps and
     // an empty mapping would just be noise in the YAML.
     if (files.length > 0) {
-      step.wildcard_files = { [WILDCARD_NAME]: files };
+      step.wildcard_files = { [normalizeWildcardName(node.data.wildcardName)]: files };
     }
 
     return step;
   });
 
-  return { steps };
+  const metadata = buildMetadata(details);
+  return metadata ? { metadata, steps } : { steps };
+}
+
+/** Longest name/version the engine accepts (`MAX_METADATA_LEN` in model.rs). */
+export const MAX_METADATA_LEN = 200;
+
+/** The name and version a user gives a workflow. */
+export interface WorkflowDetails {
+  name?: string;
+  version?: string;
+}
+
+/** Trims, drops control characters (the engine rejects them) and caps the length. */
+export function normalizeMetadataText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim().slice(0, MAX_METADATA_LEN).trim();
+}
+
+/**
+ * The engine's optional `metadata` block, or undefined when neither a name nor
+ * a version is set so plain workflows keep their old YAML.
+ */
+export function buildMetadata(details: WorkflowDetails): { name?: string; version?: string } | undefined {
+  const name = normalizeMetadataText(details.name);
+  const version = normalizeMetadataText(details.version);
+  if (!name && !version) return undefined;
+  const metadata: { name?: string; version?: string } = {};
+  if (name) metadata.name = name;
+  if (version) metadata.version = version;
+  return metadata;
 }
 
 /** Coerces a threads value from the UI into a positive integer. */
@@ -224,6 +304,20 @@ export function validateWorkflow(workflow: any): string[] {
     if (!step.command || step.command.trim() === '') {
       errors.push(`Step ${step.id}: missing command`);
     }
+
+    // Every {name} in a path pattern needs files; the engine would reject the
+    // step otherwise, and this says so before the run starts.
+    const mapped = Object.keys(step.wildcard_files ?? {});
+    const used = extractWildcardNames([...(step.input ?? []), ...(step.output ?? [])].join(' '));
+    for (const name of used) {
+      if (!mapped.includes(name)) {
+        errors.push(
+          mapped.length > 0
+            ? `Step ${step.id}: pattern uses {${name}} but the selected files are for {${mapped[0]}}`
+            : `Step ${step.id}: pattern uses {${name}} but no files are selected for it`
+        );
+      }
+    }
   });
 
   return errors;
@@ -233,7 +327,10 @@ export function validateWorkflow(workflow: any): string[] {
  * Generates a wildcard pattern from a list of files.
  * Example: ["sample1.fastq", "sample2.fastq"] -> "{sample}.fastq"
  */
-export function generatePattern(files: string[]): string {
+export function generatePattern(
+  files: string[],
+  wildcardName: string = DEFAULT_WILDCARD_NAME
+): string {
   if (files.length === 0) return '';
   
   const firstFile = files[0];
@@ -241,7 +338,7 @@ export function generatePattern(files: string[]): string {
   const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
   const dir = firstFile.substring(0, firstFile.lastIndexOf('/') + 1);
   
-  return `${dir}{sample}${ext}`;
+  return `${dir}{${wildcardName}}${ext}`;
 }
 
 /**

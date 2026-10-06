@@ -17,6 +17,9 @@
 //! # Specify working directory
 //! rustrunner workflow.yaml --working-dir /path/to/data
 //!
+//! # Ignore saved state and run every step again
+//! rustrunner workflow.yaml --fresh
+//!
 //! # Set maximum parallel jobs
 //! rustrunner workflow.yaml --parallel 8
 //! ```
@@ -48,6 +51,7 @@ struct Config {
     working_dir: Option<PathBuf>,
     max_parallel: usize,
     verbose: bool,
+    fresh: bool,
 }
 
 impl Default for Config {
@@ -59,6 +63,7 @@ impl Default for Config {
             working_dir: None,
             max_parallel: DEFAULT_MAX_PARALLEL,
             verbose: false,
+            fresh: false,
         }
     }
 }
@@ -104,6 +109,7 @@ fn print_usage() {
         "  --parallel N        Maximum parallel jobs (default: {})",
         DEFAULT_MAX_PARALLEL
     );
+    println!("  --fresh             Discard saved state and run every step again");
     println!("  --verbose           Enable debug logging");
     println!("  --help              Show this help message");
     println!("  --version           Show version information");
@@ -134,6 +140,9 @@ fn parse_arguments(args: &[String]) -> Result<Config, String> {
             }
             "--dry-run" => {
                 config.dry_run = true;
+            }
+            "--fresh" => {
+                config.fresh = true;
             }
             "--verbose" | "-v" => {
                 config.verbose = true;
@@ -255,6 +264,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     engine.set_workflow_path(&config.workflow_path);
     engine.set_max_parallel(config.max_parallel);
     engine.set_dry_run(config.dry_run);
+    engine.set_fresh(config.fresh);
 
     if let Some(pause_path) = config.pause_flag_path {
         engine.set_pause_flag_path(pause_path);

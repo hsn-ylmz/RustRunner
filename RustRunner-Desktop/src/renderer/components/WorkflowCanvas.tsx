@@ -84,7 +84,9 @@ export function nextNodePosition(
 /** Badge glyph shown in the corner of a node for each execution state. */
 const STATUS_GLYPH: Record<string, string> = {
   running: '●',
-  done: '✓',
+  retrying: '↻',
+  succeeded: '✓',
+  skipped: '⏭',
   failed: '✕',
 };
 

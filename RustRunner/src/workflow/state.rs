@@ -9,11 +9,13 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use log::info;
 use serde::{Deserialize, Serialize};
+
+use super::model::WorkflowMetadata;
 
 /// Persistent state for a workflow execution.
 ///
@@ -37,6 +39,19 @@ pub struct WorkflowState {
     /// (absent in state files written before retries existed).
     #[serde(default)]
     pub step_attempts: HashMap<String, u32>,
+
+    /// Name of the workflow the last run executed, from its metadata
+    /// (absent in state files written before metadata existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_name: Option<String>,
+
+    /// Version of the workflow the last run executed, from its metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_version: Option<String>,
+
+    /// Directory the `.rustrunner/` folder lives in; not persisted.
+    #[serde(skip)]
+    base_dir: Option<PathBuf>,
 }
 
 impl WorkflowState {
@@ -48,7 +63,16 @@ impl WorkflowState {
             failed_step: None,
             timestamp: SystemTime::now(),
             step_attempts: HashMap::new(),
+            workflow_name: None,
+            workflow_version: None,
+            base_dir: None,
         }
+    }
+
+    /// Records the name and version of the workflow being run.
+    pub fn set_metadata(&mut self, metadata: Option<&WorkflowMetadata>) {
+        self.workflow_name = metadata.and_then(|m| m.name.clone());
+        self.workflow_version = metadata.and_then(|m| m.version.clone());
     }
 
     /// Records how many attempts a step used.
@@ -56,34 +80,49 @@ impl WorkflowState {
         self.step_attempts.insert(step_id.to_string(), attempts);
     }
 
+    /// Directs this state's file to `<dir>/.rustrunner/` instead of the
+    /// current directory.
+    pub fn in_dir(mut self, dir: Option<&Path>) -> Self {
+        self.base_dir = dir.map(Path::to_path_buf);
+        self
+    }
+
     /// Saves the state to a file.
     ///
-    /// State is saved to `.rustrunner/{workflow_stem}.state`
-    /// in the current directory.
+    /// State is saved to `.rustrunner/{workflow_stem}.state` in the base
+    /// directory (the current directory unless set with [`Self::in_dir`]).
     pub fn save(&self) -> Result<(), Box<dyn Error>> {
-        fs::create_dir_all(".rustrunner")?;
-
         let state_file = self.state_file_path();
+        if let Some(parent) = state_file.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
         let json = serde_json::to_string_pretty(self)?;
         fs::write(&state_file, json)?;
 
-        info!("Saved workflow state to {}", state_file);
+        info!("Saved workflow state to {}", state_file.display());
         Ok(())
     }
 
-    /// Loads state from a file.
+    /// Loads state from the current directory.
     ///
     /// Returns an error if no state file exists or it can't be read.
     pub fn load(workflow_path: &str) -> Result<Self, Box<dyn Error>> {
-        let state_file = Self::state_file_path_for(workflow_path);
+        Self::load_in(workflow_path, None)
+    }
+
+    /// Loads state from `<dir>/.rustrunner/` (the current directory when
+    /// `dir` is `None`).
+    pub fn load_in(workflow_path: &str, dir: Option<&Path>) -> Result<Self, Box<dyn Error>> {
+        let state_file = Self::state_file_path_for(workflow_path, dir);
 
         let content = fs::read_to_string(&state_file)?;
         let state: WorkflowState = serde_json::from_str(&content)?;
 
-        info!("Loaded workflow state from {}", state_file);
+        info!("Loaded workflow state from {}", state_file.display());
         info!("Previously completed: {:?}", state.completed_steps);
 
-        Ok(state)
+        Ok(state.in_dir(dir))
     }
 
     /// Returns true if a persisted state file exists for the given workflow.
@@ -91,22 +130,31 @@ impl WorkflowState {
     /// Lets callers distinguish "no prior run" (fresh start, expected) from
     /// "a state file exists but failed to load" (corrupt - worth a warning).
     pub fn state_file_exists(workflow_path: &str) -> bool {
-        Path::new(&Self::state_file_path_for(workflow_path)).exists()
+        Self::state_file_exists_in(workflow_path, None)
+    }
+
+    /// Like [`Self::state_file_exists`], looking under `dir`.
+    pub fn state_file_exists_in(workflow_path: &str, dir: Option<&Path>) -> bool {
+        Self::state_file_path_for(workflow_path, dir).exists()
     }
 
     /// Returns the path to the state file.
-    fn state_file_path(&self) -> String {
-        Self::state_file_path_for(&self.workflow_path)
+    fn state_file_path(&self) -> PathBuf {
+        Self::state_file_path_for(&self.workflow_path, self.base_dir.as_deref())
     }
 
     /// Returns the state file path for a given workflow path.
-    fn state_file_path_for(workflow_path: &str) -> String {
+    fn state_file_path_for(workflow_path: &str, dir: Option<&Path>) -> PathBuf {
         let stem = Path::new(workflow_path)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("workflow");
 
-        format!(".rustrunner/{}.state", stem)
+        let relative = Path::new(".rustrunner").join(format!("{}.state", stem));
+        match dir {
+            Some(dir) => dir.join(relative),
+            None => relative,
+        }
     }
 
     /// Marks a step as completed.
@@ -138,9 +186,9 @@ impl WorkflowState {
     /// Deletes the state file.
     pub fn delete(&self) -> Result<(), Box<dyn Error>> {
         let state_file = self.state_file_path();
-        if Path::new(&state_file).exists() {
+        if state_file.exists() {
             fs::remove_file(&state_file)?;
-            info!("Deleted state file: {}", state_file);
+            info!("Deleted state file: {}", state_file.display());
         }
         Ok(())
     }
@@ -172,6 +220,42 @@ mod tests {
         value.as_object_mut().unwrap().remove("step_attempts");
         let old: WorkflowState = serde_json::from_value(value).unwrap();
         assert!(old.step_attempts.is_empty());
+    }
+
+    #[test]
+    fn test_metadata_roundtrip_and_old_state_compat() {
+        let mut state = WorkflowState::new("t.yaml");
+        state.set_metadata(Some(&WorkflowMetadata::new(Some("qc"), Some("1.2"))));
+        let json = serde_json::to_string(&state).unwrap();
+        let loaded: WorkflowState = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.workflow_name.as_deref(), Some("qc"));
+        assert_eq!(loaded.workflow_version.as_deref(), Some("1.2"));
+
+        state.set_metadata(None);
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains("workflow_name"));
+        // State files written before metadata existed still load.
+        let old: WorkflowState = serde_json::from_str(&json).unwrap();
+        assert!(old.workflow_name.is_none() && old.workflow_version.is_none());
+    }
+
+    #[test]
+    fn test_save_and_load_in_dir_round_trip() {
+        let dir = tempdir().unwrap();
+        let mut state = WorkflowState::new("/elsewhere/flow.yaml").in_dir(Some(dir.path()));
+        state.mark_completed("a");
+        state.save().unwrap();
+        assert!(dir.path().join(".rustrunner/flow.state").exists());
+        assert!(WorkflowState::state_file_exists_in(
+            "flow.yaml",
+            Some(dir.path())
+        ));
+
+        let loaded = WorkflowState::load_in("flow.yaml", Some(dir.path())).unwrap();
+        assert!(loaded.completed_steps.contains("a"));
+        // The loaded state keeps writing to the same directory.
+        loaded.delete().unwrap();
+        assert!(!dir.path().join(".rustrunner/flow.state").exists());
     }
 
     #[test]
