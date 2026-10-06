@@ -88,8 +88,20 @@ import {
   IconButton,
   Kbd,
   TextField,
+  ToastHost,
+  useToasts,
   type ConfirmRequest,
 } from './ui';
+import { RunBanner } from './components/RunBanner';
+import {
+  PENDING_STATUS,
+  buildFailureCard,
+  describeRunResult,
+  sectionToEdit,
+  type FailureCardData,
+  type RunResult,
+} from './runFeedback';
+import type { LogFilter } from './logLines';
 
 /**
  * Cap on retained log lines. A chatty run (or `seq 1 200000`) used to grow
@@ -137,6 +149,9 @@ function WorkflowEditorInner() {
   const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
   /** Runs of this workflow in the working directory, newest first. */
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
+  const [historyStatus, setHistoryStatus] = useState<'loading' | 'ready' | 'error'>('ready');
+  /** Bumped by "Try again" to reload the history. */
+  const [historyReload, setHistoryReload] = useState(0);
   /** HTML report of the last real run (absolute path from the engine). */
   const [latestReport, setLatestReport] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
@@ -158,6 +173,11 @@ function WorkflowEditorInner() {
   const confirmResolver = useRef<((ok: boolean) => void) | null>(null);
   const [runOutcome, setRunOutcome] = useState<RunOutcome | null>(null);
   const [dryRunActive, setDryRunActive] = useState(false);
+  /** How the last run ended, from the engine's `run_finished` event. */
+  const [runResult, setRunResult] = useState<(RunResult & { dry: boolean }) | null>(null);
+  const [summaryDismissed, setSummaryDismissed] = useState(false);
+  const [logFilter, setLogFilter] = useState<LogFilter>('all');
+  const { toasts, notify, dismiss: dismissToast } = useToasts();
   /** Whether the run now in flight is a dry run, readable from the IPC listeners. */
   const dryRunRef = useRef(false);
 
@@ -240,9 +260,19 @@ function WorkflowEditorInner() {
     // Typed run events drive the canvas badges and the status panel.
     const unsubscribeEvent = window.electron.ipcRenderer.onWorkflowEvent(
       (runEvent) => {
-        if (runEvent.event === 'run_started') setLatestReport(null);
-        if (runEvent.event === 'run_finished' && runEvent.report) {
-          setLatestReport(runEvent.report);
+        if (runEvent.event === 'run_started') {
+          setLatestReport(null);
+          setRunResult(null);
+          setSummaryDismissed(false);
+        }
+        if (runEvent.event === 'run_finished') {
+          if (runEvent.report) setLatestReport(runEvent.report);
+          setRunResult({
+            status: runEvent.status,
+            summary: runEvent.summary,
+            report: runEvent.report,
+            dry: dryRunRef.current,
+          });
         }
         const event = toStepEvent(runEvent);
         if (!event || !resolveBaseStepId(event.stepId, baseStepIdsRef.current)) {
@@ -278,6 +308,7 @@ function WorkflowEditorInner() {
         dryRunRef.current = false;
         setDryRunActive(false);
         addLog(`Execution error: ${error}`);
+        notify('danger', 'The run could not be started. See the log for details.');
       }
     );
 
@@ -305,7 +336,7 @@ function WorkflowEditorInner() {
       unsubscribeError();
       unsubscribeUpdate();
     };
-  }, [addLog, appendLogLines]);
+  }, [addLog, appendLogLines, notify]);
 
   // Auto-dismiss the "up to date" toast after a few seconds — it's only
   // there to give feedback that the manual check ran; we don't want it
@@ -717,10 +748,12 @@ function WorkflowEditorInner() {
       // would otherwise blow up deep inside the renderer.
       if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
         addLog('Invalid workflow file: expected "nodes" and "edges" arrays');
+        notify('danger', 'That file is not a RustRunner workflow.');
         return;
       }
       if (!data.nodes.every((n: any) => n && typeof n.id === 'string' && n.position)) {
         addLog('Invalid workflow file: one or more nodes are malformed');
+        notify('danger', 'That workflow file is damaged: one or more steps cannot be read.');
         return;
       }
 
@@ -753,8 +786,9 @@ function WorkflowEditorInner() {
       );
     } catch (error) {
       addLog(`Failed to open workflow: ${error}`);
+      notify('danger', 'Could not open that workflow file.');
     }
-  }, [addLog, confirmDiscardIfDirty, resetHistory]);
+  }, [addLog, confirmDiscardIfDirty, resetHistory, notify]);
 
   /**
    * Writes the workflow. `saveAs` forces a location prompt; otherwise the
@@ -792,8 +826,10 @@ function WorkflowEditorInner() {
         setCurrentFilePath(written);
         setIsDirty(false);
         addLog(`Workflow saved: ${written}`);
+        notify('success', `Saved ${written.split(/[\\/]/).pop()}`);
       } catch (error) {
         addLog(`Failed to save workflow: ${error}`);
+        notify('danger', 'Could not save the workflow. Check that the folder is writable.');
       }
     },
     [
@@ -806,6 +842,7 @@ function WorkflowEditorInner() {
       keepGoing,
       currentFilePath,
       addLog,
+      notify,
     ]
   );
 
@@ -843,8 +880,9 @@ function WorkflowEditorInner() {
     if (directory) {
       setWorkingDirectory(directory);
       addLog(`Working directory set: ${directory}`);
+      notify('info', `Working directory: ${directory}`);
     }
-  }, [addLog]);
+  }, [addLog, notify]);
 
   /**
    * Shared preflight for Run and Dry Run: resolves a working directory,
@@ -876,6 +914,10 @@ function WorkflowEditorInner() {
       if (errors.length > 0) {
         addLog('Workflow validation failed:');
         errors.forEach((err) => addLog(`  - ${err}`));
+        notify(
+          'danger',
+          `The workflow cannot run yet: ${errors[0]}${errors.length > 1 ? ` (and ${errors.length - 1} more)` : ''}`
+        );
         return null;
       }
 
@@ -909,6 +951,7 @@ function WorkflowEditorInner() {
       keepGoing,
       workingDirectory,
       addLog,
+      notify,
     ]
   );
 
@@ -943,18 +986,23 @@ function WorkflowEditorInner() {
     }
     if (executionState !== 'idle') return;
     let cancelled = false;
+    setHistoryStatus('loading');
     window.electron.ipcRenderer
       .listRunHistory(workingDirectory, workflowName, workflowId)
       .then((runs) => {
-        if (!cancelled) setRunHistory(runs);
+        if (cancelled) return;
+        setRunHistory(runs);
+        setHistoryStatus('ready');
       })
       .catch(() => {
-        if (!cancelled) setRunHistory([]);
+        if (cancelled) return;
+        setRunHistory([]);
+        setHistoryStatus('error');
       });
     return () => {
       cancelled = true;
     };
-  }, [workflowName, workflowId, workingDirectory, executionState]);
+  }, [workflowName, workflowId, workingDirectory, executionState, historyReload]);
 
   const openReport = useCallback(
     async (reportRef: string) => {
@@ -963,12 +1011,16 @@ function WorkflowEditorInner() {
           workingDirectory,
           reportRef
         );
-        if (result.ok === false) addLog(`Could not open the report: ${result.error}`);
+        if (result.ok === false) {
+          addLog(`Could not open the report: ${result.error}`);
+          notify('danger', 'Could not open the report. It may have been moved or deleted.');
+        }
       } catch (err) {
         addLog(`Could not open the report: ${err instanceof Error ? err.message : String(err)}`);
+        notify('danger', 'Could not open the report. It may have been moved or deleted.');
       }
     },
-    [workingDirectory, addLog]
+    [workingDirectory, addLog, notify]
   );
 
   /**
@@ -1009,6 +1061,7 @@ function WorkflowEditorInner() {
 
       dryRunRef.current = false;
       setRunOutcome(null);
+      setRunResult(null);
       setExecutionState('running');
       window.electron.ipcRenderer.runWorkflow(prepared.workflow, false, prepared.dir, fresh);
     },
@@ -1032,6 +1085,7 @@ function WorkflowEditorInner() {
     if (!prepared) return;
     dryRunRef.current = true;
     setDryRunActive(true);
+    setRunResult(null);
 
     addLog('Starting dry run (commands will not execute)...');
     // Not fresh: the preview shows which steps would be skipped as up to date
@@ -1056,13 +1110,37 @@ function WorkflowEditorInner() {
 
   const handleClearLogs = useCallback(() => {
     setExecutionLogs([]);
-    const timestamp = new Date().toLocaleTimeString();
-    setExecutionLogs([`[${timestamp}] Logs cleared`]);
   }, []);
 
   const handleTogglePanel = useCallback(() => {
     setShowExecutionPanel((prev) => !prev);
   }, []);
+
+  /** "Show logs" on the failure card: the log, narrowed to the errors. */
+  const showErrorLogs = useCallback(() => {
+    setShowExecutionPanel(true);
+    setExecutionTab('logs');
+    setLogFilter('errors');
+  }, []);
+
+  /** "Edit step" on the failure card: select the step and open the section that fixes it. */
+  const editFailedStep = useCallback(
+    (card: FailureCardData) => {
+      const node = nodes.find((n: any) => labelToId(n.data?.label || '') === card.nodeStepId);
+      if (!node) {
+        notify('warning', `"${card.nodeLabel}" is no longer on the canvas.`);
+        return;
+      }
+      setNodes((nds) => nds.map((n: any) => ({ ...n, selected: n.id === node.id })));
+      setEdges((eds) =>
+        eds.some((e: any) => e.selected) ? eds.map((e: any) => ({ ...e, selected: false })) : eds
+      );
+      setSelectedNodeId(node.id);
+      setFocusRequest({ nodeId: node.id, section: sectionToEdit(card) });
+      fitView({ nodes: [{ id: node.id }], maxZoom: 1, duration: 200 });
+    },
+    [nodes, notify, fitView]
+  );
 
   /** Selects the step a problem belongs to, brings it into view and puts the cursor in the field. */
   const jumpToIssue = useCallback(
@@ -1186,17 +1264,44 @@ function WorkflowEditorInner() {
   // reason: it is derived from the nodes and must not be saved.
   const decoratedEdges = useMemo(
     () =>
-      edges.map((edge: any) => ({
-        ...edge,
-        data: { ...edge.data, __typeCheck: checkEdge(edge, nodes) },
-      })),
-    [edges, nodes]
+      edges.map((edge: any) => {
+        const targetState = stepStatus[nodeIdToStepId(edge.target)]?.state;
+        return {
+          ...edge,
+          data: {
+            ...edge.data,
+            __typeCheck: checkEdge(edge, nodes),
+            // The edge that feeds a step that is working right now.
+            __active: targetState === 'running' || targetState === 'retrying',
+          },
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [edges, nodes, stepStatus]
   );
 
   const mockedCount = countMockedNodes(nodes);
 
+  const summaryVisible = runResult !== null && runPhase === 'ended' && !summaryDismissed;
+  const failureCard = useMemo(
+    () =>
+      summaryVisible && runResult?.status === 'failed' && !runResult.dry
+        ? buildFailureCard(
+            stepRuns,
+            nodes.map((n: any) => ({
+              stepId: labelToId(n.data?.label || ''),
+              label: n.data?.label || 'Node',
+            })),
+            executionLogs
+          )
+        : null,
+    [summaryVisible, runResult, stepRuns, nodes, executionLogs]
+  );
+
   const decoratedNodes = nodes.map((node: any) => {
-    const status = stepStatus[nodeIdToStepId(node.id)];
+    // While a run is active a step the engine has not reached yet is waiting.
+    const status =
+      stepStatus[nodeIdToStepId(node.id)] ?? (runPhase === 'active' ? PENDING_STATUS : undefined);
     const invalidReason = invalidNodeIds[node.id];
     if (!status && !invalidReason) return node;
     return { ...node, data: { ...node.data, __status: status, __invalidReason: invalidReason } };
@@ -1463,7 +1568,14 @@ function WorkflowEditorInner() {
             {progress && <div className="execution-progress" data-testid="progress">{progress}</div>}
           </div>
 
-          {paletteOpen && <ToolPalette onAdd={addCatalogNode} onClose={closePalette} />}
+          {paletteOpen && <ToolPalette
+              onAdd={addCatalogNode}
+              onClose={closePalette}
+              onAddCustom={() => {
+                closePalette();
+                addNode();
+              }}
+            />}
 
           {problemsOpen && hasProblems && (
             <ProblemsPanel
@@ -1525,13 +1637,34 @@ function WorkflowEditorInner() {
           <RunHistoryPanel
             runs={runHistory}
             hasWorkingDirectory={Boolean(workingDirectory)}
+            status={historyStatus}
+            onRetry={() => setHistoryReload((n) => n + 1)}
             onOpenReport={openReport}
           />
         }
         historyCount={runHistory.length}
         latestReport={latestReport !== null}
         onOpenLatestReport={() => latestReport && openReport(latestReport)}
+        filter={logFilter}
+        onFilterChange={setLogFilter}
+        onNotify={notify}
+        bannerSize={summaryVisible ? (failureCard ? 'failure' : 'summary') : undefined}
+        banner={
+          summaryVisible && runResult ? (
+            <RunBanner
+              summary={describeRunResult(runResult, runResult.dry)}
+              failure={failureCard}
+              hasReport={Boolean(runResult.report)}
+              onOpenReport={() => runResult.report && openReport(runResult.report)}
+              onShowLogs={showErrorLogs}
+              onEditStep={editFailedStep}
+              onDismiss={() => setSummaryDismissed(true)}
+            />
+          ) : undefined
+        }
       />
+
+      <ToastHost toasts={toasts} onDismiss={dismissToast} />
 
       {/* Name / details dialog */}
       {nameDialog && (

@@ -6,14 +6,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CATALOG, categoryLabel, searchTools, type CatalogTool } from '../tools/catalog';
 import { nodeColorVar } from '../nodeColors';
-import { IconButton, Panel, Select, TextField } from '../ui';
+import { Button, Icon, IconButton, Panel, Select, TextField } from '../ui';
 
 export function ToolPalette({
   onAdd,
   onClose,
+  onAddCustom,
 }: {
   onAdd: (tool: CatalogTool) => void;
   onClose: () => void;
+  /** Adds an empty custom step; offered when the search finds nothing. */
+  onAddCustom?: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
@@ -73,8 +76,32 @@ export function ToolPalette({
 
       <div className="tool-palette-list" data-testid="palette-list">
         {results.length === 0 && (
-          <div className="tool-palette-empty">
-            No catalog tool matches. Use Add node for a custom step.
+          <div className="tool-palette-empty" data-testid="palette-empty">
+            <Icon name="info" size={16} />
+            <p>
+              {query.trim()
+                ? `No catalog tool matches "${query.trim()}".`
+                : 'No catalog tool in this category.'}{' '}
+              Try a shorter word, or a tool's job such as "align" or "trim".
+            </p>
+            <div className="tool-palette-empty-actions">
+              <Button
+                size="sm"
+                data-testid="palette-clear-search"
+                onClick={() => {
+                  setQuery('');
+                  setCategory('');
+                  searchRef.current?.focus();
+                }}
+              >
+                Clear search
+              </Button>
+              {onAddCustom && (
+                <Button size="sm" data-testid="palette-add-custom" onClick={onAddCustom}>
+                  Add a custom step
+                </Button>
+              )}
+            </div>
           </div>
         )}
         {results.map((tool) => (

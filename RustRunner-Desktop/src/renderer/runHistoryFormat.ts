@@ -31,7 +31,9 @@ export const STATUS_TEXT: Record<RunHistoryStatus, { icon: IconName; label: stri
 };
 
 /** "3 of 5 steps succeeded, 1 failed, 1 skipped": only the non-zero parts. */
-export function formatCounts(entry: RunHistoryEntry): string {
+export function formatCounts(
+  entry: Pick<RunHistoryEntry, 'succeeded' | 'failed' | 'skipped' | 'total'>
+): string {
   const parts = [`${entry.succeeded} succeeded`];
   if (entry.failed > 0) parts.push(`${entry.failed} failed`);
   if (entry.skipped > 0) parts.push(`${entry.skipped} skipped`);

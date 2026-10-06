@@ -11,23 +11,58 @@ import { STATUS_TEXT, formatCounts, formatDuration, formatStarted } from '../run
 export function RunHistoryPanel({
   runs,
   hasWorkingDirectory,
+  status = 'ready',
+  onRetry,
   onOpenReport,
 }: {
   runs: RunHistoryEntry[];
   hasWorkingDirectory: boolean;
+  /** Where the list is: still being read, read, or could not be read. */
+  status?: 'loading' | 'ready' | 'error';
+  onRetry?: () => void;
   onOpenReport: (report: string) => void;
 }) {
   if (!hasWorkingDirectory) {
     return (
-      <div className="step-status-empty" data-testid="history-empty">
-        Run the workflow to build its history. Each run is kept in the working directory.
+      <div className="panel-state" data-testid="history-empty">
+        <Icon name="info" size={16} />
+        <span>Run the workflow to build its history. Each run is kept in the working directory.</span>
+      </div>
+    );
+  }
+  // A list that is being refreshed stays on screen; only an empty one shows the spinner.
+  if (status === 'loading' && runs.length === 0) {
+    return (
+      <div className="panel-state" role="status" data-testid="history-loading">
+        <Icon name="spinner" size={16} spin />
+        <span>Reading the run history</span>
+      </div>
+    );
+  }
+  if (status === 'error') {
+    return (
+      <div className="panel-state panel-state-error" role="alert" data-testid="history-error">
+        <Icon name="alert" size={16} />
+        <span>
+          The run history could not be read. The working directory may have moved or be
+          unavailable.
+        </span>
+        {onRetry && (
+          <Button size="sm" data-testid="history-retry" onClick={onRetry}>
+            Try again
+          </Button>
+        )}
       </div>
     );
   }
   if (runs.length === 0) {
     return (
-      <div className="step-status-empty" data-testid="history-empty">
-        No runs of this workflow in this working directory yet. Dry runs are not recorded.
+      <div className="panel-state" data-testid="history-empty">
+        <Icon name="info" size={16} />
+        <span>
+          No runs of this workflow in this working directory yet. Run it once and it appears here
+          with a report. Dry runs are not recorded.
+        </span>
       </div>
     );
   }

@@ -70,6 +70,9 @@ for (const scheme of SCHEMES) {
     await shoot('catalog-palette');
     await page.getByTestId('palette-search').fill('sam');
     await shoot('catalog-palette-search');
+    await page.getByTestId('palette-search').fill('qqqzzz');
+    await expect(page.getByTestId('palette-empty')).toBeVisible();
+    await shoot('catalog-palette-no-results');
     await page.getByTestId('palette-search').press('Escape');
 
     await addFromPalette(page, 'bwa', 'bwa-mem');
@@ -144,12 +147,16 @@ for (const scheme of SCHEMES) {
     await openStepStatus(page);
     await expect(stepRow(page, 'flaky')).toHaveAttribute('data-state', 'retrying');
     await shoot('running-step-retrying');
+    await page.getByTestId('tab-logs').click();
+    await shoot('running-logs');
+    await openStepStatus(page);
 
     await expect(stepRow(page, 'flaky')).toHaveAttribute('data-state', 'running');
     await shoot('running-step-running');
 
     await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'succeeded');
     await expect(page.getByTestId('open-latest-report')).toBeVisible();
+    await expect(page.getByTestId('run-summary')).toBeVisible();
     await shoot('finished-success-steps');
 
     await page.getByTestId('tab-logs').click();
@@ -178,7 +185,12 @@ for (const scheme of SCHEMES) {
     await expect(stepRow(page, 'empty')).toHaveAttribute('data-state', 'failed');
     await expect(stepRow(page, 'next')).toHaveAttribute('data-state', 'skipped');
     await expect(page.getByTestId('run-from-scratch')).toBeEnabled();
+    await expect(page.getByTestId('failure-card')).toBeVisible();
     await shoot('failed-blocking-check-steps');
+
+    await page.getByTestId('failure-show-logs').click();
+    await shoot('failed-show-logs-errors-only');
+    await page.getByTestId('log-filter-all').click();
 
     await page.getByTestId('tab-logs').click();
     await shoot('failed-blocking-check-logs');
@@ -212,5 +224,32 @@ for (const scheme of SCHEMES) {
     await page.getByTestId('problems-close').click();
     await page.getByTestId('run').hover();
     await shoot('validation-run-disabled-reason');
+  });
+
+  test(`${scheme}: log tools, toast and empty states`, async ({ page, app }) => {
+    await prepare(page, app, scheme);
+    const shoot = shooter(page, scheme, 'states');
+
+    await page.getByTestId('tab-steps').click();
+    await shoot('steps-empty');
+    await page.getByTestId('tab-history').click();
+    await shoot('history-empty');
+    await page.getByTestId('tab-logs').click();
+    await page.getByRole('button', { name: 'Clear log' }).click();
+    await shoot('logs-empty');
+
+    await buildChain(page, [
+      { label: 'Make', command: 'echo hello > {output}', output: 'a.txt' },
+      { label: 'Break', command: 'echo "boom: no such file" >&2; exit 3', input: 'a.txt', output: 'b.txt' },
+    ]);
+    await page.getByTestId('run-from-scratch').click();
+    await expect(page.getByTestId('failure-card')).toBeVisible();
+    await page.getByTestId('tab-logs').click();
+    await page.getByTestId('log-search').fill('boom');
+    await page.getByTestId('log-copy').click();
+    await expect(page.getByTestId('toast').first()).toBeVisible();
+    await shoot('logs-search-and-copy-toast');
+    await page.getByTestId('log-search').fill('zzz-no-such-text');
+    await shoot('logs-no-match');
   });
 }

@@ -1059,3 +1059,309 @@
   text-align: right;
   white-space: nowrap;
 }
+
+/* =============================================================================
+   Run feedback: node status line, active edges, banner, failure card, toasts
+   ============================================================================= */
+
+/* The state in words under the tool name. Text and icon carry it; the border
+   and corner badge repeat it in colour. */
+.node-status-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--node-text);
+}
+
+.node-status-line-pending {
+  font-weight: var(--weight-regular);
+  color: var(--node-text-muted);
+}
+
+/* The edge that feeds a step working right now: a little thicker with a soft
+   halo, static (no motion needed to see it). */
+.typed-edge-active .react-flow__edge-path {
+  stroke-width: 4;
+  filter: drop-shadow(0 0 3px var(--status-running));
+}
+
+.panel-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  color: var(--text-muted);
+}
+
+.panel-state-error {
+  color: var(--danger);
+}
+
+.link-button {
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.tool-palette-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.tool-palette-empty p {
+  margin: 0;
+}
+
+.tool-palette-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ---- Execution panel: banner and log tools ---- */
+
+.execution-panel.has-summary.visible {
+  height: 290px;
+}
+
+.execution-panel.has-failure.visible {
+  height: 390px;
+}
+
+.execution-banner {
+  max-height: 210px;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.run-banner-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.run-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+}
+
+.run-banner-icon {
+  flex-shrink: 0;
+}
+
+.run-banner-success .run-banner-icon {
+  color: var(--success);
+}
+
+.run-banner-danger .run-banner-icon {
+  color: var(--danger);
+}
+
+.run-banner-detail {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-banner-spacer {
+  flex: 1;
+}
+
+.failure-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background-color: var(--danger-subtle);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-control);
+}
+
+@media (max-width: 1100px) {
+  .failure-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.failure-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.failure-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.failure-title .icon {
+  color: var(--danger);
+}
+
+.failure-what,
+.failure-note {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.failure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.failure-output {
+  min-width: 0;
+  margin: 0;
+}
+
+.failure-output figcaption {
+  margin-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+}
+
+.failure-output pre {
+  max-height: 110px;
+  margin: 0;
+  padding: var(--space-2);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+}
+
+.log-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background-color: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.log-filter {
+  display: flex;
+  gap: var(--space-half);
+}
+
+.log-toolbar .field {
+  width: 200px;
+}
+
+.log-count {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.log-toolbar-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.log-content {
+  font-size: var(--text-sm);
+}
+
+.log-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  font-family: var(--font-sans);
+  color: var(--text-muted);
+}
+
+/* ---- Toasts ---- */
+
+.toast-host {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 360px;
+  max-width: calc(100vw - 2 * var(--space-4));
+  pointer-events: none;
+}
+
+.toast {
+  --tone: var(--info);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background-color: var(--elevated);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--tone);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-lg);
+  pointer-events: auto;
+}
+
+.toast-success {
+  --tone: var(--success);
+}
+
+.toast-warning {
+  --tone: var(--warning);
+}
+
+.toast-danger {
+  --tone: var(--danger);
+}
+
+.toast-icon {
+  flex-shrink: 0;
+  color: var(--tone);
+}
+
+.toast-message {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

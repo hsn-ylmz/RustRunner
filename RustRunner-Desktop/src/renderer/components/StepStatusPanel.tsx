@@ -1,20 +1,11 @@
-import { Badge, Icon, type BadgeTone, type IconName } from '../ui';
+import { Badge, Icon } from '../ui';
+import { stateView } from '../runFeedback';
 import {
   summarizeRows,
   type RunPhase,
   type StatusRow,
   type StepState,
 } from '../stepEvents';
-
-/** Wording, icon and badge tone for each state, matching the canvas badges. */
-const STATE_TEXT: Record<StepState, { icon: IconName; tone: BadgeTone; label: string }> = {
-  pending: { icon: 'circle', tone: 'neutral', label: 'Pending' },
-  running: { icon: 'dot', tone: 'accent', label: 'Running' },
-  retrying: { icon: 'retry', tone: 'warning', label: 'Retrying' },
-  succeeded: { icon: 'check', tone: 'success', label: 'Succeeded' },
-  failed: { icon: 'x', tone: 'danger', label: 'Failed' },
-  skipped: { icon: 'skip', tone: 'neutral', label: 'Skipped' },
-};
 
 const SUMMARY_ORDER: StepState[] = [
   'running',
@@ -38,8 +29,9 @@ export function StepStatusPanel({
 }) {
   if (phase === 'none' || rows.length === 0) {
     return (
-      <div className="step-status-empty">
-        Run or dry-run the workflow to see each step's status here.
+      <div className="panel-state" data-testid="steps-empty">
+        <Icon name="info" size={16} />
+        <span>Run or dry-run the workflow to see each step's status here.</span>
       </div>
     );
   }
@@ -52,11 +44,11 @@ export function StepStatusPanel({
         {SUMMARY_ORDER.filter((state) => counts[state] > 0).map((state) => (
           <Badge
             key={state}
-            tone={STATE_TEXT[state].tone}
-            icon={STATE_TEXT[state].icon}
+            tone={stateView(state).tone}
+            icon={stateView(state).icon}
             className={`step-chip step-state-${state}`}
           >
-            {counts[state]} {STATE_TEXT[state].label.toLowerCase()}
+            {counts[state]} {stateView(state).label.toLowerCase()}
           </Badge>
         ))}
       </div>
@@ -77,10 +69,15 @@ export function StepStatusPanel({
               data-testid="step-row"
               data-step-id={row.id}
               data-state={row.state}
+              data-up-to-date={row.upToDate ? 'true' : undefined}
             >
               <td className="step-row-state">
-                <Icon name={STATE_TEXT[row.state].icon} size={14} className="step-glyph" />{' '}
-                {STATE_TEXT[row.state].label}
+                <Icon
+                  name={stateView(row.state, { upToDate: row.upToDate }).icon}
+                  size={14}
+                  className="step-glyph"
+                />{' '}
+                {stateView(row.state, { upToDate: row.upToDate }).label}
                 {row.mocked && row.state === 'succeeded' && (
                   <Badge
                     tone="warning"

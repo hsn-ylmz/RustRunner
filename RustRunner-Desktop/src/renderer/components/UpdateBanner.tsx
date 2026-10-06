@@ -1,6 +1,6 @@
 /** Slim banner reporting auto-update status. */
 
-import { Button, IconButton } from '../ui';
+import { Button, Icon, IconButton, type IconName } from '../ui';
 
 /**
  * Status payloads emitted by the main process over the 'update-status'
@@ -24,6 +24,10 @@ export type UpdateStatus =
   | { status: 'downloading'; percent: number; bytesPerSecond: number; transferred: number; total: number }
   | { status: 'downloaded'; version: string; canAutoInstall: boolean }
   | { status: 'error'; manual: boolean; message: string };
+
+/** What an update failure means for the person, before the technical message. */
+export const UPDATE_ERROR_HELP =
+  'You can keep working. RustRunner tries again the next time it starts.';
 
 /** Human-readable bytes-per-second for the download progress line. */
 function formatBytesPerSec(bytes: number): string {
@@ -73,10 +77,14 @@ export function UpdateBanner({
   let progressPct: number | null = null;
   let action: { label: string; onClick: () => void } | null = null;
   let variant: 'info' | 'success' | 'error' = 'info';
+  let icon: IconName = 'info';
+  let busy = false;
 
   switch (status.status) {
     case 'checking':
       title = 'Checking for updates…';
+      icon = 'spinner';
+      busy = true;
       break;
     case 'available':
       title = `Update available — v${status.version}`;
@@ -91,6 +99,8 @@ export function UpdateBanner({
       break;
     case 'downloading': {
       title = 'Downloading update';
+      icon = 'spinner';
+      busy = true;
       progressPct = Math.max(0, Math.min(100, status.percent));
       const speed = formatBytesPerSec(status.bytesPerSecond);
       detail = speed
@@ -108,27 +118,47 @@ export function UpdateBanner({
         onClick: onInstall,
       };
       variant = 'success';
+      icon = 'check';
       break;
     case 'up-to-date':
       title = `You're up to date — v${status.version}`;
       variant = 'success';
+      icon = 'check';
       break;
     case 'error':
-      title = 'Update check failed';
-      detail = status.message;
+      title = 'Could not check for updates';
+      detail = status.message ? `${UPDATE_ERROR_HELP} (${status.message})` : UPDATE_ERROR_HELP;
       variant = 'error';
+      icon = 'alert';
       break;
   }
 
   return (
-    <div className={`update-banner update-banner-${variant}`} role="status">
+    <div
+      className={`update-banner update-banner-${variant}`}
+      role="status"
+      data-testid="update-banner"
+      data-variant={variant}
+    >
+      <Icon name={icon} size={16} spin={busy} className="update-banner-icon" />
       <div className="update-banner-text">
         <span className="update-banner-title">{title}</span>
-        {detail && <span className="update-banner-detail">{detail}</span>}
+        {detail && (
+          <span className="update-banner-detail" title={detail}>
+            {detail}
+          </span>
+        )}
       </div>
 
       {progressPct !== null && (
-        <div className="update-banner-progress" aria-hidden="true">
+        <div
+          className="update-banner-progress"
+          role="progressbar"
+          aria-label="Download progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progressPct)}
+        >
           <div
             className="update-banner-progress-bar"
             style={{ width: `${progressPct}%` }}

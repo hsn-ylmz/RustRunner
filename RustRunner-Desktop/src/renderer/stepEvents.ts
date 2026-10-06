@@ -142,8 +142,12 @@ export interface StepRun {
   message?: string;
   /** Non-blocking output checks that failed. */
   warnings?: string[];
+  /** The blocking output check that failed the step, in the engine's words. */
+  failedCheck?: string;
   /** The step succeeded without running its tool (outputs are placeholders). */
   mocked?: boolean;
+  /** The step was skipped because its outputs are current. */
+  upToDate?: boolean;
 }
 
 /** Engine step id -> what is known about it, in the order first seen. */
@@ -190,15 +194,24 @@ export function applyRunEvent(runs: StepRuns, event: StepEvent): StepRuns {
       };
       break;
     case 'skipped':
-      next = { state: 'skipped', message: describeSkipReason(event.reason) };
+      next = {
+        state: 'skipped',
+        message: describeSkipReason(event.reason),
+        upToDate: event.reason === UP_TO_DATE_REASON ? true : undefined,
+      };
       break;
     case 'failed':
       next = { ...prev, state: 'failed', message: event.message, delaySecs: undefined };
       break;
     case 'check':
-      // A blocking failure is followed by the step's own failure; only the
-      // advisory ones are kept, as warnings on a step that goes on.
-      if (event.blocking) return runs;
+      // A blocking failure is followed by the step's own failure: it is kept
+      // (the failure card names the check) without changing the state yet.
+      if (event.blocking) {
+        return {
+          ...runs,
+          [event.stepId]: { state: 'running', ...prev, failedCheck: event.message },
+        };
+      }
       next = {
         state: 'running',
         ...prev,
@@ -221,6 +234,12 @@ export interface NodeStatus {
   message?: string;
   /** At least one instance succeeded without running its tool. */
   mocked?: boolean;
+  /** Every instance was skipped because its outputs are current. */
+  upToDate?: boolean;
+  /** Blocking output check that failed the node, when state is 'failed'. */
+  failedCheck?: string;
+  /** Engine id of the first failed instance, when state is 'failed'. */
+  failedStepId?: string;
   /** The failed attempt of the first retrying instance, when 'retrying'. */
   attempt?: number;
   maxAttempts?: number;
@@ -241,11 +260,11 @@ export function rollupNodeStatuses(
   runs: StepRuns,
   baseIds: readonly string[]
 ): Record<string, NodeStatus> {
-  const grouped = new Map<string, StepRun[]>();
+  const grouped = new Map<string, Array<StepRun & { engineId: string }>>();
   for (const [engineId, run] of Object.entries(runs)) {
     const baseId = resolveBaseStepId(engineId, baseIds);
     if (!baseId) continue;
-    grouped.set(baseId, [...(grouped.get(baseId) ?? []), run]);
+    grouped.set(baseId, [...(grouped.get(baseId) ?? []), { ...run, engineId }]);
   }
 
   const out: Record<string, NodeStatus> = {};
@@ -253,6 +272,7 @@ export function rollupNodeStatuses(
     const finished = instances.filter((r) => FINISHED.has(r.state)).length;
     const failed = instances.find((r) => r.state === 'failed');
     const retrying = instances.find((r) => r.state === 'retrying');
+    const failedId = failed?.engineId;
     let state: StepState;
     if (failed) state = 'failed';
     else if (instances.some((r) => r.state === 'retrying')) state = 'retrying';
@@ -266,6 +286,10 @@ export function rollupNodeStatuses(
       total: instances.length,
       message: failed?.message,
       mocked: instances.some((r) => r.mocked === true) ? true : undefined,
+      upToDate:
+        state === 'skipped' && instances.every((r) => r.upToDate === true) ? true : undefined,
+      failedCheck: failed?.failedCheck,
+      failedStepId: failed ? failedId : undefined,
       attempt: state === 'retrying' ? retrying?.attempt : undefined,
       maxAttempts: state === 'retrying' ? retrying?.maxAttempts : undefined,
     };
@@ -285,7 +309,9 @@ export interface StatusRow {
   delaySecs?: number;
   message?: string;
   warnings?: string[];
+  failedCheck?: string;
   mocked?: boolean;
+  upToDate?: boolean;
 }
 
 /** Where a run is: before any run, running, or finished. */

@@ -18,6 +18,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { NodeStatus } from '../stepEvents';
+import { nodeStatusLine, stateView } from '../runFeedback';
 import { firstFreePosition, type Rect } from '../nodePlacement';
 import type { TypeCheck } from '../tools/catalog';
 import { NODE_COLORS, nodeColorVar, normalizeNodeColor } from '../nodeColors';
@@ -129,7 +130,8 @@ function CustomNode({ id, data, selected }: any) {
   const invalidReason: string | undefined = data.__invalidReason;
 
   const state = status?.state ?? 'idle';
-  const showCount = status && status.total > 1;
+  const view = status ? stateView(status.state, status) : null;
+  const statusText = status ? nodeStatusLine(status) : '';
 
   return (
     <>
@@ -198,20 +200,18 @@ function CustomNode({ id, data, selected }: any) {
         <div className="node-label">{data.label || 'New Node'}</div>
         <div className="node-tool">{data.tool || 'No tool'}</div>
 
-        {status?.mocked && state === 'succeeded' && (
-          <Badge
-            tone="warning"
-            variant="dashed"
-            className="node-mocked-run"
-            data-testid="node-mocked-run"
+        {view && (
+          <div
+            className={`node-status-line node-status-line-${view.key}`}
+            data-testid="node-status-line"
+            data-status={view.key}
           >
-            MOCKED
-          </Badge>
-        )}
-
-        {showCount && (
-          <div className="node-progress">
-            {status!.finished}/{status!.total}
+            <Icon
+              name={state === 'running' ? 'spinner' : view.icon}
+              size={12}
+              spin={state === 'running'}
+            />
+            <span>{statusText}</span>
           </div>
         )}
 
@@ -263,13 +263,15 @@ function TypedEdge({
     targetPosition,
   });
   const check = (data as { __typeCheck?: TypeCheck } | undefined)?.__typeCheck;
+  const active = (data as { __active?: boolean } | undefined)?.__active === true;
   const status = check?.status ?? 'unknown';
   const mismatchWidth = edgeLabelWidth(MISMATCH_LABEL, 12);
 
   return (
     <g
-      className={`typed-edge typed-edge-${status}`}
+      className={`typed-edge typed-edge-${status}${active ? ' typed-edge-active' : ''}`}
       data-testid="typed-edge"
+      data-active={active ? 'true' : undefined}
       data-type-match={status}
     >
       {check && <title>{check.message}</title>}

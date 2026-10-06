@@ -17,3 +17,4 @@ export { Kbd } from './Kbd';
 export { ConfirmDialog, type ConfirmRequest } from './ConfirmDialog';
 export { Tooltip, TOOLTIP_HOVER_DELAY_MS } from './Tooltip';
 export { cx } from './cx';
+export { ToastHost, useToasts, type Notify } from './Toast';

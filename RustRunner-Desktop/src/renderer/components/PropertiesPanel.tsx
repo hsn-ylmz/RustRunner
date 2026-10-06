@@ -112,7 +112,10 @@ function CheckTargetSelect({
 /** Asks the panel to open the section holding `field` and put the cursor in it. */
 export interface FocusRequest {
   nodeId: string;
-  field: IssueField;
+  /** Open the section holding this field and put the cursor in it. */
+  field?: IssueField;
+  /** Without a field: just open this section and bring it into view. */
+  section?: SectionId;
 }
 
 export function PropertiesPanel({
@@ -150,6 +153,7 @@ export function PropertiesPanel({
   // Fields the person has been in. A required field is not called wrong before they got to it.
   const [visited, setVisited] = useState<Set<string>>(() => new Set());
   const [pendingFocus, setPendingFocus] = useState<IssueField | null>(null);
+  const [pendingSection, setPendingSection] = useState<SectionId | null>(null);
 
   const nodeId: string | undefined = selectedNode?.id;
 
@@ -164,8 +168,13 @@ export function PropertiesPanel({
   // A jump from the problem list: open the section, then focus the field once it exists.
   useEffect(() => {
     if (!focusRequest || !selectedNode || focusRequest.nodeId !== nodeId) return;
-    setSectionOpen(sectionForField(focusRequest.field), true);
-    setPendingFocus(focusRequest.field);
+    if (focusRequest.field) {
+      setSectionOpen(sectionForField(focusRequest.field), true);
+      setPendingFocus(focusRequest.field);
+    } else if (focusRequest.section) {
+      setSectionOpen(focusRequest.section, true);
+      setPendingSection(focusRequest.section);
+    }
     onFocusHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusRequest]);
@@ -178,6 +187,14 @@ export function PropertiesPanel({
     el.focus();
     setPendingFocus(null);
   }, [pendingFocus, chosen]);
+
+  useEffect(() => {
+    if (!pendingSection) return;
+    const el = document.querySelector<HTMLElement>(`[data-testid="section-${pendingSection}"]`);
+    if (!el) return;
+    el.scrollIntoView?.({ block: 'start' });
+    setPendingSection(null);
+  }, [pendingSection, chosen]);
 
   if (!selectedNode) {
     return (

@@ -114,7 +114,7 @@ test('a two-step workflow runs to success and both steps show as succeeded', asy
 
   await expect(stepRow(page, 'make')).toHaveAttribute('data-state', 'succeeded');
   await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'succeeded');
-  await expect(page.getByTestId('step-status')).toContainText('2 succeeded');
+  await expect(page.getByTestId('step-status')).toContainText('2 done');
   await expect(page.getByTestId('progress')).toHaveText('2 / 2 steps');
   await expect(nodes(page).filter({ hasText: 'Make' })).toHaveAttribute('data-state', 'succeeded');
 
