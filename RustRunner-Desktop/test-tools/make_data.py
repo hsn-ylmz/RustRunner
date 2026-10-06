@@ -12,6 +12,15 @@ Writes into OUTDIR:
   dna_R1.fastq.gz / dna_R2.fastq.gz   paired-end 100 bp reads, same source
   rna_se.fastq.gz     single-end 75 bp reads from the spliced transcripts
   truth_snps.tsv      the SNPs put into the sample (contig, 1-based pos, ref, alt)
+  unnormalized.vcf    three records that bcftools norm must change: a site with two
+                      alternative alleles, a deletion written on the right side of
+                      a 2-base repeat (left-aligning moves its position by one) and
+                      a plain SNP
+  dup_R1.fastq.gz / dup_R2.fastq.gz   paired-end 100 bp reads with PCR duplicates:
+                      DUP_UNIQUE_PAIRS distinct fragments plus DUP_COPIES exact
+                      copies of some of them (so 2 * DUP_COPIES reads are
+                      duplicates). Made from a separate random stream, so the
+                      other files are the same as before this one was added.
 """
 import gzip
 import os
@@ -19,6 +28,8 @@ import random
 import sys
 
 ADAPTER = "AGATCGGAAGAGC"
+DUP_UNIQUE_PAIRS = 600
+DUP_COPIES = 200
 COMP = str.maketrans("ACGT", "TGCA")
 
 
@@ -125,6 +136,55 @@ def main():
         read = seq[start:start + 75]
         rna.append((f"rna{i}", revcomp(read) if rng.random() < 0.5 else read))
     write_fastq(os.path.join(outdir, "rna_se.fastq.gz"), rna)
+
+    write_duplicate_pairs(outdir, sample, random.Random(seed + 1))
+    write_unnormalized_vcf(outdir, ref)
+
+
+def write_unnormalized_vcf(outdir, ref):
+    """A VCF with a multi-allelic site, a right-aligned deletion and a SNP (see the module doc)."""
+
+    def others(base, count):
+        return [b for b in "ACGT" if b != base][:count]
+
+    chr1, chr2 = ref["chr1"], ref["chr2"]
+    # A run of exactly two equal bases, far from position 100 and from the ends.
+    run = next(i for i in range(300, len(chr1) - 300) if chr1[i] == chr1[i + 1] != chr1[i - 1] and chr1[i + 1] != chr1[i + 2])
+    # 0-based run = [run, run + 1]. Deleting one of the two bases, written right-aligned:
+    # POS = run + 1 (1-based, the first base of the run), REF = both bases, ALT = the first.
+    # Left-aligned it is POS = run (the base before the run), REF = that base + the first base of the run.
+    lines = [
+        "##fileformat=VCFv4.2",
+        "##contig=<ID=chr1,length=%d>" % len(chr1),
+        "##contig=<ID=chr2,length=%d>" % len(chr2),
+        '##INFO=<ID=DP,Number=1,Type=Integer,Description="Read depth">',
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO",
+        "chr1\t100\t.\t%s\t%s\t50\t.\tDP=30" % (chr1[99], ",".join(others(chr1[99], 2))),
+        "chr1\t%d\t.\t%s\t%s\t50\t.\tDP=30" % (run + 1, chr1[run:run + 2], chr1[run]),
+        "chr2\t100\t.\t%s\t%s\t50\t.\tDP=30" % (chr2[99], others(chr2[99], 1)[0]),
+    ]
+    with open(os.path.join(outdir, "unnormalized.vcf"), "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+def write_duplicate_pairs(outdir, sample, rng):
+    """Paired reads where DUP_COPIES fragments appear twice, exactly alike."""
+    contigs = list(sample)
+    weights = [len(sample[c]) for c in contigs]
+    fragments = []
+    for _ in range(DUP_UNIQUE_PAIRS):
+        name = rng.choices(contigs, weights=weights)[0]
+        length = rng.randint(250, 350)
+        start = rng.randrange(0, len(sample[name]) - length + 1)
+        frag = sample[name][start:start + length]
+        fragments.append(revcomp(frag) if rng.random() < 0.5 else frag)
+    for index in rng.sample(range(DUP_UNIQUE_PAIRS), DUP_COPIES):
+        fragments.append(fragments[index])
+    rng.shuffle(fragments)
+    r1 = [(f"dup{i}/1", frag[:100]) for i, frag in enumerate(fragments)]
+    r2 = [(f"dup{i}/2", revcomp(frag)[:100]) for i, frag in enumerate(fragments)]
+    write_fastq(os.path.join(outdir, "dup_R1.fastq.gz"), r1)
+    write_fastq(os.path.join(outdir, "dup_R2.fastq.gz"), r2)
 
 
 if __name__ == "__main__":

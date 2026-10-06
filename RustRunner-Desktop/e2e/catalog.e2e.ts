@@ -46,11 +46,16 @@ test('the palette searches by name and category, and closes with Escape', async 
   await page.getByTestId('open-palette').click();
   const items = page.locator('[data-testid^="palette-item-"]');
   const all = await items.count();
-  expect(all).toBeGreaterThanOrEqual(12);
+  expect(all).toBeGreaterThanOrEqual(34);
 
   await page.getByTestId('palette-search').fill('BWA');
-  await expect(items).toHaveCount(1);
+  await expect(items).toHaveCount(2);
+  await expect(page.getByTestId('palette-item-bwa-index')).toBeVisible();
   await expect(page.getByTestId('palette-item-bwa-mem')).toBeVisible();
+  // Every word has to match: only the index builder is in "Aligner indexes".
+  await page.getByTestId('palette-search').fill('BWA indexes');
+  await expect(items).toHaveCount(1);
+  await expect(page.getByTestId('palette-item-bwa-index')).toBeVisible();
 
   await page.getByTestId('palette-search').fill('alignment');
   await expect(page.getByTestId('palette-item-bowtie2')).toBeVisible();
@@ -242,6 +247,35 @@ test('a folder output has a derived file that follows it, and is offered to the 
   await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
   await expect(page.getByTestId('prop-slot-bams-from-badge')).toContainText('from STAR');
   await expect(page.getByTestId('prop-slot-bams')).toHaveText('results/lane1/Aligned.sortedByCoord.out.bam');
+});
+
+test('an index builder hands its indexed copy of the genome to the aligner without asking', async ({ page }) => {
+  await addFromPalette(page, 'bwa', 'bwa-index');
+  await expect(page.getByTestId('prop-slot-index_dir')).toHaveValue('bwa_index/');
+  // The FASTA copy has no field: it is the folder plus its fixed name.
+  await expect(page.getByTestId('prop-slot-indexed_ref')).toHaveText('bwa_index/reference.fa');
+
+  await addFromPalette(page, 'bwa', 'bwa-mem');
+  await connect(page, 'BWA index', 'BWA MEM');
+  await selectNode(page, 'BWA MEM');
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-ref-from-badge')).toContainText('from BWA index');
+  await expect(page.getByTestId('prop-slot-ref')).toHaveText('bwa_index/reference.fa');
+});
+
+test('a variant caller offers fractions with a fine step and builds its command from the form', async ({ page }) => {
+  await addFromPalette(page, 'freebayes', 'freebayes');
+  const fraction = page.getByTestId('catalog-param-min_alt_fraction');
+  await expect(fraction).toHaveAttribute('step', '0.01');
+  await expect(fraction).toHaveValue('0.05');
+  await fraction.fill('0.1');
+  await page.getByTestId('catalog-param-ploidy').fill('1');
+  await openSection(page, 'advanced');
+  await expect(page.getByTestId('prop-command')).toHaveValue(
+    'freebayes -f {ref} --ploidy 1 --min-alternate-fraction 0.1 --min-alternate-count 2 --min-mapping-quality 1 --min-base-quality 0 {bams} > {vcf}'
+  );
+  // Several BAM files can feed it.
+  await expect(page.getByTestId('prop-slot-bams-row')).toBeVisible();
 });
 
 test('MultiQC follows several steps at once, and asks which of a step\'s files to use', async ({ page }) => {

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2026.11.0",
+  "version": "2026.12.0",
   "file_types": [
     "fastq",
     "fasta",
@@ -14,7 +14,12 @@
     "html",
     "zip",
     "json",
-    "index"
+    "index",
+    "fai",
+    "dict",
+    "bed",
+    "tbi",
+    "database"
   ],
   "categories": {
     "qc": {
@@ -24,6 +29,10 @@
     "trimming": {
       "label": "Trimming",
       "color": "sand"
+    },
+    "reference": {
+      "label": "Reference preparation",
+      "color": "sage"
     },
     "alignment": {
       "label": "Alignment",
@@ -36,6 +45,10 @@
     "variant_calling": {
       "label": "Variant calling",
       "color": "peach"
+    },
+    "annotation": {
+      "label": "Variant annotation",
+      "color": "rose"
     },
     "quantification": {
       "label": "Quantification",
@@ -140,6 +153,202 @@
       "command": "multiqc --force -o {report_dir} -n multiqc_report {reports}",
       "threads": 1,
       "docs": "https://docs.seqera.io/multiqc"
+    },
+    {
+      "id": "mosdepth",
+      "name": "mosdepth",
+      "description": "Fast coverage summary: the average depth per chromosome and in windows along the genome.",
+      "category": "qc",
+      "subcategory": "Coverage",
+      "install": {
+        "kind": "conda",
+        "package": "mosdepth",
+        "channel": "bioconda",
+        "version": "0.3.13"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM sorted by genome position.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        },
+        {
+          "name": "bai",
+          "label": "BAM index",
+          "description": "The .bai file of this BAM (make it with samtools index). It must sit next to the BAM and be named like it, ending in .bam.bai.",
+          "types": [
+            "bai"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam.bai"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Coverage folder",
+          "description": "Folder for the coverage tables.",
+          "types": [
+            "txt",
+            "bed"
+          ],
+          "pattern": "mosdepth/",
+          "is_dir": true
+        },
+        {
+          "name": "summary",
+          "label": "Coverage summary",
+          "description": "Length, total bases and mean depth of each chromosome. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "sample.mosdepth.summary.txt"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "global_dist",
+          "label": "Depth distribution",
+          "description": "What fraction of the genome is covered at least N times. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "sample.mosdepth.global.dist.txt"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "regions",
+          "label": "Depth in windows",
+          "description": "Mean depth of each window along the genome (compressed BED).",
+          "types": [
+            "bed"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "sample.regions.bed.gz"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "window_size",
+          "label": "Window size",
+          "type": "number",
+          "default": 500,
+          "description": "Mean depth is reported for windows of this many bases.",
+          "min": 1
+        },
+        {
+          "id": "min_mapq",
+          "label": "Minimum mapping quality",
+          "type": "number",
+          "default": 0,
+          "description": "Reads below this mapping quality are not counted.",
+          "min": 0,
+          "max": 255
+        }
+      ],
+      "command": "test -s {bai} && mosdepth -t {threads} --no-per-base --by {window_size} -Q {min_mapq} {out_dir}sample {bam}",
+      "threads": 2,
+      "docs": "https://github.com/brentp/mosdepth"
+    },
+    {
+      "id": "qualimap-bamqc",
+      "name": "Qualimap BamQC",
+      "description": "Quality report of an alignment: coverage, mapping quality, insert size and base content.",
+      "category": "qc",
+      "subcategory": "Alignment QC",
+      "install": {
+        "kind": "conda",
+        "package": "qualimap",
+        "channel": "bioconda",
+        "version": "2.3"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM sorted by genome position.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report_dir",
+          "label": "Report folder",
+          "description": "Folder with the HTML report and its data.",
+          "types": [
+            "html",
+            "txt"
+          ],
+          "pattern": "qualimap/",
+          "is_dir": true
+        },
+        {
+          "name": "report",
+          "label": "Report page",
+          "description": "The HTML report. It is always called qualimapReport.html inside the report folder.",
+          "types": [
+            "html"
+          ],
+          "derived": {
+            "from": "report_dir",
+            "suffix": "qualimapReport.html"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "results",
+          "label": "Summary numbers",
+          "description": "The key numbers as text. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "report_dir",
+            "suffix": "genome_results.txt"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "skip_duplicates",
+          "label": "Ignore reads marked as duplicates",
+          "type": "boolean",
+          "default": false,
+          "flag": "--skip-duplicated",
+          "description": "Run MarkDuplicates first, then tick this to leave PCR duplicates out of the numbers."
+        },
+        {
+          "id": "memory",
+          "label": "Memory limit",
+          "type": "string",
+          "default": "2G",
+          "description": "For example 2G or 8G."
+        }
+      ],
+      "command": "mem={memory}; JAVA_OPTS=\"-Xms32m -Xmx$mem -Duser.language=en -Duser.country=US\" qualimap bamqc -bam {bam} -outdir {report_dir} -nt {threads} {skip_duplicates}",
+      "threads": 2,
+      "docs": "https://bioconda.github.io/recipes/qualimap/README.html"
     },
     {
       "id": "fastp",
@@ -300,6 +509,278 @@
       "docs": "https://cutadapt.readthedocs.io/"
     },
     {
+      "id": "bwa-index",
+      "name": "BWA index",
+      "description": "Builds the index BWA MEM needs to align reads to a genome.",
+      "category": "reference",
+      "subcategory": "Aligner indexes",
+      "install": {
+        "kind": "conda",
+        "package": "bwa",
+        "channel": "bioconda",
+        "version": "0.7.19"
+      },
+      "inputs": [
+        {
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The genome FASTA to index.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "index_dir",
+          "label": "Index folder",
+          "description": "A copy of the FASTA with the BWA index files next to it.",
+          "types": [
+            "index"
+          ],
+          "pattern": "bwa_index/",
+          "is_dir": true
+        },
+        {
+          "name": "indexed_ref",
+          "label": "Indexed reference",
+          "description": "The FASTA copy inside the folder. Connect it to BWA MEM as the reference genome.",
+          "types": [
+            "fasta",
+            "index"
+          ],
+          "derived": {
+            "from": "index_dir",
+            "suffix": "reference.fa"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "cp {ref} {index_dir}reference.fa && bwa index {index_dir}reference.fa",
+      "threads": 1,
+      "docs": "https://bio-bwa.sourceforge.net/bwa.shtml"
+    },
+    {
+      "id": "bowtie2-build",
+      "name": "Bowtie2 build",
+      "description": "Builds the genome index Bowtie2 needs to align reads.",
+      "category": "reference",
+      "subcategory": "Aligner indexes",
+      "install": {
+        "kind": "conda",
+        "package": "bowtie2",
+        "channel": "bioconda",
+        "version": "2.5.5"
+      },
+      "inputs": [
+        {
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The genome FASTA to index.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "index_dir",
+          "label": "Index folder",
+          "description": "A copy of the FASTA with the Bowtie2 index files next to it.",
+          "types": [
+            "index"
+          ],
+          "pattern": "bowtie2_index/",
+          "is_dir": true
+        },
+        {
+          "name": "index",
+          "label": "Genome index",
+          "description": "The index name Bowtie2 reads (the FASTA copy inside the folder). Connect it to Bowtie2.",
+          "types": [
+            "index"
+          ],
+          "derived": {
+            "from": "index_dir",
+            "suffix": "reference.fa"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "large_index",
+          "label": "Genome is larger than 4 billion bases",
+          "type": "boolean",
+          "default": false,
+          "flag": "--large-index",
+          "description": "Builds the large kind of index. Bowtie2 chooses by itself for most genomes; tick this only if the build asks for it."
+        }
+      ],
+      "command": "cp {ref} {index_dir}reference.fa && bowtie2-build --threads {threads} {large_index} {index_dir}reference.fa {index_dir}reference.fa",
+      "threads": 4,
+      "docs": "https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml#the-bowtie2-build-indexer"
+    },
+    {
+      "id": "samtools-faidx",
+      "name": "samtools faidx",
+      "description": "Indexes a reference FASTA (makes the .fai file variant callers need).",
+      "category": "reference",
+      "subcategory": "Reference indexes",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The genome FASTA to index.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "ref_dir",
+          "label": "Indexed reference folder",
+          "description": "A copy of the FASTA with its .fai index next to it.",
+          "types": [
+            "fasta",
+            "fai"
+          ],
+          "pattern": "indexed_reference/",
+          "is_dir": true
+        },
+        {
+          "name": "fasta",
+          "label": "Indexed reference",
+          "description": "The FASTA copy inside the folder. Connect it to a variant caller or aligner as the reference genome.",
+          "types": [
+            "fasta"
+          ],
+          "derived": {
+            "from": "ref_dir",
+            "suffix": "reference.fa"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "fai",
+          "label": "FASTA index",
+          "description": "The .fai file that sits next to the FASTA copy.",
+          "types": [
+            "fai"
+          ],
+          "derived": {
+            "from": "ref_dir",
+            "suffix": "reference.fa.fai"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "cp {ref} {ref_dir}reference.fa && samtools faidx {ref_dir}reference.fa",
+      "threads": 1,
+      "docs": "https://www.htslib.org/doc/samtools-faidx.html"
+    },
+    {
+      "id": "gatk-createsequencedictionary",
+      "name": "GATK CreateSequenceDictionary",
+      "description": "Makes the sequence dictionary (.dict) that GATK needs next to the reference.",
+      "category": "reference",
+      "subcategory": "Reference indexes",
+      "install": {
+        "kind": "conda",
+        "package": "gatk4",
+        "channel": "bioconda",
+        "version": "4.6.2.0"
+      },
+      "inputs": [
+        {
+          "name": "ref",
+          "label": "Reference genome (indexed)",
+          "description": "A FASTA that already has its .fai index next to it. Use the output of samtools faidx.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "indexed_reference/reference.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "ref_dir",
+          "label": "GATK reference folder",
+          "description": "A copy of the FASTA with its .fai index and the new .dict file.",
+          "types": [
+            "fasta",
+            "fai",
+            "dict"
+          ],
+          "pattern": "gatk_reference/",
+          "is_dir": true
+        },
+        {
+          "name": "fasta",
+          "label": "GATK-ready reference",
+          "description": "The FASTA copy inside the folder. Connect it to HaplotypeCaller as the reference genome.",
+          "types": [
+            "fasta"
+          ],
+          "derived": {
+            "from": "ref_dir",
+            "suffix": "reference.fa"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "fai",
+          "label": "FASTA index",
+          "description": "The .fai file next to the FASTA copy.",
+          "types": [
+            "fai"
+          ],
+          "derived": {
+            "from": "ref_dir",
+            "suffix": "reference.fa.fai"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "dict",
+          "label": "Sequence dictionary",
+          "description": "The .dict file next to the FASTA copy.",
+          "types": [
+            "dict"
+          ],
+          "derived": {
+            "from": "ref_dir",
+            "suffix": "reference.dict"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "cp {ref} {ref_dir}reference.fa && cp {ref}.fai {ref_dir}reference.fa.fai && gatk CreateSequenceDictionary -R {ref_dir}reference.fa -O {ref_dir}reference.dict",
+      "threads": 1,
+      "docs": "https://gatk.broadinstitute.org/hc/en-us/articles/360036712531-CreateSequenceDictionary-Picard"
+    },
+    {
       "id": "bwa-mem",
       "name": "BWA MEM",
       "description": "Aligns reads to a reference genome. Writes SAM.",
@@ -315,7 +796,7 @@
         {
           "name": "ref",
           "label": "Reference genome",
-          "description": "The reference FASTA the reads are aligned to. Index it first with `bwa index`; the index files sit next to it.",
+          "description": "The reference FASTA the reads are aligned to. Connect BWA index to use its indexed copy, or give a FASTA you indexed yourself (the index files sit next to it).",
           "types": [
             "fasta"
           ],
@@ -396,7 +877,7 @@
         {
           "name": "index",
           "label": "Genome index",
-          "description": "The index made with `bowtie2-build`. Give its prefix: the path without .1.bt2 and the rest.",
+          "description": "The index made with Bowtie2 build (connect it), or the prefix of one you built yourself: the path without .1.bt2 and the rest.",
           "types": [
             "index"
           ],
@@ -446,6 +927,87 @@
       "command": "bowtie2 -p {threads} --{preset} -x {index} -U {reads} -S {sam}",
       "threads": 4,
       "docs": "https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml"
+    },
+    {
+      "id": "minimap2",
+      "name": "minimap2 (short reads)",
+      "description": "Aligns short reads (the sr preset) to a reference genome. Writes SAM with a read group.",
+      "category": "alignment",
+      "subcategory": "DNA aligners",
+      "install": {
+        "kind": "conda",
+        "package": "minimap2",
+        "channel": "bioconda",
+        "version": "2.30"
+      },
+      "inputs": [
+        {
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The genome FASTA the reads are aligned to. No index is needed.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        },
+        {
+          "name": "reads1",
+          "label": "Reads (first of the pair)",
+          "description": "FASTQ with the reads, or the first file of a pair.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads_R1.fastq.gz"
+        },
+        {
+          "name": "reads2",
+          "label": "Reads (second of the pair)",
+          "description": "Leave empty for single-end reads.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reads_R2.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "sam",
+          "label": "Alignments",
+          "description": "The alignments in SAM format.",
+          "types": [
+            "sam"
+          ],
+          "pattern": "aligned.sam",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "sample_name",
+          "label": "Sample name",
+          "type": "string",
+          "default": "sample",
+          "description": "Written into every alignment as its read group. GATK and Picard need one. For example patient1.",
+          "required": true
+        },
+        {
+          "id": "primary_only",
+          "label": "Report only the best alignment of each read",
+          "type": "boolean",
+          "default": true,
+          "flag": "--secondary=no",
+          "description": "Leaves out the second-best places a read could go. Recommended before variant calling."
+        }
+      ],
+      "command": "sample={sample_name}; minimap2 -ax sr -t {threads} {primary_only} -R \"@RG\\tID:$sample\\tSM:$sample\" {ref} {reads1} {reads2} > {sam}",
+      "threads": 4,
+      "docs": "https://lh3.github.io/minimap2/minimap2.html"
     },
     {
       "id": "star",
@@ -734,6 +1296,272 @@
       "docs": "https://www.htslib.org/doc/samtools-flagstat.html"
     },
     {
+      "id": "samtools-merge",
+      "name": "samtools merge",
+      "description": "Combines several sorted BAM files into one.",
+      "category": "processing",
+      "subcategory": "Alignment files",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "bams",
+          "label": "Alignments",
+          "description": "Two or more BAM files sorted the same way. Connect as many steps as you like.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "sample1.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "merged",
+          "label": "Merged alignments",
+          "description": "The combined BAM.",
+          "types": [
+            "bam"
+          ],
+          "pattern": "merged.bam",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "by_name",
+          "label": "Inputs are sorted by read name",
+          "type": "boolean",
+          "default": false,
+          "flag": "-n",
+          "description": "Tick this only if the BAM files were sorted by read name. Off means sorted by genome position."
+        }
+      ],
+      "command": "samtools merge -f -@ {threads} {by_name} {merged} {bams}",
+      "threads": 2,
+      "docs": "https://www.htslib.org/doc/samtools-merge.html"
+    },
+    {
+      "id": "samtools-markdup",
+      "name": "samtools markdup",
+      "description": "Finds PCR duplicates and marks (or removes) them. Runs fixmate and sort first, so plain aligner output works.",
+      "category": "processing",
+      "subcategory": "Duplicates",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "alignments",
+          "label": "Alignments",
+          "description": "A SAM or BAM file with paired-end reads.",
+          "types": [
+            "sam",
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "aligned.sam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "marked",
+          "label": "Alignments with duplicates marked",
+          "description": "A BAM sorted by genome position.",
+          "types": [
+            "bam"
+          ],
+          "pattern": "markdup.bam",
+          "is_dir": false
+        },
+        {
+          "name": "stats",
+          "label": "Duplicate statistics",
+          "description": "How many reads were examined and how many are duplicates.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "markdup_stats.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "remove_duplicates",
+          "label": "Remove duplicates instead of marking them",
+          "type": "boolean",
+          "default": false,
+          "flag": "-r",
+          "description": "Off keeps every read and only flags the duplicates."
+        },
+        {
+          "id": "optical_distance",
+          "label": "Optical duplicate distance",
+          "type": "number",
+          "default": 0,
+          "description": "0 switches optical duplicate detection off. Use 100 for HiSeq-type machines or about 2500 for NovaSeq.",
+          "min": 0
+        }
+      ],
+      "command": "set -o pipefail; samtools sort -n -@ {threads} {alignments} | samtools fixmate -m -@ {threads} - - | samtools sort -@ {threads} - | samtools markdup -@ {threads} {remove_duplicates} -d {optical_distance} -f {stats} - {marked}",
+      "threads": 4,
+      "docs": "https://www.htslib.org/doc/samtools-markdup.html"
+    },
+    {
+      "id": "picard-markduplicates",
+      "name": "Picard MarkDuplicates",
+      "description": "Finds PCR duplicates in a sorted BAM and marks (or removes) them. Writes a duplication report.",
+      "category": "processing",
+      "subcategory": "Duplicates",
+      "install": {
+        "kind": "conda",
+        "package": "picard",
+        "channel": "bioconda",
+        "version": "3.4.0"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM sorted by genome position.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "marked",
+          "label": "Alignments with duplicates marked",
+          "description": "The BAM with duplicates flagged.",
+          "types": [
+            "bam"
+          ],
+          "pattern": "marked.bam",
+          "is_dir": false
+        },
+        {
+          "name": "metrics",
+          "label": "Duplication report",
+          "description": "How many pairs were examined and how many are duplicates. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "duplication_metrics.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "remove_duplicates",
+          "label": "Remove duplicates instead of marking them",
+          "type": "boolean",
+          "default": false,
+          "flag": "--REMOVE_DUPLICATES true",
+          "description": "Off keeps every read and only flags the duplicates."
+        },
+        {
+          "id": "optical_distance",
+          "label": "Optical duplicate distance",
+          "type": "number",
+          "default": 100,
+          "description": "Reads closer than this on the flow cell can be optical duplicates. 100 suits most machines; use 2500 for NovaSeq.",
+          "min": 0
+        },
+        {
+          "id": "memory",
+          "label": "Memory limit",
+          "type": "string",
+          "default": "2g",
+          "description": "For example 2g or 8g."
+        }
+      ],
+      "command": "picard -Xmx{memory} -Duser.language=en -Duser.country=US MarkDuplicates -I {bam} -O {marked} -M {metrics} {remove_duplicates} --OPTICAL_DUPLICATE_PIXEL_DISTANCE {optical_distance}",
+      "threads": 1,
+      "docs": "https://broadinstitute.github.io/picard/command-line-overview.html#MarkDuplicates"
+    },
+    {
+      "id": "samtools-depth",
+      "name": "samtools depth",
+      "description": "Writes how many reads cover each position of the genome, one column per BAM file.",
+      "category": "processing",
+      "subcategory": "Coverage",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "bams",
+          "label": "Alignments",
+          "description": "One or more BAM files. Each one gets its own column.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "sorted.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "depth",
+          "label": "Depth table",
+          "description": "Columns: chromosome, position, then the depth of each BAM.",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "depth.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "all_positions",
+          "label": "Include positions with no reads",
+          "type": "boolean",
+          "default": false,
+          "flag": "-a",
+          "description": "Off lists only covered positions. On gives one line for every base of the genome, which is a very large file for big genomes."
+        },
+        {
+          "id": "min_base_quality",
+          "label": "Minimum base quality",
+          "type": "number",
+          "default": 0,
+          "description": "Bases below this quality are not counted.",
+          "min": 0,
+          "max": 93
+        },
+        {
+          "id": "min_mapq",
+          "label": "Minimum mapping quality",
+          "type": "number",
+          "default": 0,
+          "description": "Reads below this mapping quality are not counted.",
+          "min": 0,
+          "max": 255
+        }
+      ],
+      "command": "samtools depth {all_positions} -q {min_base_quality} -Q {min_mapq} -o {depth} {bams}",
+      "threads": 1,
+      "docs": "https://www.htslib.org/doc/samtools-depth.html"
+    },
+    {
       "id": "bcftools-call",
       "name": "bcftools call",
       "description": "Calls SNPs and indels from a sorted BAM (mpileup then call).",
@@ -749,7 +1577,7 @@
         {
           "name": "ref",
           "label": "Reference genome",
-          "description": "The reference the reads were aligned to. It needs a .fai index (made with `samtools faidx`).",
+          "description": "The reference the reads were aligned to. It needs a .fai index: connect the Indexed reference of samtools faidx.",
           "types": [
             "fasta"
           ],
@@ -795,6 +1623,724 @@
       "command": "set -o pipefail; bcftools mpileup --threads {threads} -Ou -f {ref} -q {min_mapq} {bam} | bcftools call --threads {threads} -mv -Ov -o {vcf}",
       "threads": 2,
       "docs": "https://samtools.github.io/bcftools/bcftools.html"
+    },
+    {
+      "id": "freebayes",
+      "name": "FreeBayes",
+      "description": "Calls SNPs and small indels from one or more sorted, indexed BAM files.",
+      "category": "variant_calling",
+      "subcategory": "SNPs and small indels",
+      "install": {
+        "kind": "conda",
+        "package": "freebayes",
+        "channel": "bioconda",
+        "version": "1.3.10"
+      },
+      "inputs": [
+        {
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The reference the reads were aligned to. Connect the Indexed reference of samtools faidx to keep the .fai index with it.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        },
+        {
+          "name": "bams",
+          "label": "Alignments",
+          "description": "One or more BAM files, sorted by position. Connect as many steps as you like.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "sorted.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "vcf",
+          "label": "Variants",
+          "description": "The called variants in VCF format.",
+          "types": [
+            "vcf"
+          ],
+          "pattern": "freebayes.vcf",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "ploidy",
+          "label": "Ploidy",
+          "type": "number",
+          "default": 2,
+          "description": "How many copies of each chromosome the sample has: 1 for bacteria, 2 for most animals and plants.",
+          "min": 1
+        },
+        {
+          "id": "min_alt_fraction",
+          "label": "Minimum fraction of reads with the variant",
+          "type": "number",
+          "default": 0.05,
+          "description": "A variant is reported only if at least this share of the reads at its position carry it.",
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        },
+        {
+          "id": "min_alt_count",
+          "label": "Minimum reads with the variant",
+          "type": "number",
+          "default": 2,
+          "description": "A variant is reported only if at least this many reads carry it.",
+          "min": 1
+        },
+        {
+          "id": "min_mapq",
+          "label": "Minimum mapping quality",
+          "type": "number",
+          "default": 1,
+          "description": "Reads below this mapping quality are ignored.",
+          "min": 0,
+          "max": 255
+        },
+        {
+          "id": "min_base_quality",
+          "label": "Minimum base quality",
+          "type": "number",
+          "default": 0,
+          "description": "Bases below this quality are ignored.",
+          "min": 0,
+          "max": 93
+        }
+      ],
+      "command": "freebayes -f {ref} --ploidy {ploidy} --min-alternate-fraction {min_alt_fraction} --min-alternate-count {min_alt_count} --min-mapping-quality {min_mapq} --min-base-quality {min_base_quality} {bams} > {vcf}",
+      "threads": 1,
+      "docs": "https://github.com/freebayes/freebayes"
+    },
+    {
+      "id": "gatk-haplotypecaller",
+      "name": "GATK HaplotypeCaller",
+      "description": "Calls SNPs and small indels by re-assembling the reads around each variant.",
+      "category": "variant_calling",
+      "subcategory": "SNPs and small indels",
+      "install": {
+        "kind": "conda",
+        "package": "gatk4",
+        "channel": "bioconda",
+        "version": "4.6.2.0"
+      },
+      "inputs": [
+        {
+          "name": "ref",
+          "label": "Reference genome (GATK-ready)",
+          "description": "A FASTA with its .fai and .dict files next to it. Use the output of GATK CreateSequenceDictionary.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "gatk_reference/reference.fa"
+        },
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM sorted by position whose reads have a read group (minimap2 adds one; for BWA MEM add a sample name).",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        },
+        {
+          "name": "bai",
+          "label": "BAM index",
+          "description": "The .bai file of this BAM (make it with samtools index). It must sit next to the BAM and be named like it, ending in .bam.bai.",
+          "types": [
+            "bai"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam.bai"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "vcf",
+          "label": "Variants",
+          "description": "The called variants in VCF format.",
+          "types": [
+            "vcf"
+          ],
+          "pattern": "haplotypecaller.vcf",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "ploidy",
+          "label": "Ploidy",
+          "type": "number",
+          "default": 2,
+          "description": "How many copies of each chromosome the sample has: 1 for bacteria, 2 for most animals and plants.",
+          "min": 1
+        },
+        {
+          "id": "min_base_quality",
+          "label": "Minimum base quality",
+          "type": "number",
+          "default": 10,
+          "description": "Bases below this quality are ignored.",
+          "min": 0,
+          "max": 93
+        },
+        {
+          "id": "min_confidence",
+          "label": "Minimum confidence to call a variant",
+          "type": "number",
+          "default": 30,
+          "description": "Variants whose confidence score is lower are left out. Higher means stricter.",
+          "min": 0
+        },
+        {
+          "id": "memory",
+          "label": "Memory limit",
+          "type": "string",
+          "default": "2g",
+          "description": "For example 2g or 8g."
+        }
+      ],
+      "command": "test -s {bai} && gatk --java-options -Xmx{memory} HaplotypeCaller -R {ref} -I {bam} -O {vcf} --sample-ploidy {ploidy} --min-base-quality-score {min_base_quality} --standard-min-confidence-threshold-for-calling {min_confidence} --native-pair-hmm-threads {threads}",
+      "threads": 4,
+      "docs": "https://gatk.broadinstitute.org/hc/en-us/articles/360037225632-HaplotypeCaller"
+    },
+    {
+      "id": "bcftools-filter",
+      "name": "bcftools filter",
+      "description": "Keeps the variants that are good enough (enough quality and depth), or marks the others.",
+      "category": "variant_calling",
+      "subcategory": "VCF tools",
+      "install": {
+        "kind": "conda",
+        "package": "bcftools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "vcf",
+          "label": "Variants",
+          "description": "A VCF file. Every variant needs a depth value (DP), which most callers write.",
+          "types": [
+            "vcf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "variants.vcf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filtered",
+          "label": "Filtered variants",
+          "description": "The variants that passed.",
+          "types": [
+            "vcf"
+          ],
+          "pattern": "filtered.vcf",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "min_qual",
+          "label": "Minimum quality",
+          "type": "number",
+          "default": 20,
+          "description": "Variants with a lower QUAL score fail.",
+          "min": 0
+        },
+        {
+          "id": "min_depth",
+          "label": "Minimum depth",
+          "type": "number",
+          "default": 10,
+          "description": "Variants covered by fewer reads fail.",
+          "min": 0
+        },
+        {
+          "id": "mark_only",
+          "label": "Mark failing variants instead of removing them",
+          "type": "boolean",
+          "default": false,
+          "flag": "-s LowQuality",
+          "description": "On keeps every variant and writes LowQuality in its FILTER column. Off removes them."
+        }
+      ],
+      "command": "bcftools filter --threads {threads} {mark_only} -i 'QUAL>={min_qual} && INFO/DP>={min_depth}' -Ov -o {filtered} {vcf}",
+      "threads": 2,
+      "docs": "https://samtools.github.io/bcftools/bcftools.html#filter"
+    },
+    {
+      "id": "bcftools-norm",
+      "name": "bcftools norm",
+      "description": "Writes variants in one standard form: indels left-aligned, optionally one line per alternative allele.",
+      "category": "variant_calling",
+      "subcategory": "VCF tools",
+      "install": {
+        "kind": "conda",
+        "package": "bcftools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "vcf",
+          "label": "Variants",
+          "description": "A VCF file.",
+          "types": [
+            "vcf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "variants.vcf"
+        },
+        {
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The reference the variants were called against.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "normalized",
+          "label": "Normalized variants",
+          "description": "The variants in standard form.",
+          "types": [
+            "vcf"
+          ],
+          "pattern": "normalized.vcf",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "split_multiallelic",
+          "label": "Split sites with several alternative alleles",
+          "type": "boolean",
+          "default": true,
+          "flag": "-m -any",
+          "description": "Gives each alternative allele its own line, so downstream tools see simple records."
+        },
+        {
+          "id": "strict_ref",
+          "label": "Stop if the reference base does not match",
+          "type": "boolean",
+          "default": false,
+          "flag": "-c e",
+          "description": "Off only warns when a variant's reference base differs from the genome."
+        },
+        {
+          "id": "remove_duplicates",
+          "label": "Remove duplicate lines",
+          "type": "boolean",
+          "default": false,
+          "flag": "-d exact",
+          "description": "Drops lines that are exactly alike."
+        }
+      ],
+      "command": "bcftools norm --threads {threads} -f {ref} {split_multiallelic} {strict_ref} {remove_duplicates} -Ov -o {normalized} {vcf}",
+      "threads": 2,
+      "docs": "https://samtools.github.io/bcftools/bcftools.html#norm"
+    },
+    {
+      "id": "bcftools-stats",
+      "name": "bcftools stats",
+      "description": "Counts the variants in a VCF: SNPs, indels, transitions and transversions. MultiQC reads it.",
+      "category": "variant_calling",
+      "subcategory": "VCF tools",
+      "install": {
+        "kind": "conda",
+        "package": "bcftools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "vcf",
+          "label": "Variants",
+          "description": "A VCF file.",
+          "types": [
+            "vcf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "variants.vcf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "stats",
+          "label": "Variant statistics",
+          "description": "The counts as text.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "variant_stats.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "per_sample",
+          "label": "Also count for each sample",
+          "type": "boolean",
+          "default": false,
+          "flag": "-s -",
+          "description": "Adds a block of numbers for every sample in the file."
+        }
+      ],
+      "command": "bcftools stats {per_sample} {vcf} > {stats}",
+      "threads": 1,
+      "docs": "https://samtools.github.io/bcftools/bcftools.html#stats"
+    },
+    {
+      "id": "bgzip",
+      "name": "bgzip",
+      "description": "Compresses a VCF, BED or other table so it can be indexed with tabix.",
+      "category": "variant_calling",
+      "subcategory": "VCF tools",
+      "install": {
+        "kind": "conda",
+        "package": "htslib",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "file",
+          "label": "File to compress",
+          "description": "A plain text VCF, BED, GTF or table.",
+          "types": [
+            "vcf",
+            "bed",
+            "gtf",
+            "tsv"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "variants.vcf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "compressed",
+          "label": "Compressed file",
+          "description": "The same content, compressed. Name it .vcf.gz for a VCF or .bed.gz for a BED.",
+          "types": [
+            "vcf",
+            "bed",
+            "gtf",
+            "tsv"
+          ],
+          "pattern": "variants.vcf.gz",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "level",
+          "label": "Compression level",
+          "type": "number",
+          "default": 6,
+          "description": "1 is fastest, 9 gives the smallest file.",
+          "min": 1,
+          "max": 9
+        }
+      ],
+      "command": "bgzip -c -@ {threads} -l {level} {file} > {compressed}",
+      "threads": 2,
+      "docs": "https://www.htslib.org/doc/bgzip.html"
+    },
+    {
+      "id": "tabix",
+      "name": "tabix",
+      "description": "Indexes a compressed, sorted VCF, BED or GFF so a region can be read without reading the whole file.",
+      "category": "variant_calling",
+      "subcategory": "VCF tools",
+      "install": {
+        "kind": "conda",
+        "package": "htslib",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "file",
+          "label": "Compressed file",
+          "description": "A sorted file compressed with bgzip.",
+          "types": [
+            "vcf",
+            "bed",
+            "gtf",
+            "tsv"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "variants.vcf.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "index_dir",
+          "label": "Indexed file folder",
+          "description": "A copy of the file with its .tbi index next to it.",
+          "types": [
+            "vcf",
+            "bed",
+            "gtf",
+            "tsv",
+            "tbi"
+          ],
+          "pattern": "tabix/",
+          "is_dir": true
+        },
+        {
+          "name": "indexed",
+          "label": "Indexed file",
+          "description": "The compressed copy inside the folder.",
+          "types": [
+            "vcf",
+            "bed",
+            "gtf",
+            "tsv"
+          ],
+          "derived": {
+            "from": "index_dir",
+            "suffix": "indexed.gz"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "index",
+          "label": "Index",
+          "description": "The .tbi file next to the compressed copy.",
+          "types": [
+            "tbi"
+          ],
+          "derived": {
+            "from": "index_dir",
+            "suffix": "indexed.gz.tbi"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "preset",
+          "label": "File kind",
+          "type": "select",
+          "default": "vcf",
+          "options": [
+            "vcf",
+            "bed",
+            "gff"
+          ],
+          "description": "What the file holds: variants (vcf), regions (bed) or annotation (gff)."
+        }
+      ],
+      "command": "cp {file} {index_dir}indexed.gz && tabix -f -p {preset} {index_dir}indexed.gz",
+      "threads": 1,
+      "docs": "https://www.htslib.org/doc/tabix.html"
+    },
+    {
+      "id": "snpeff-build",
+      "name": "snpEff build database",
+      "description": "Builds a snpEff database for your own genome from its FASTA and gene annotation (GTF).",
+      "category": "annotation",
+      "subcategory": "Custom databases",
+      "install": {
+        "kind": "conda",
+        "package": "snpeff",
+        "channel": "bioconda",
+        "version": "5.4.0c"
+      },
+      "inputs": [
+        {
+          "name": "genome",
+          "label": "Reference genome",
+          "description": "The genome FASTA.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        },
+        {
+          "name": "annotation",
+          "label": "Gene annotation",
+          "description": "The genes in GTF format.",
+          "types": [
+            "gtf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.gtf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "database",
+          "label": "snpEff database",
+          "description": "Folder holding the database. Connect it to snpEff annotate.",
+          "types": [
+            "database"
+          ],
+          "pattern": "snpeff_db/",
+          "is_dir": true
+        }
+      ],
+      "params": [
+        {
+          "id": "genome_name",
+          "label": "Genome name",
+          "type": "string",
+          "default": "genome",
+          "description": "Names the database inside the folder. Use the same name in snpEff annotate.",
+          "required": true
+        },
+        {
+          "id": "memory",
+          "label": "Memory limit",
+          "type": "string",
+          "default": "2g",
+          "description": "For example 2g or 8g."
+        }
+      ],
+      "command": "mkdir -p {database}{genome_name} && cp {genome} {database}{genome_name}/sequences.fa && cp {annotation} {database}{genome_name}/genes.gtf && cfg=$(mktemp ./.snpeff_config.XXXXXX) && printf '%s.genome : %s\\n' {genome_name} {genome_name} > \"$cfg\" && snpEff -Xmx{memory} -Duser.language=en -Duser.country=US build -gtf22 -noCheckCds -noCheckProtein -c \"$cfg\" -dataDir {database} {genome_name}; status=$?; rm -f \"$cfg\"; exit $status",
+      "threads": 1,
+      "docs": "https://pcingola.github.io/SnpEff/snpeff/build_db/"
+    },
+    {
+      "id": "snpeff-annotate",
+      "name": "snpEff annotate",
+      "description": "Says what each variant does to the genes: missense, synonymous, intron, intergenic and so on.",
+      "category": "annotation",
+      "subcategory": "Variant effects",
+      "install": {
+        "kind": "conda",
+        "package": "snpeff",
+        "channel": "bioconda",
+        "version": "5.4.0c"
+      },
+      "inputs": [
+        {
+          "name": "vcf",
+          "label": "Variants",
+          "description": "A VCF file.",
+          "types": [
+            "vcf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "variants.vcf"
+        },
+        {
+          "name": "database",
+          "label": "snpEff database folder",
+          "description": "The folder that holds the genome's database: the output of snpEff build database, or a data folder from snpEff download.",
+          "types": [
+            "database"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "snpeff_db/"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "annotated",
+          "label": "Annotated variants",
+          "description": "The VCF with an ANN field on every variant.",
+          "types": [
+            "vcf"
+          ],
+          "pattern": "annotated.vcf",
+          "is_dir": false
+        },
+        {
+          "name": "summary",
+          "label": "Summary page",
+          "description": "An HTML summary of the effects. MultiQC reads it.",
+          "types": [
+            "html"
+          ],
+          "pattern": "snpeff_summary.html",
+          "is_dir": false
+        },
+        {
+          "name": "stats",
+          "label": "Effect counts",
+          "description": "The same numbers as a CSV table.",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "snpeff_stats.csv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "genome_name",
+          "label": "Genome name",
+          "type": "string",
+          "default": "genome",
+          "description": "The name of the genome inside the database folder, as given when it was built.",
+          "required": true
+        },
+        {
+          "id": "updown_distance",
+          "label": "Upstream and downstream distance",
+          "type": "number",
+          "default": 5000,
+          "description": "A variant this close before or after a gene is called upstream or downstream of it.",
+          "min": 0
+        },
+        {
+          "id": "no_intergenic",
+          "label": "Leave out variants between genes",
+          "type": "boolean",
+          "default": false,
+          "flag": "-no-intergenic",
+          "description": "Skips the intergenic variants in the output."
+        },
+        {
+          "id": "memory",
+          "label": "Memory limit",
+          "type": "string",
+          "default": "2g",
+          "description": "For example 2g or 8g."
+        }
+      ],
+      "command": "cfg=$(mktemp ./.snpeff_config.XXXXXX) && printf '%s.genome : %s\\n' {genome_name} {genome_name} > \"$cfg\" && snpEff -Xmx{memory} -Duser.language=en -Duser.country=US ann -c \"$cfg\" -dataDir {database} -ud {updown_distance} {no_intergenic} -stats {summary} -csvStats {stats} {genome_name} {vcf} > {annotated}; status=$?; rm -f \"$cfg\"; exit $status",
+      "threads": 1,
+      "needs_database": {
+        "label": "snpEff database",
+        "hint": "Build one for your own genome with the snpEff build database step, or download one with snpEff download (a human genome database is about 100 MB)."
+      },
+      "docs": "https://pcingola.github.io/SnpEff/snpeff/running/"
     },
     {
       "id": "salmon-quant",

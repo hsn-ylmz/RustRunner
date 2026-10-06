@@ -330,12 +330,25 @@ describe('option rules', () => {
   });
 });
 
+describe('number steps', () => {
+  it('accepts a fractional step and rejects one that is not above zero', () => {
+    const ok = copy();
+    tool(ok, 'freebayes').params.find((p: any) => p.id === 'min_alt_fraction').step = 0.001;
+    expect(errorsOf(ok)).toBe('');
+    for (const bad of [0, -1, 'fine', null]) {
+      const c = copy();
+      tool(c, 'freebayes').params.find((p: any) => p.id === 'min_alt_fraction').step = bad;
+      expect(errorsOf(c), `step ${String(bad)}`).toContain('freebayes.min_alt_fraction: step must be a number above 0');
+    }
+  });
+});
+
 describe('a minimal new tool passes', () => {
   it('lets a domain add a system tool with one input and one output', () => {
     const c: Catalog = copy();
     c.tools.push({
-      id: 'minimap2',
-      name: 'minimap2',
+      id: 'minimap2-long',
+      name: 'minimap2 for long reads',
       description: 'Aligns long reads.',
       category: 'alignment',
       subcategory: 'Long-read aligners',

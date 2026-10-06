@@ -36,11 +36,11 @@ const tool = (id: string): CatalogTool => {
 };
 
 describe('catalog structure', () => {
-  it('has schema version 2, a catalog version and 12 to 20 tools', () => {
+  it('has schema version 2, a catalog version and 12 to 60 tools', () => {
     expect(CATALOG.schema_version).toBe(2);
     expect(CATALOG.version).toMatch(/^\d{4}\.\d+\.\d+$/);
     expect(CATALOG.tools.length).toBeGreaterThanOrEqual(12);
-    expect(CATALOG.tools.length).toBeLessThanOrEqual(20);
+    expect(CATALOG.tools.length).toBeLessThanOrEqual(60);
   });
 
   it('passes the schema check (the same one the CI test uses on every future catalog)', () => {
@@ -354,17 +354,21 @@ describe('search', () => {
 
   it('finds tools by name, ignoring case', () => {
     expect(searchTools('FASTQC').map((t) => t.id)).toEqual(['fastqc']);
-    expect(searchTools('bwa').map((t) => t.id)).toEqual(['bwa-mem']);
+    expect(searchTools('bwa').map((t) => t.id)).toEqual(['bwa-index', 'bwa-mem']);
   });
 
   it('finds tools by category id and by category label', () => {
     const byId = searchTools('alignment').map((t) => t.id);
     expect(byId).toEqual(expect.arrayContaining(['bwa-mem', 'bowtie2', 'star']));
-    expect(searchTools('variant calling').map((t) => t.id)).toEqual(['bcftools-call']);
+    expect(searchTools('variant calling').map((t) => t.id)).toEqual(
+      expect.arrayContaining(['bcftools-call', 'freebayes', 'gatk-haplotypecaller'])
+    );
+    expect(searchTools('variant calling').map((t) => t.id)).not.toContain('bwa-mem');
   });
 
   it('requires every word and can narrow by category', () => {
-    expect(searchTools('samtools index').map((t) => t.id)).toEqual(['samtools-index']);
+    expect(searchTools('samtools index').map((t) => t.id)).toEqual(['samtools-faidx', 'samtools-index']);
+    expect(searchTools('samtools index', 'processing').map((t) => t.id)).toEqual(['samtools-index']);
     expect(searchTools('zzz')).toEqual([]);
     const processing = searchTools('', 'processing').map((t) => t.id);
     expect(processing).toEqual(expect.arrayContaining(['samtools-sort', 'samtools-index']));

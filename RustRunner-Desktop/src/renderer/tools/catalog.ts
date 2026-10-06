@@ -45,6 +45,8 @@ export interface ToolParam {
   /** Bounds of a `number` parameter. */
   min?: number;
   max?: number;
+  /** Size of one step of the number field's arrows; 1 when absent. Use a fraction for options like 0.05. */
+  step?: number;
   /** What a ticked `boolean` parameter adds to the command; unticked adds nothing. */
   flag?: string;
   /** A `string` parameter that must be filled in before the tool can run. */
@@ -364,6 +366,9 @@ function validateParams(where: string, params: unknown, errors: string[]): ToolP
         }
         if (param.max !== undefined && typeof param.default === 'number' && param.default > param.max) {
           errors.push(`${at}: default is above max`);
+        }
+        if (param.step !== undefined && !(typeof param.step === 'number' && Number.isFinite(param.step) && param.step > 0)) {
+          errors.push(`${at}: step must be a number above 0`);
         }
         break;
       case 'boolean':

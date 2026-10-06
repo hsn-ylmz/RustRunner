@@ -682,7 +682,7 @@ export function PropertiesPanel({
                   hint={param.description}
                   min={param.min}
                   max={param.max}
-                  step={1}
+                  step={param.step ?? 1}
                   value={String(value ?? '')}
                   data-testid={testId}
                   error={paramError}
