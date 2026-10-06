@@ -1,4 +1,5 @@
-import { useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useEffect, useRef, useCallback, type KeyboardEvent, type ReactNode } from 'react';
+import { Button } from '../ui';
 
 export type ExecutionTab = 'logs' | 'steps' | 'history';
 
@@ -72,72 +73,102 @@ export function ExecutionLogs({
     stickToBottomRef.current = distanceFromBottom < 40;
   }, []);
 
+  const tabs: Array<{ id: ExecutionTab; label: string; testId: string }> = [
+    { id: 'logs', label: 'Execution logs', testId: 'tab-logs' },
+    { id: 'steps', label: `Step status${stepCount > 0 ? ` (${stepCount})` : ''}`, testId: 'tab-steps' },
+    ...(historyView
+      ? [
+          {
+            id: 'history' as ExecutionTab,
+            label: `Run history${historyCount > 0 ? ` (${historyCount})` : ''}`,
+            testId: 'tab-history',
+          },
+        ]
+      : []),
+  ];
+
+  /** Arrow keys, Home and End move between tabs (the tablist pattern). */
+  const onTabKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (!onTabChange || !keys.includes(e.key)) return;
+    const at = tabs.findIndex((t) => t.id === tab);
+    const next =
+      e.key === 'Home'
+        ? 0
+        : e.key === 'End'
+          ? tabs.length - 1
+          : (at + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    e.preventDefault();
+    onTabChange(tabs[next].id);
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
+  };
+
+  const panelProps = (id: ExecutionTab) => ({
+    role: 'tabpanel',
+    id: `execution-tabpanel-${id}`,
+    'aria-labelledby': `execution-tab-${id}`,
+  });
+
   return (
     <div className={`execution-panel ${visible ? 'visible' : 'hidden'}`}>
       <div className="execution-panel-header">
         {stepsView && onTabChange ? (
-          <div className="execution-tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={tab === 'logs'}
-              data-testid="tab-logs"
-              className={`execution-tab ${tab === 'logs' ? 'active' : ''}`}
-              onClick={() => onTabChange('logs')}
-            >
-              Execution Logs
-            </button>
-            <button
-              role="tab"
-              aria-selected={tab === 'steps'}
-              data-testid="tab-steps"
-              className={`execution-tab ${tab === 'steps' ? 'active' : ''}`}
-              onClick={() => onTabChange('steps')}
-            >
-              Step Status{stepCount > 0 ? ` (${stepCount})` : ''}
-            </button>
-            {historyView && (
+          <div className="execution-tabs" role="tablist" aria-label="Run output" onKeyDown={onTabKeyDown}>
+            {tabs.map((t) => (
               <button
+                key={t.id}
+                type="button"
                 role="tab"
-                aria-selected={tab === 'history'}
-                data-testid="tab-history"
-                className={`execution-tab ${tab === 'history' ? 'active' : ''}`}
-                onClick={() => onTabChange('history')}
+                id={`execution-tab-${t.id}`}
+                aria-selected={tab === t.id}
+                aria-controls={`execution-tabpanel-${t.id}`}
+                tabIndex={tab === t.id ? 0 : -1}
+                data-testid={t.testId}
+                className={`execution-tab ${tab === t.id ? 'active' : ''}`}
+                onClick={() => onTabChange(t.id)}
               >
-                Run History{historyCount > 0 ? ` (${historyCount})` : ''}
+                {t.label}
               </button>
-            )}
+            ))}
           </div>
         ) : (
-          <h3>Execution Logs</h3>
+          <h3>Execution logs</h3>
         )}
         <div className="execution-panel-controls">
           {latestReport && onOpenLatestReport && (
-            <button
-              className="panel-button"
+            <Button
+              size="sm"
               data-testid="open-latest-report"
               onClick={onOpenLatestReport}
               title="Open the HTML report of the last run"
             >
               Open latest report
-            </button>
+            </Button>
           )}
           {showLogs && (
-            <button className="panel-button" onClick={onClear}>Clear</button>
+            <Button size="sm" onClick={onClear}>
+              Clear log
+            </Button>
           )}
-          <button className="panel-button" onClick={onToggle}>
+          <Button size="sm" onClick={onToggle} aria-expanded={visible}>
             {visible ? 'Hide' : 'Show'}
-          </button>
+          </Button>
         </div>
       </div>
       {visible && showSteps && (
-        <div className="execution-panel-content">{stepsView}</div>
+        <div className="execution-panel-content" {...panelProps('steps')}>
+          {stepsView}
+        </div>
       )}
       {visible && showHistory && (
-        <div className="execution-panel-content">{historyView}</div>
+        <div className="execution-panel-content" {...panelProps('history')}>
+          {historyView}
+        </div>
       )}
       {visible && showLogs && (
         <div
-          className="execution-panel-content"
+          className="execution-panel-content log-content"
+          {...panelProps('logs')}
           ref={logContentRef}
           onScroll={handleLogScroll}
         >

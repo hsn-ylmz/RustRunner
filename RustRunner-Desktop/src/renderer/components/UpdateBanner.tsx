@@ -1,5 +1,7 @@
 /** Slim banner reporting auto-update status. */
 
+import { Button, IconButton } from '../ui';
+
 /**
  * Status payloads emitted by the main process over the 'update-status'
  * IPC channel. Kept inline (rather than imported from preload.d.ts) so the
@@ -136,18 +138,16 @@ export function UpdateBanner({
 
       <div className="update-banner-actions">
         {action && (
-          <button className="update-banner-button" onClick={action.onClick}>
+          <Button variant="primary" size="sm" onClick={action.onClick}>
             {action.label}
-          </button>
+          </Button>
         )}
-        <button
-          className="update-banner-dismiss"
+        <IconButton
+          icon="x"
+          size="sm"
+          label="Dismiss update notification"
           onClick={onDismiss}
-          aria-label="Dismiss update notification"
-          title="Dismiss"
-        >
-          ×
-        </button>
+        />
       </div>
     </div>
   );

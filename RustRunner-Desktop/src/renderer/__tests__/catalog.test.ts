@@ -21,6 +21,7 @@ import {
   type CatalogTool,
 } from '../tools/catalog';
 import { convertNodesToWorkflow } from '../workflowConversion';
+import { isNodeColorId } from '../nodeColors';
 
 const tool = (id: string): CatalogTool => {
   const found = findTool(id);
@@ -65,7 +66,7 @@ describe('catalog structure', () => {
     }
     for (const [id, category] of Object.entries(CATALOG.categories)) {
       expect(category.label, id).not.toBe('');
-      expect(category.color, id).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(isNodeColorId(category.color), `${id} colour ${category.color}`).toBe(true);
     }
   });
 

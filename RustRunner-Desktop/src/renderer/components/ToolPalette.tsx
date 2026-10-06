@@ -5,6 +5,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CATALOG, categoryLabel, searchTools, type CatalogTool } from '../tools/catalog';
+import { nodeColorVar } from '../nodeColors';
+import { IconButton, Panel, Select, TextField } from '../ui';
 
 export function ToolPalette({
   onAdd,
@@ -24,7 +26,7 @@ export function ToolPalette({
   const results = useMemo(() => searchTools(query, category), [query, category]);
 
   return (
-    <div
+    <Panel
       className="tool-palette"
       data-testid="tool-palette"
       role="dialog"
@@ -32,35 +34,33 @@ export function ToolPalette({
       onKeyDown={(e) => {
         if (e.key === 'Escape') onClose();
       }}
-    >
-      <div className="tool-palette-header">
-        <h3>Tool Catalog</h3>
-        <button
-          className="tool-palette-close"
+      title="Tool Catalog"
+      actions={
+        <IconButton
+          icon="x"
+          label="Close tool catalog"
+          size="sm"
           onClick={onClose}
           data-testid="palette-close"
-          aria-label="Close tool catalog"
-          title="Close"
-        >
-          ×
-        </button>
-      </div>
-
-      <input
-        ref={searchRef}
+        />
+      }
+    >
+      <TextField
+        inputRef={searchRef}
+        label="Search tools"
+        hideLabel
         type="search"
-        className="property-input"
         placeholder="Search by name or category"
         value={query}
         data-testid="palette-search"
         onChange={(e) => setQuery(e.target.value)}
       />
 
-      <select
-        className="property-input"
+      <Select
+        label="Category"
+        hideLabel
         value={category}
         data-testid="palette-category"
-        aria-label="Category"
         onChange={(e) => setCategory(e.target.value)}
       >
         <option value="">All categories</option>
@@ -69,12 +69,12 @@ export function ToolPalette({
             {label}
           </option>
         ))}
-      </select>
+      </Select>
 
       <div className="tool-palette-list" data-testid="palette-list">
         {results.length === 0 && (
           <div className="tool-palette-empty">
-            No catalog tool matches. Use + Add Node for a custom step.
+            No catalog tool matches. Use Add node for a custom step.
           </div>
         )}
         {results.map((tool) => (
@@ -87,7 +87,7 @@ export function ToolPalette({
           >
             <span
               className="tool-palette-swatch"
-              style={{ background: CATALOG.categories[tool.category]?.color }}
+              style={{ background: nodeColorVar(CATALOG.categories[tool.category]?.color) }}
             />
             <span className="tool-palette-text">
               <span className="tool-palette-name">{tool.name}</span>
@@ -105,6 +105,6 @@ export function ToolPalette({
         Catalog {CATALOG.version}, bundled. Tools are installed with conda when a workflow first
         runs them.
       </div>
-    </div>
+    </Panel>
   );
 }

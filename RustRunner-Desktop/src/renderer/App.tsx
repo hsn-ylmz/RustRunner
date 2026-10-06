@@ -14,6 +14,9 @@ import {
   addEdge,
   ReactFlowProvider,
 } from '@xyflow/react';
+import './styles/tokens.css';
+import './styles/base.css';
+import './ui/ui.css';
 import './App.css';
 import {
   applyRunEvent,
@@ -48,11 +51,9 @@ import {
   validateCatalogNodes,
   type CatalogTool,
 } from './tools/catalog';
-import {
-  WorkflowCanvas,
-  DEFAULT_COLOR,
-  nextNodePosition,
-} from './components/WorkflowCanvas';
+import { WorkflowCanvas, nextNodePosition } from './components/WorkflowCanvas';
+import { DEFAULT_NODE_COLOR } from './nodeColors';
+import { Badge, Button, Dialog, TextField, Checkbox } from './ui';
 
 /**
  * Cap on retained log lines. A chatty run (or `seq 1 200000`) used to grow
@@ -108,6 +109,8 @@ function WorkflowEditorInner() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   /** The canvas viewport, for placing new nodes where they're actually visible. */
   const flowWrapperRef = useRef<HTMLDivElement>(null);
+  /** The catalog button, so closing the palette hands focus back to it. */
+  const paletteButtonRef = useRef<HTMLButtonElement>(null);
   const { screenToFlowPosition } = useReactFlow();
 
   const selectedNode =
@@ -428,7 +431,7 @@ function WorkflowEditorInner() {
         input: '',
         output: '',
         threads: 1,
-        color: DEFAULT_COLOR,
+        color: DEFAULT_NODE_COLOR,
       },
       type: 'custom',
     };
@@ -540,13 +543,13 @@ function WorkflowEditorInner() {
       {
         id: 'node_1',
         position: { x: 250, y: 100 },
-        data: { label: 'Start', tool: '', command: '', input: '', output: '', threads: 1, color: '#a8e6cf' },
+        data: { label: 'Start', tool: '', command: '', input: '', output: '', threads: 1, color: 'mint' },
         type: 'custom',
       },
       {
         id: 'node_2',
         position: { x: 250, y: 250 },
-        data: { label: 'Process', tool: '', command: '', input: '', output: '', threads: 1, color: DEFAULT_COLOR },
+        data: { label: 'Process', tool: '', command: '', input: '', output: '', threads: 1, color: DEFAULT_NODE_COLOR },
         type: 'custom',
       },
     ];
@@ -983,59 +986,81 @@ function WorkflowEditorInner() {
       <div className="main-content">
         <div className="flow-container" ref={flowWrapperRef}>
           {/* Top Toolbar */}
-          <div className="top-toolbar">
+          <div className="top-toolbar" role="toolbar" aria-label="Workflow">
             <div className="workflow-info">
               <div className="workflow-title" data-testid="workflow-title">
-                {workflowName}
-                {isDirty && <span className="dirty-marker" title="Unsaved changes">•</span>}
+                <span className="workflow-name">{workflowName}</span>
+                {isDirty && (
+                  <Badge tone="neutral" variant="outline" className="dirty-marker">
+                    Unsaved
+                  </Badge>
+                )}
               </div>
               {(currentFilePath || workingDirectory) && (
-                <div className="working-directory">
+                <div className="working-directory" title={currentFilePath || workingDirectory}>
+                  {currentFilePath ? 'File' : 'Folder'}:{' '}
                   {(currentFilePath || workingDirectory).replace(/^.*[\\\/]/, '')}
                 </div>
               )}
             </div>
 
             <div className="file-buttons">
-              <button className="toolbar-button" onClick={handleNew}>New</button>
-              <button className="toolbar-button" onClick={handleOpen}>Open</button>
-              <button className="toolbar-button" onClick={handleSave}>Save</button>
-              <button className="toolbar-button" onClick={handleSaveAs}>Save As</button>
-              <button className="toolbar-button" onClick={handleClear}>Clear</button>
-              <button className="toolbar-button" data-testid="details" onClick={handleEditDetails}>
+              <Button variant="ghost" onClick={handleNew}>New</Button>
+              <Button variant="ghost" onClick={handleOpen}>Open</Button>
+              <Button variant="ghost" onClick={handleSave}>Save</Button>
+              <Button variant="ghost" onClick={handleSaveAs}>Save as</Button>
+              <Button
+                variant="ghost"
+                onClick={handleClear}
+                tooltip="Remove every step from the canvas"
+              >
+                Clear canvas
+              </Button>
+              <Button variant="ghost" data-testid="details" onClick={handleEditDetails}>
                 Details
-              </button>
-              <button className="toolbar-button" onClick={handleSelectDirectory}
-              data-testid="set-directory">
-                Set Directory
-              </button>
+              </Button>
+              <Button variant="ghost" onClick={handleSelectDirectory} data-testid="set-directory">
+                Set directory
+              </Button>
             </div>
 
             <div className="edit-buttons">
-              <button
-                className="toolbar-button"
+              <Button
+                ref={paletteButtonRef}
                 onClick={() => setPaletteOpen((open) => !open)}
                 data-testid="open-palette"
                 aria-expanded={paletteOpen}
-                title="Search the bundled catalog of common bioinformatics tools"
+                tooltip="Search the bundled catalog of common bioinformatics tools"
               >
-                Tool Catalog
-              </button>
-              <button className="toolbar-button add-button" onClick={addNode}
-              data-testid="add-node">+ Add Node</button>
-              <button className="toolbar-button delete-button" onClick={deleteSelectedNodes}
-              data-testid="delete-node">Delete</button>
+                Tool catalog
+              </Button>
+              <Button icon="plus" onClick={addNode} data-testid="add-node">
+                Add node
+              </Button>
+              <Button
+                icon="trash"
+                onClick={deleteSelectedNodes}
+                data-testid="delete-node"
+                disabledReason={selectedNode ? undefined : 'Select a step to delete it'}
+              >
+                Delete
+              </Button>
             </div>
           </div>
 
           {/* Execution Controls */}
           <div className="execution-controls">
-            <button
-              className={`execution-button run-button ${executionState === 'running' ? 'active' : ''}`}
+            <Button
+              variant="primary"
+              size="lg"
+              fullWidth
+              icon="play"
               onClick={handleRun}
               data-testid="run"
-              disabled={nodes.length === 0 || executionState === 'running'}
-              title={
+              loading={executionState === 'running'}
+              disabledReason={nodes.length === 0 ? 'Add a step to run the workflow' : undefined}
+              tooltipPlacement="right"
+              tooltip={
                 executionState === 'paused'
                   ? 'Continue the paused run.'
                   : `Run the workflow, skipping steps whose outputs are already up to date. ${describeResume(
@@ -1045,53 +1070,83 @@ function WorkflowEditorInner() {
               }
             >
               {executionState === 'paused' ? 'Continue' : 'Run'}
-            </button>
+            </Button>
 
-            <button
-              className="execution-button resume-button"
+            <Button
+              fullWidth
               onClick={handleRunFromScratch}
               data-testid="run-from-scratch"
-              disabled={nodes.length === 0 || executionState !== 'idle'}
-              title="Discard saved progress and run every step again."
+              disabledReason={
+                nodes.length === 0
+                  ? 'Add a step to run the workflow'
+                  : executionState !== 'idle'
+                    ? 'A run is in progress'
+                    : undefined
+              }
+              tooltipPlacement="right"
+              tooltip="Discard saved progress and run every step again."
             >
               Run from scratch
-            </button>
+            </Button>
 
-            <button
-              className="execution-button dry-run-button"
+            <Button
+              fullWidth
               onClick={handleDryRun}
               data-testid="dry-run"
-              disabled={nodes.length === 0 || executionState !== 'idle'}
+              disabledReason={
+                nodes.length === 0
+                  ? 'Add a step to check the workflow'
+                  : executionState !== 'idle'
+                    ? 'A run is in progress'
+                    : undefined
+              }
+              tooltipPlacement="right"
+              tooltip="Check the workflow and show what would run, without running any command."
             >
-              Dry Run
-            </button>
+              Dry run
+            </Button>
 
-            <button
-              className={`execution-button pause-button ${executionState === 'paused' ? 'active' : ''}`}
+            <Button
+              fullWidth
+              icon="pause"
+              pressed={executionState === 'paused'}
               onClick={handlePause}
               data-testid="pause"
-              disabled={executionState !== 'running'}
+              disabledReason={
+                executionState === 'running'
+                  ? undefined
+                  : executionState === 'paused'
+                    ? 'Paused. Press Continue to go on.'
+                    : 'Nothing is running'
+              }
+              tooltipPlacement="right"
             >
               Pause
-            </button>
+            </Button>
 
-            <button
-              className="execution-button stop-button"
+            <Button
+              variant="danger"
+              fullWidth
+              icon="stop"
               onClick={handleStop}
               data-testid="stop"
-              disabled={executionState === 'idle'}
+              disabledReason={executionState === 'idle' ? 'Nothing is running' : undefined}
+              tooltipPlacement="right"
             >
               Stop
-            </button>
+            </Button>
 
             {mockedCount > 0 && (
-              <div
+              <Badge
+                tone="warning"
+                variant="outline"
+                icon="alert"
                 className="mock-warning"
                 data-testid="mock-warning"
                 title="Mocked steps do not run their tool; they only create placeholder outputs. Results downstream are not real."
               >
-                ⚠ {mockedCount} mocked step{mockedCount === 1 ? '' : 's'}
-              </div>
+                {mockedCount} mocked step{mockedCount === 1 ? '' : 's'}
+              </Badge>
             )}
 
             {progress && <div className="execution-progress" data-testid="progress">{progress}</div>}
@@ -1099,7 +1154,13 @@ function WorkflowEditorInner() {
 
 
           {paletteOpen && (
-            <ToolPalette onAdd={addCatalogNode} onClose={() => setPaletteOpen(false)} />
+            <ToolPalette
+              onAdd={addCatalogNode}
+              onClose={() => {
+                setPaletteOpen(false);
+                paletteButtonRef.current?.focus();
+              }}
+            />
           )}
 
           <WorkflowCanvas
@@ -1149,70 +1210,69 @@ function WorkflowEditorInner() {
 
       {/* Name / details dialog */}
       {nameDialog && (
-        <div className="dialog-overlay" onClick={() => setNameDialog(null)}>
-          <div className="dialog-box" onClick={(e) => e.stopPropagation()}>
-            <h3>{nameDialog === 'new' ? 'New Workflow' : 'Workflow Details'}</h3>
-            <label>
-              Workflow Name:
-              <input
-                type="text"
-                className="dialog-input"
-                data-testid="dialog-name"
-                value={tempWorkflowName}
-                onChange={(e) => setTempWorkflowName(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === 'Enter' &&
-                  (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
-                }
-                autoFocus
-              />
-            </label>
-            <label>
-              Version (optional):
-              <input
-                type="text"
-                className="dialog-input"
-                value={tempWorkflowVersion}
-                placeholder="e.g. 1.0"
-                onChange={(e) => setTempWorkflowVersion(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === 'Enter' &&
-                  (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
-                }
-              />
-            </label>
-            <label className="dialog-checkbox">
-              <input
-                type="checkbox"
-                data-testid="keep-going"
-                checked={tempKeepGoing}
-                onChange={(e) => setTempKeepGoing(e.target.checked)}
-              />{' '}
-              Keep going after a failure
-            </label>
-            <p className="dialog-hint">
-              When a step fails, steps that do not depend on it still run. The run still ends as
-              failed, with a summary of what failed and what was not run.
-            </p>
-            <p className="dialog-hint">
-              {nameDialog === 'new'
-                ? 'You will choose a working directory when you click Run.'
-                : 'Shown in the run log and saved with each run. Renaming the workflow keeps its saved run, so its saved progress is still found.'}
-            </p>
-            <div className="dialog-buttons">
-              <button className="dialog-button cancel" onClick={() => setNameDialog(null)}>
-                Cancel
-              </button>
-              <button
-                className="dialog-button confirm"
+        <Dialog
+          title={nameDialog === 'new' ? 'New workflow' : 'Workflow details'}
+          onClose={() => setNameDialog(null)}
+          dirty={
+            nameDialog === 'new'
+              ? tempWorkflowName !== 'My Workflow' || tempWorkflowVersion !== '' || tempKeepGoing
+              : tempWorkflowName !== workflowName ||
+                tempWorkflowVersion !== workflowVersion ||
+                tempKeepGoing !== keepGoing
+          }
+          testId="workflow-dialog"
+          footer={
+            <>
+              <Button onClick={() => setNameDialog(null)}>Cancel</Button>
+              <Button
+                variant="primary"
                 data-testid="dialog-confirm"
                 onClick={nameDialog === 'new' ? handleConfirmNew : handleConfirmDetails}
+                disabledReason={tempWorkflowName.trim() ? undefined : 'Give the workflow a name'}
               >
                 {nameDialog === 'new' ? 'Create' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
+              </Button>
+            </>
+          }
+        >
+          <TextField
+            label="Workflow name"
+            data-testid="dialog-name"
+            value={tempWorkflowName}
+            onChange={(e) => setTempWorkflowName(e.target.value)}
+            onKeyDown={(e) =>
+              e.key === 'Enter' &&
+              (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
+            }
+            autoFocus
+          />
+          <TextField
+            label="Version"
+            optional
+            value={tempWorkflowVersion}
+            placeholder="e.g. 1.0"
+            hint={
+              nameDialog === 'new'
+                ? undefined
+                : 'Shown in the run log and saved with each run. Renaming the workflow keeps its saved run, so its saved progress is still found.'
+            }
+            onChange={(e) => setTempWorkflowVersion(e.target.value)}
+            onKeyDown={(e) =>
+              e.key === 'Enter' &&
+              (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
+            }
+          />
+          <Checkbox
+            label="Keep going after a failure"
+            data-testid="keep-going"
+            checked={tempKeepGoing}
+            onChange={(e) => setTempKeepGoing(e.target.checked)}
+            hint="When a step fails, steps that do not depend on it still run. The run still ends as failed, with a summary of what failed and what was not run."
+          />
+          {nameDialog === 'new' && (
+            <p className="dialog-note">You will choose a working directory when you click Run.</p>
+          )}
+        </Dialog>
       )}
     </div>
   );

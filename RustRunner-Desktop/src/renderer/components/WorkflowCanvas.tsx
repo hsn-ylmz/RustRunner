@@ -20,13 +20,9 @@ import '@xyflow/react/dist/style.css';
 import type { NodeStatus } from '../stepEvents';
 import { firstFreePosition, type Rect } from '../nodePlacement';
 import type { TypeCheck } from '../tools/catalog';
-
-export const COLOR_OPTIONS = [
-  '#a8e6cf', '#88c5f7', '#d4a5f7', '#f5efe9',
-  '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6',
-];
-
-export const DEFAULT_COLOR = '#88c5f7';
+import { NODE_COLORS, nodeColorVar, normalizeNodeColor } from '../nodeColors';
+import { MISMATCH_LABEL, edgeLabelWidth } from '../edgeLabel';
+import { Badge, Icon, Tooltip, type IconName } from '../ui';
 
 /**
  * Chooses where a newly added node should appear.
@@ -101,13 +97,21 @@ export function nextNodePosition(
   return firstFreePosition(candidates, occupied) ?? slot(nodeCount);
 }
 
-/** Badge glyph shown in the corner of a node for each execution state. */
-const STATUS_GLYPH: Record<string, string> = {
-  running: '●',
-  retrying: '↻',
-  succeeded: '✓',
-  skipped: '⏭',
-  failed: '✕',
+/** Icon shown in the corner of a node for each execution state. */
+const STATUS_ICON: Record<string, IconName> = {
+  running: 'dot',
+  retrying: 'retry',
+  succeeded: 'check',
+  skipped: 'skip',
+  failed: 'x',
+};
+
+const STATUS_NAME: Record<string, string> = {
+  running: 'Running',
+  retrying: 'Retrying',
+  succeeded: 'Succeeded',
+  skipped: 'Skipped',
+  failed: 'Failed',
 };
 
 function CustomNode({ id, data, selected }: any) {
@@ -117,7 +121,7 @@ function CustomNode({ id, data, selected }: any) {
     updateNodeData(id, { color: newColor });
   };
 
-  const nodeColor = data.color || DEFAULT_COLOR;
+  const nodeColor = normalizeNodeColor(data.color);
 
   // Injected by the editor rather than stored on the node, so execution state
   // never ends up in a saved workflow file.
@@ -131,14 +135,17 @@ function CustomNode({ id, data, selected }: any) {
     <>
       <NodeToolbar isVisible={selected} className="nopan">
         <div className="color-picker-toolbar">
-          {COLOR_OPTIONS.map((colorOption) => (
-            <button
-              key={colorOption}
-              onClick={() => handleColorChange(colorOption)}
-              className={`color-button ${colorOption === nodeColor ? 'selected' : ''}`}
-              style={{ backgroundColor: colorOption }}
-              title={`Change color to ${colorOption}`}
-            />
+          {NODE_COLORS.map((option) => (
+            <Tooltip key={option.id} content={option.label} placement="top">
+              <button
+                type="button"
+                onClick={() => handleColorChange(option.id)}
+                className={`color-button ${option.id === nodeColor ? 'selected' : ''}`}
+                style={{ backgroundColor: nodeColorVar(option.id) }}
+                aria-label={`Node colour: ${option.label}`}
+                aria-pressed={option.id === nodeColor}
+              />
+            </Tooltip>
           ))}
         </div>
       </NodeToolbar>
@@ -152,7 +159,7 @@ function CustomNode({ id, data, selected }: any) {
         ]
           .filter(Boolean)
           .join(' ')}
-        style={{ background: nodeColor }}
+        style={{ background: nodeColorVar(nodeColor) }}
         data-testid="workflow-node"
         data-state={state}
         title={
@@ -167,28 +174,39 @@ function CustomNode({ id, data, selected }: any) {
         <Handle type="target" position={Position.Top} />
 
         {state !== 'idle' && state !== 'pending' && (
-          <div className={`node-status-badge node-status-${state}`}>
-            {STATUS_GLYPH[state]}
+          <div
+            className={`node-status-badge node-status-${state}`}
+            role="img"
+            aria-label={STATUS_NAME[state]}
+          >
+            <Icon name={STATUS_ICON[state]} size={12} />
           </div>
         )}
 
         {(data.mock === true || data.mock === 'true') && (
-          <div
+          <Badge
+            tone="warning"
+            variant="dashed"
             className="node-mock-badge"
             data-testid="node-mock-badge"
             title="Mocked: the tool does not run, placeholder outputs are created"
           >
             MOCK
-          </div>
+          </Badge>
         )}
 
         <div className="node-label">{data.label || 'New Node'}</div>
         <div className="node-tool">{data.tool || 'No tool'}</div>
 
         {status?.mocked && state === 'succeeded' && (
-          <div className="node-mocked-run" data-testid="node-mocked-run">
+          <Badge
+            tone="warning"
+            variant="dashed"
+            className="node-mocked-run"
+            data-testid="node-mocked-run"
+          >
             MOCKED
-          </div>
+          </Badge>
         )}
 
         {showCount && (
@@ -198,8 +216,13 @@ function CustomNode({ id, data, selected }: any) {
         )}
 
         {invalidReason && (
-          <div className="node-invalid-badge" title={invalidReason}>
-            !
+          <div
+            className="node-invalid-badge"
+            title={invalidReason}
+            role="img"
+            aria-label={invalidReason}
+          >
+            <Icon name="alert" size={12} />
           </div>
         )}
 
@@ -213,8 +236,9 @@ function CustomNode({ id, data, selected }: any) {
  * An edge coloured by its file-type check: green and solid with a check mark
  * when an output type of the source is an input type of the target, orange and
  * dashed with a "types differ" label when not, neutral when either end is not a
- * catalog tool. Dash and label carry the verdict without colour. The editor injects the check under `__typeCheck`
- * (like `__status` on nodes), so it never reaches a saved workflow. The title
+ * catalog tool. Dash and label carry the verdict without colour. The editor
+ * injects the check under `__typeCheck` (like `__status` on nodes), so it never
+ * reaches a saved workflow. The title
  * is the tooltip. The check only informs; it never blocks a connection.
  */
 function TypedEdge({
@@ -240,6 +264,7 @@ function TypedEdge({
   });
   const check = (data as { __typeCheck?: TypeCheck } | undefined)?.__typeCheck;
   const status = check?.status ?? 'unknown';
+  const mismatchWidth = edgeLabelWidth(MISMATCH_LABEL, 12);
 
   return (
     <g
@@ -263,9 +288,24 @@ function TypedEdge({
           data-testid="typed-edge-label"
           transform={`translate(${labelX}, ${labelY})`}
         >
-          <rect x={-38} y={-10} width={76} height={20} rx={10} />
-          <text textAnchor="middle" dominantBaseline="central">
-            ⚠ types differ
+          <rect
+            x={-mismatchWidth / 2}
+            y={-11}
+            width={mismatchWidth}
+            height={22}
+            rx={11}
+          />
+          {/* The warning mark is drawn, not typed: emoji and symbol glyphs
+              render differently on every OS. */}
+          <g
+            className="edge-label-icon"
+            transform={`translate(${-mismatchWidth / 2 + 8}, -6) scale(0.75)`}
+          >
+            <path d="M8 2.5L14 13H2L8 2.5z" />
+            <path d="M8 6.5v3M8 11.3v.2" />
+          </g>
+          <text x={8} textAnchor="middle" dominantBaseline="central">
+            {MISMATCH_LABEL}
           </text>
         </g>
       )}
@@ -323,13 +363,10 @@ export function WorkflowCanvas({
       <Background
         variant={BackgroundVariant.Dots}
         gap={30}
-        color="var(--canvas-grid)"
+        color="var(--canvas-dot)"
       />
       <Controls />
-      <MiniMap
-        nodeStrokeWidth={1}
-        nodeColor={(node: any) => node.data?.color || '#aaa'}
-      />
+      <MiniMap nodeStrokeWidth={1} nodeColor={(node: any) => nodeColorVar(node.data?.color)} />
     </ReactFlow>
   );
 }

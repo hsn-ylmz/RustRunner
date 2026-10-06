@@ -29,6 +29,18 @@ import {
   type ParamValue,
   type ToolParam,
 } from '../tools/catalog';
+import {
+  Button,
+  Callout,
+  Checkbox,
+  Icon,
+  NumberField,
+  Panel,
+  Section,
+  Select,
+  TextArea,
+  TextField,
+} from '../ui';
 
 /** Checkbox state may be a boolean or, from loose data, the string 'true'. */
 const checksOn = (value: unknown) => value === true || value === 'true';
@@ -57,29 +69,30 @@ function CheckTargetSelect({
   const target = normalizeCheckTarget(value) ?? '';
   const stale = target !== '' && !outputs.includes(target);
   return (
-    <div className="check-target">
-      <select
-        className="property-input check-target-select"
-        value={target}
-        data-testid={testId}
-        disabled={disabled}
-        aria-label="Which output this check applies to"
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="">All outputs</option>
-        {outputs.map((output) => (
-          <option key={output} value={output}>
-            Only {output}
-          </option>
-        ))}
-        {stale && <option value={target}>Only {target} (no longer an output)</option>}
-      </select>
-      {stale && (
-        <div className="property-error" data-testid={`${testId}-stale`}>
-          ⚠ {target} is no longer one of this step's outputs; pick another or "All outputs".
-        </div>
-      )}
-    </div>
+    <Select
+      className="check-target-select"
+      label="Which output this check applies to"
+      hideLabel
+      value={target}
+      data-testid={testId}
+      disabled={disabled}
+      error={
+        stale ? (
+          <span data-testid={`${testId}-stale`}>
+            {target} is no longer one of this step's outputs; pick another or "All outputs".
+          </span>
+        ) : undefined
+      }
+      onChange={(e) => onChange(e.target.value)}
+    >
+      <option value="">All outputs</option>
+      {outputs.map((output) => (
+        <option key={output} value={output}>
+          Only {output}
+        </option>
+      ))}
+      {stale && <option value={target}>Only {target} (no longer an output)</option>}
+    </Select>
   );
 }
 
@@ -94,10 +107,9 @@ export function PropertiesPanel({
 }: any) {
   if (!selectedNode) {
     return (
-      <div className="properties-panel">
-        <h3>Properties</h3>
+      <Panel className="properties-panel" title="Properties">
         <p className="no-selection">Select a node to edit its properties</p>
-      </div>
+      </Panel>
     );
   }
 
@@ -230,49 +242,43 @@ export function PropertiesPanel({
   };
 
   return (
-    <div className="properties-panel" data-testid="properties-panel">
-      <h3>Node Properties</h3>
-
-      <div className="property-group">
-        <label className="property-label">Node Name:</label>
-        <input
-          type="text"
-          className="property-input"
+    <Panel
+      className="properties-panel"
+      data-testid="properties-panel"
+      title="Node properties"
+      aria-label="Node properties"
+    >
+      <Section title="Step">
+        <TextField
+          label="Node name"
           value={selectedNode.data.label || ''}
           data-testid="prop-label"
           onChange={(e) => handleInputChange('label', e.target.value)}
+          error={invalidReason || undefined}
+          hint={
+            selectedNode.data.label && !invalidReason
+              ? `Step ID: ${labelToId(selectedNode.data.label)}`
+              : undefined
+          }
         />
-        {selectedNode.data.label && !invalidReason && (
-          <div className="property-hint">
-            Step ID: {labelToId(selectedNode.data.label)}
-          </div>
-        )}
-        {invalidReason && (
-          <div className="property-error">⚠ {invalidReason}</div>
-        )}
-      </div>
 
-      <div className="property-group">
-        <label className="property-label">Tool:</label>
-        <input
-          type="text"
-          className="property-input"
+        <TextField
+          label="Tool"
           value={selectedNode.data.tool || ''}
           data-testid="prop-tool"
           onChange={(e) => handleToolChange(e.target.value)}
           placeholder="e.g., bash, fastqc, bowtie2"
+          hint={
+            catalogTool
+              ? 'From the tool catalog. Changing the tool makes this a free-form step.'
+              : undefined
+          }
         />
-        {catalogTool && (
-          <div className="property-hint">
-            From the tool catalog. Changing the tool makes this a free-form step.
-          </div>
-        )}
-      </div>
+      </Section>
 
       {catalogTool && (
-        <div className="property-group catalog-section" data-testid="catalog-params">
-          <label className="property-label">{catalogTool.name} options:</label>
-          <div className="property-hint" data-testid="catalog-types">
+        <Section card title={`${catalogTool.name} options`} data-testid="catalog-params">
+          <div className="field-hint" data-testid="catalog-types">
             {catalogTool.description} Conda package: {catalogTool.conda.package}. File types:{' '}
             {catalogTool.inputTypes.join(', ')} {'→'} {catalogTool.outputTypes.join(', ')}.
           </div>
@@ -282,288 +288,254 @@ export function PropertiesPanel({
             const value = catalogParams[param.id];
             if (param.type === 'boolean') {
               return (
-                <div key={param.id} className="catalog-param">
-                  <label className="property-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={value === true || value === 'true'}
-                      data-testid={testId}
-                      onChange={(e) => handleParamChange(param, e.target.checked)}
-                    />{' '}
-                    {param.label}
-                  </label>
-                  <div className="property-hint">{param.description}</div>
-                </div>
+                <Checkbox
+                  key={param.id}
+                  label={param.label}
+                  hint={param.description}
+                  checked={value === true || value === 'true'}
+                  data-testid={testId}
+                  onChange={(e) => handleParamChange(param, e.target.checked)}
+                />
+              );
+            }
+            if (param.type === 'select') {
+              return (
+                <Select
+                  key={param.id}
+                  label={param.label}
+                  required={param.required}
+                  hint={param.description}
+                  value={String(value)}
+                  data-testid={testId}
+                  onChange={(e) => handleParamChange(param, e.target.value)}
+                >
+                  {param.options?.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </Select>
+              );
+            }
+            if (param.type === 'number') {
+              return (
+                <NumberField
+                  key={param.id}
+                  label={param.label}
+                  required={param.required}
+                  hint={param.description}
+                  min={param.min}
+                  max={param.max}
+                  step={1}
+                  value={String(value ?? '')}
+                  data-testid={testId}
+                  onChange={(e) => handleParamChange(param, e.target.value)}
+                  onBlur={(e) => handleParamChange(param, coerceNumber(param, e.target.value))}
+                />
               );
             }
             return (
-              <div key={param.id} className="catalog-param">
-                <label className="property-label catalog-param-label">
-                  {param.label}
-                  {param.required ? ' (required)' : ''}:
-                </label>
-                {param.type === 'select' ? (
-                  <select
-                    className="property-input"
-                    value={String(value)}
-                    data-testid={testId}
-                    onChange={(e) => handleParamChange(param, e.target.value)}
-                  >
-                    {param.options?.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                ) : param.type === 'number' ? (
-                  <input
-                    type="number"
-                    className="property-input"
-                    min={param.min}
-                    max={param.max}
-                    step={1}
-                    value={String(value ?? '')}
-                    data-testid={testId}
-                    onChange={(e) => handleParamChange(param, e.target.value)}
-                    onBlur={(e) => handleParamChange(param, coerceNumber(param, e.target.value))}
-                  />
-                ) : (
-                  <input
-                    type="text"
-                    className="property-input"
-                    value={String(value ?? '')}
-                    data-testid={testId}
-                    placeholder={param.required ? 'Required' : undefined}
-                    onChange={(e) => handleParamChange(param, e.target.value)}
-                  />
-                )}
-                <div className="property-hint">{param.description}</div>
-              </div>
+              <TextField
+                key={param.id}
+                label={param.label}
+                required={param.required}
+                hint={param.description}
+                value={String(value ?? '')}
+                data-testid={testId}
+                placeholder={param.required ? 'Required' : undefined}
+                onChange={(e) => handleParamChange(param, e.target.value)}
+              />
             );
           })}
 
           {missingParams.length > 0 && !commandIsCustom && (
-            <div className="property-error" data-testid="catalog-missing">
-              ⚠ Fill in:{' '}
+            <Callout tone="warning" data-testid="catalog-missing">
+              Fill in:{' '}
               {missingParams
                 .map((id) => catalogTool.params.find((p) => p.id === id)?.label ?? id)
                 .join(', ')}
-            </div>
+            </Callout>
           )}
 
           {commandIsCustom && (
-            <div className="property-hint" data-testid="catalog-custom-note">
-              The command was edited by hand, so these options no longer change it.{' '}
-              <button
-                className="property-button property-button-secondary"
-                onClick={handleRegenerateCommand}
-                data-testid="catalog-regenerate"
-              >
-                Rebuild command from options
-              </button>
-            </div>
+            <Callout tone="info" data-testid="catalog-custom-note">
+              The command was edited by hand, so these options no longer change it.
+              <div>
+                <Button
+                  size="sm"
+                  onClick={handleRegenerateCommand}
+                  data-testid="catalog-regenerate"
+                >
+                  Rebuild command from options
+                </Button>
+              </div>
+            </Callout>
           )}
-        </div>
+        </Section>
       )}
 
-      <div className="property-group">
-        <label className="property-label">Command:</label>
-        <textarea
-          className="property-textarea"
+      <Section title="Command">
+        <TextArea
+          label="Command"
+          hideLabel
+          mono
+          rows={4}
           value={selectedNode.data.command || ''}
           data-testid="prop-command"
           onChange={(e) => handleCommandChange(e.target.value)}
           placeholder="Enter command to execute"
-          rows={4}
+          hint={
+            <>
+              Use <code>{'{input}'}</code> and <code>{'{output}'}</code> as placeholders.
+            </>
+          }
         />
-        <div className="property-hint">
-          Use {'{input}'} and {'{output}'} as placeholders
-        </div>
-      </div>
+      </Section>
 
-      {/* WILDCARDS FEATURE: File Selection */}
-      <div className="property-group">
-        <label className="property-label">Input Files:</label>
-        <button 
-          className="property-button" 
-          onClick={handleFileSelection}
-        >
-          📁 Select Files for Batch Processing...
-        </button>
-        
+      <Section title="Files">
+        <div className="field" role="group" aria-labelledby="prop-input-files-label">
+          <span className="field-label" id="prop-input-files-label">
+            Input files
+          </span>
+          <Button icon="folder" fullWidth onClick={handleFileSelection}>
+            Select files for batch processing
+          </Button>
+        </div>
+
         {nodeFiles && nodeFiles.length > 0 && (
           <>
             <div className="file-list">
               <div className="file-list-header">
-                ✓ Selected {nodeFiles.length} file(s):
+                <Icon name="check" size={12} />
+                Selected {nodeFiles.length} file(s)
               </div>
               {nodeFiles.slice(0, 5).map((file: string, i: number) => (
                 <div key={i} className="file-item">
+                  <Icon name="file" size={12} />
                   {file.split('/').pop()}
                 </div>
               ))}
               {nodeFiles.length > 5 && (
-                <div className="file-item file-item-more">
-                  ... and {nodeFiles.length - 5} more
-                </div>
+                <div className="file-item file-item-more">... and {nodeFiles.length - 5} more</div>
               )}
             </div>
-            
-            <div className="wildcard-info">
-              <div className="property-hint">
-                🔄 Pattern: <code>{generatePattern(nodeFiles, wildcardName)}</code>
-              </div>
-              <div className="property-hint">
-                ⚡ Will create {nodeFiles.length} step instance(s)
-              </div>
+
+            <Callout tone="info">
+              Pattern: <code>{generatePattern(nodeFiles, wildcardName)}</code>
+              <div>Will create {nodeFiles.length} step instance(s).</div>
+            </Callout>
+
+            <div className="property-actions">
+              <Button size="sm" onClick={handleClearFiles}>
+                Clear selected files
+              </Button>
             </div>
-            
-            <button 
-              className="property-button property-button-secondary" 
-              onClick={handleClearFiles}
-            >
-              Clear Selected Files
-            </button>
           </>
         )}
-      </div>
 
-      <div className="property-group">
-        <label className="property-label">Wildcard Name:</label>
-        <input
-          type="text"
-          className="property-input"
+        <TextField
+          label="Wildcard name"
           value={selectedNode.data.wildcardName ?? ''}
           data-testid="prop-wildcard-name"
           onChange={(e) => handleWildcardNameChange(e.target.value)}
           placeholder="sample"
           maxLength={MAX_WILDCARD_NAME_LENGTH}
+          error={wildcardNameProblem || undefined}
+          hint={
+            wildcardNameProblem ? undefined : (
+              <>
+                Write it as <code>{`{${wildcardName}}`}</code> in the input and output patterns; each
+                selected file fills it in. Leave empty for "sample".
+              </>
+            )
+          }
         />
-        {wildcardNameProblem ? (
-          <div className="property-error">⚠ {wildcardNameProblem}</div>
-        ) : (
-          <div className="property-hint">
-            Write it as <code>{`{${wildcardName}}`}</code> in the input and output patterns; each
-            selected file fills it in. Leave empty for "sample".
-          </div>
-        )}
-      </div>
 
-      <div className="property-group">
-        <label className="property-label">Input Pattern:</label>
-        <input
-          type="text"
-          className="property-input"
+        <TextField
+          label="Input pattern"
           value={selectedNode.data.input || ''}
           data-testid="prop-input"
           onChange={(e) => handleInputChange('input', e.target.value)}
           placeholder="e.g., {sample}.fastq or data/{sample}.txt"
+          hint={
+            hasWildcards(selectedNode.data.input || '')
+              ? 'Wildcard detected: this will process multiple files.'
+              : undefined
+          }
         />
-        {hasWildcards(selectedNode.data.input || '') && (
-          <div className="property-hint">
-            🎯 Wildcard detected - this will process multiple files
-          </div>
-        )}
-      </div>
 
-      <div className="property-group">
-        <label className="property-label">Output Pattern:</label>
-        <input
-          type="text"
-          className="property-input"
+        <TextField
+          label="Output pattern"
           value={selectedNode.data.output || ''}
           data-testid="prop-output"
           onChange={(e) => handleInputChange('output', e.target.value)}
           placeholder="e.g., output/{sample}.txt"
+          hint={
+            hasWildcards(selectedNode.data.output || '')
+              ? 'Output will be generated for each input file.'
+              : undefined
+          }
         />
-        {hasWildcards(selectedNode.data.output || '') && (
-          <div className="property-hint">
-            💾 Output will be generated for each input file
-          </div>
-        )}
-      </div>
+      </Section>
 
-      <div className="property-group">
-        <label className="property-label">Threads:</label>
-        <input
-          type="number"
+      <Section title="Run settings">
+        <NumberField
+          label="Threads"
           min={1}
           step={1}
-          className="property-input"
           value={selectedNode.data.threads ?? 1}
           data-testid="prop-threads"
           onChange={(e) => handleThreadsChange(e.target.value)}
           onBlur={(e) => handleThreadsChange(String(normalizeThreads(e.target.value)))}
+          hint="CPU threads this step requests from the scheduler."
         />
-        <div className="property-hint">
-          CPU threads this step requests from the scheduler.
-        </div>
-      </div>
 
-      <div className="property-group">
-        <label className="property-label">Retries:</label>
-        <input
-          type="number"
+        <NumberField
+          label="Retries"
           min={0}
           max={MAX_RETRIES}
           step={1}
-          className="property-input"
           value={selectedNode.data.retries ?? 0}
           data-testid="prop-retries"
           onChange={(e) => handleInputChange('retries', e.target.value)}
-          onBlur={(e) =>
-            handleInputChange('retries', String(normalizeRetries(e.target.value)))
-          }
+          onBlur={(e) => handleInputChange('retries', String(normalizeRetries(e.target.value)))}
+          hint="Extra attempts after a failure or timeout. 0 runs the step once."
         />
-        <div className="property-hint">
-          Extra attempts after a failure or timeout. 0 runs the step once.
-        </div>
-      </div>
 
-      {normalizeRetries(selectedNode.data.retries) > 0 && (
-        <>
-          <div className="property-group">
-            <label className="property-label">Retry Delay Mode:</label>
-            <select
-              className="property-input"
+        {normalizeRetries(selectedNode.data.retries) > 0 && (
+          <>
+            <Select
+              label="Retry delay mode"
               value={normalizeBackoff(selectedNode.data.retryBackoff)}
-          data-testid="prop-retry-backoff"
+              data-testid="prop-retry-backoff"
               onChange={(e) => handleInputChange('retryBackoff', e.target.value)}
             >
               <option value="fixed">Fixed</option>
               <option value="exponential">Exponential (doubles each retry)</option>
-            </select>
-          </div>
+            </Select>
 
-          <div className="property-group">
-            <label className="property-label">Retry Delay (seconds):</label>
-            <input
-              type="number"
+            <NumberField
+              label="Retry delay"
+              unit="seconds"
               min={0}
               max={MAX_RETRY_DELAY_SECS}
               step={1}
-              className="property-input"
               value={selectedNode.data.retryDelaySecs ?? DEFAULT_RETRY_DELAY_SECS}
-          data-testid="prop-retry-delay"
+              data-testid="prop-retry-delay"
               onChange={(e) => handleInputChange('retryDelaySecs', e.target.value)}
               onBlur={(e) =>
                 handleInputChange('retryDelaySecs', String(normalizeRetryDelay(e.target.value)))
               }
+              hint="Wait before the first retry; exponential mode doubles it each time."
             />
-            <div className="property-hint">
-              Wait before the first retry; exponential mode doubles it each time.
-            </div>
-          </div>
-        </>
-      )}
+          </>
+        )}
 
-      <div className="property-group">
-        <label className="property-label">Timeout (seconds):</label>
-        <input
-          type="number"
+        <NumberField
+          label="Timeout"
+          unit="seconds"
           min={1}
           step={1}
-          className="property-input"
           value={selectedNode.data.timeoutSecs ?? ''}
           data-testid="prop-timeout"
           onChange={(e) => handleInputChange('timeoutSecs', e.target.value)}
@@ -571,41 +543,28 @@ export function PropertiesPanel({
             handleInputChange('timeoutSecs', String(normalizeTimeout(e.target.value) ?? ''))
           }
           placeholder="No limit"
+          hint="Each attempt is killed if it runs longer than this. Leave empty for no limit."
         />
-        <div className="property-hint">
-          Each attempt is killed if it runs longer than this. Leave empty for no limit.
-        </div>
-      </div>
-      <div className="property-group">
-        <label className="property-checkbox">
-          <input
-            type="checkbox"
-            checked={isMocked}
-            data-testid="prop-mock"
-            onChange={(e) => handleInputChange('mock', e.target.checked)}
-          />{' '}
-          Mock (don't run the tool)
-        </label>
-        <div className="property-hint">
-          Creates the step's outputs instead of running it: empty files, and folders for
-          paths ending in /. Use it to try the rest of the workflow without the real tool.
-          Non-empty and line-count checks are skipped. A mocked step, and every step after
-          it, never counts as up to date, so a real run executes them.
-        </div>
-      </div>
+      </Section>
 
-      <div className="property-group">
-        <label className="property-label">Output Checks:</label>
-        <label className="property-checkbox">
-          <input
-            type="checkbox"
-            checked={checksOn(selectedNode.data.checkExists)}
+      <Section title="Testing">
+        <Checkbox
+          label="Mock (don't run the tool)"
+          checked={isMocked}
+          data-testid="prop-mock"
+          onChange={(e) => handleInputChange('mock', e.target.checked)}
+          hint="Creates the step's outputs instead of running it: empty files, and folders for paths ending in /. Use it to try the rest of the workflow without the real tool. Non-empty and line-count checks are skipped. A mocked step, and every step after it, never counts as up to date, so a real run executes them."
+        />
+      </Section>
+
+      <Section title="Output checks">
+        <Checkbox
+          label="Outputs must exist"
+          checked={checksOn(selectedNode.data.checkExists)}
           data-testid="prop-check-exists"
-            disabled={!hasOutput}
-            onChange={(e) => handleInputChange('checkExists', e.target.checked)}
-          />{' '}
-          Outputs must exist
-        </label>
+          disabled={!hasOutput}
+          onChange={(e) => handleInputChange('checkExists', e.target.checked)}
+        />
         {checksOn(selectedNode.data.checkExists) && (
           <CheckTargetSelect
             testId="prop-check-exists-target"
@@ -615,16 +574,13 @@ export function PropertiesPanel({
             onChange={(target) => handleInputChange('checkExistsTarget', target)}
           />
         )}
-        <label className="property-checkbox">
-          <input
-            type="checkbox"
-            checked={checksOn(selectedNode.data.checkNonEmpty)}
+        <Checkbox
+          label="Outputs must be non-empty"
+          checked={checksOn(selectedNode.data.checkNonEmpty)}
           data-testid="prop-check-non-empty"
-            disabled={!hasOutput}
-            onChange={(e) => handleInputChange('checkNonEmpty', e.target.checked)}
-          />{' '}
-          Outputs must be non-empty
-        </label>
+          disabled={!hasOutput}
+          onChange={(e) => handleInputChange('checkNonEmpty', e.target.checked)}
+        />
         {checksOn(selectedNode.data.checkNonEmpty) && (
           <CheckTargetSelect
             testId="prop-check-non-empty-target"
@@ -634,30 +590,26 @@ export function PropertiesPanel({
             onChange={(target) => handleInputChange('checkNonEmptyTarget', target)}
           />
         )}
-        <label className="property-checkbox">
-          <input
-            type="checkbox"
-            checked={checksOn(selectedNode.data.checkMinLinesEnabled)}
+        <Checkbox
+          label="At least N lines"
+          checked={checksOn(selectedNode.data.checkMinLinesEnabled)}
           data-testid="prop-check-min-lines-enabled"
-            disabled={!hasOutput}
-            onChange={(e) => handleInputChange('checkMinLinesEnabled', e.target.checked)}
-          />{' '}
-          At least N lines
-        </label>
+          disabled={!hasOutput}
+          onChange={(e) => handleInputChange('checkMinLinesEnabled', e.target.checked)}
+        />
         {checksOn(selectedNode.data.checkMinLinesEnabled) && (
-          <input
-            type="number"
+          <NumberField
+            label="Minimum lines"
             min={1}
             step={1}
-            className="property-input"
             value={selectedNode.data.checkMinLines ?? ''}
-          data-testid="prop-check-min-lines"
+            data-testid="prop-check-min-lines"
             disabled={!hasOutput}
             onChange={(e) => handleInputChange('checkMinLines', e.target.value)}
             onBlur={(e) =>
               handleInputChange('checkMinLines', String(normalizeMinLines(e.target.value) ?? ''))
             }
-            placeholder="Minimum lines, e.g. 10"
+            placeholder="e.g. 10"
           />
         )}
         {checksOn(selectedNode.data.checkMinLinesEnabled) && (
@@ -669,27 +621,25 @@ export function PropertiesPanel({
             onChange={(target) => handleInputChange('checkMinLinesTarget', target)}
           />
         )}
-        <label className="property-checkbox">
-          <input
-            type="checkbox"
-            checked={isBlocking(selectedNode.data.checkBlocking)}
+        <Checkbox
+          label="Blocking: stop here if a check fails"
+          checked={isBlocking(selectedNode.data.checkBlocking)}
           data-testid="prop-check-blocking"
-            disabled={!hasOutput}
-            onChange={(e) => handleInputChange('checkBlocking', e.target.checked)}
-          />{' '}
-          Blocking
-        </label>
+          disabled={!hasOutput}
+          onChange={(e) => handleInputChange('checkBlocking', e.target.checked)}
+        />
         {isMocked && (
-          <div className="property-hint" data-testid="mock-checks-note">
-            This step is mocked: non-empty and line-count checks are skipped, "must exist" still runs.
-          </div>
+          <Callout tone="warning" data-testid="mock-checks-note">
+            This step is mocked: non-empty and line-count checks are skipped, "must exist" still
+            runs.
+          </Callout>
         )}
-        <div className="property-hint">
+        <div className="field-hint">
           {hasOutput
             ? 'Run after the step succeeds. Each check can cover all outputs or just one. A failed blocking check fails the step and skips everything after it; the tool is not re-run. Unchecked "Blocking" only logs a warning.'
-            : 'Set an output file first; checks look at the step\'s outputs.'}
+            : "Set an output file first; checks look at the step's outputs."}
         </div>
-      </div>
-    </div>
+      </Section>
+    </Panel>
   );
 }

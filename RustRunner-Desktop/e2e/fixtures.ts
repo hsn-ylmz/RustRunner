@@ -191,6 +191,18 @@ export async function openStepStatus(page: Page): Promise<void> {
   await expect(page.getByTestId('tab-steps')).toHaveAttribute('aria-selected', 'true');
 }
 
+/**
+ * Hovers the Run button and returns the tooltip that opens beside it. The
+ * explanation of what Run will do lives there (and on keyboard focus), not in a
+ * title attribute that only a hovering mouse can reach.
+ */
+export async function showRunTooltip(page: Page) {
+  await page.getByTestId('run').hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toBeVisible();
+  return tip;
+}
+
 export const stepRow = (page: Page, id: string) =>
   page.locator(`[data-testid="step-row"][data-step-id="${id}"]`);
 

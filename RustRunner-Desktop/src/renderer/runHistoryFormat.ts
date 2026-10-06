@@ -1,6 +1,7 @@
 /** Wording for the run history list. Pure, so it can be unit-tested. */
 
 import type { RunHistoryEntry, RunHistoryStatus } from '../main/runHistory';
+import type { IconName } from './ui/Icon';
 
 /** "850 ms", "12.3 s", "4 min 07 s", "1 h 02 min". */
 export function formatDuration(secs: number): string {
@@ -21,11 +22,12 @@ export function formatStarted(entry: Pick<RunHistoryEntry, 'startedAt' | 'starte
   return new Date(entry.startedMs).toLocaleString();
 }
 
-export const STATUS_TEXT: Record<RunHistoryStatus, { glyph: string; label: string }> = {
-  succeeded: { glyph: '✓', label: 'Succeeded' },
-  failed: { glyph: '✕', label: 'Failed' },
-  stopped: { glyph: '■', label: 'Stopped' },
-  unknown: { glyph: '?', label: 'Unknown' },
+/** Icon and wording for each run outcome; the icon never stands alone. */
+export const STATUS_TEXT: Record<RunHistoryStatus, { icon: IconName; label: string }> = {
+  succeeded: { icon: 'check', label: 'Succeeded' },
+  failed: { icon: 'x', label: 'Failed' },
+  stopped: { icon: 'stop', label: 'Stopped' },
+  unknown: { icon: 'info', label: 'Unknown' },
 };
 
 /** "3 of 5 steps succeeded, 1 failed, 1 skipped": only the non-zero parts. */

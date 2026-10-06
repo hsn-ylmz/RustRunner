@@ -3,12 +3,12 @@
   "version": "2026.10.0",
   "fileTypes": ["fastq", "fasta", "sam", "bam", "bai", "vcf", "gtf", "tsv", "txt", "html", "zip"],
   "categories": {
-    "qc": { "label": "Quality control", "color": "#a8e6cf" },
-    "trimming": { "label": "Trimming", "color": "#f5efe9" },
-    "alignment": { "label": "Alignment", "color": "#88c5f7" },
-    "processing": { "label": "BAM processing", "color": "#d4a5f7" },
-    "variant_calling": { "label": "Variant calling", "color": "#f97316" },
-    "quantification": { "label": "Quantification", "color": "#eab308" }
+    "qc": { "label": "Quality control", "color": "mint" },
+    "trimming": { "label": "Trimming", "color": "sand" },
+    "alignment": { "label": "Alignment", "color": "sky" },
+    "processing": { "label": "BAM processing", "color": "lilac" },
+    "variant_calling": { "label": "Variant calling", "color": "peach" },
+    "quantification": { "label": "Quantification", "color": "lemon" }
   },
   "tools": [
     {

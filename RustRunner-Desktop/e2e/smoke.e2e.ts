@@ -11,6 +11,7 @@ import {
   openStepStatus,
   pidsMatching,
   selectNode,
+  showRunTooltip,
   stepRow,
 } from './fixtures';
 
@@ -213,7 +214,7 @@ test('a second Run skips every up-to-date step and Run from scratch runs them ag
   await expect(page.locator('.working-directory')).toBeVisible();
   // A directory with no saved state: Run is available and says nothing is saved.
   await expect(page.getByTestId('run')).toBeEnabled();
-  await expect(page.getByTestId('run')).toHaveAttribute('title', /No saved run/);
+  await expect(await showRunTooltip(page)).toContainText('No saved run');
 
   await page.getByTestId('run').click();
   await openStepStatus(page);
@@ -222,7 +223,7 @@ test('a second Run skips every up-to-date step and Run from scratch runs them ag
   await expect(page.getByTestId('run')).toBeEnabled();
 
   // The engine's state file now exists and the tooltip counts its steps.
-  await expect(page.getByTestId('run')).toHaveAttribute('title', /2 step/);
+  await expect(await showRunTooltip(page)).toContainText(/2 steps? already finished/);
 
   // Both outputs are current, so the second Run skips both steps.
   await page.getByTestId('run').click();
@@ -402,7 +403,7 @@ test('renaming the workflow keeps its saved run for Run', async ({ page }) => {
   await editDetails(page, { name: 'A completely different name' });
   await expect(page.getByTestId('workflow-title')).toContainText('A completely different name');
   await expect(page.getByTestId('run')).toBeEnabled();
-  await expect(page.getByTestId('run')).toHaveAttribute('title', /2 step/);
+  await expect(await showRunTooltip(page)).toContainText(/2 steps? already finished/);
 
   await page.getByTestId('run').click();
   await expect(page.getByTestId('run-from-scratch')).toBeEnabled();

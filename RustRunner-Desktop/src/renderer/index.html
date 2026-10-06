@@ -8,18 +8,15 @@
       content="<%= csp %>"
     />
     <title>RustRunner - Visual Workflow Editor</title>
+    <meta name="color-scheme" content="light dark" />
     <style>
-      /* Prevent flash of unstyled content */
+      /* Until the bundle loads and tokens.css applies, paint the system colour
+         for the OS theme so there is no white flash in dark mode. */
       body {
         margin: 0;
         padding: 0;
         overflow: hidden;
-        background: #f5f3f0;
-      }
-      @media (prefers-color-scheme: dark) {
-        body {
-          background: #1a1a2e;
-        }
+        background: Canvas;
       }
     </style>
   </head>

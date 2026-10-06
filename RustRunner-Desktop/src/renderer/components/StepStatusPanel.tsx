@@ -1,3 +1,4 @@
+import { Badge, Icon, type BadgeTone, type IconName } from '../ui';
 import {
   summarizeRows,
   type RunPhase,
@@ -5,14 +6,14 @@ import {
   type StepState,
 } from '../stepEvents';
 
-/** Human wording and glyph for each state, shared with the canvas badges. */
-const STATE_TEXT: Record<StepState, { glyph: string; label: string }> = {
-  pending: { glyph: '○', label: 'Pending' },
-  running: { glyph: '●', label: 'Running' },
-  retrying: { glyph: '↻', label: 'Retrying' },
-  succeeded: { glyph: '✓', label: 'Succeeded' },
-  failed: { glyph: '✕', label: 'Failed' },
-  skipped: { glyph: '⏭', label: 'Skipped' },
+/** Wording, icon and badge tone for each state, matching the canvas badges. */
+const STATE_TEXT: Record<StepState, { icon: IconName; tone: BadgeTone; label: string }> = {
+  pending: { icon: 'circle', tone: 'neutral', label: 'Pending' },
+  running: { icon: 'dot', tone: 'accent', label: 'Running' },
+  retrying: { icon: 'retry', tone: 'warning', label: 'Retrying' },
+  succeeded: { icon: 'check', tone: 'success', label: 'Succeeded' },
+  failed: { icon: 'x', tone: 'danger', label: 'Failed' },
+  skipped: { icon: 'skip', tone: 'neutral', label: 'Skipped' },
 };
 
 const SUMMARY_ORDER: StepState[] = [
@@ -49,9 +50,14 @@ export function StepStatusPanel({
     <div className="step-status" data-testid="step-status">
       <div className="step-status-summary">
         {SUMMARY_ORDER.filter((state) => counts[state] > 0).map((state) => (
-          <span key={state} className={`step-chip step-state-${state}`}>
-            {STATE_TEXT[state].glyph} {counts[state]} {STATE_TEXT[state].label.toLowerCase()}
-          </span>
+          <Badge
+            key={state}
+            tone={STATE_TEXT[state].tone}
+            icon={STATE_TEXT[state].icon}
+            className={`step-chip step-state-${state}`}
+          >
+            {counts[state]} {STATE_TEXT[state].label.toLowerCase()}
+          </Badge>
         ))}
       </div>
 
@@ -73,12 +79,17 @@ export function StepStatusPanel({
               data-state={row.state}
             >
               <td className="step-row-state">
-                <span className="step-glyph">{STATE_TEXT[row.state].glyph}</span>{' '}
+                <Icon name={STATE_TEXT[row.state].icon} size={14} className="step-glyph" />{' '}
                 {STATE_TEXT[row.state].label}
                 {row.mocked && row.state === 'succeeded' && (
-                  <span className="mock-tag" data-testid="step-mocked">
+                  <Badge
+                    tone="warning"
+                    variant="dashed"
+                    className="mock-tag"
+                    data-testid="step-mocked"
+                  >
                     MOCKED
-                  </span>
+                  </Badge>
                 )}
               </td>
               <td title={row.label}>{row.id}</td>

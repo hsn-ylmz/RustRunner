@@ -1,4 +1,5 @@
 import type { RunHistoryEntry } from '../../main/runHistory';
+import { Button, Icon } from '../ui';
 import { STATUS_TEXT, formatCounts, formatDuration, formatStarted } from '../runHistoryFormat';
 
 /**
@@ -53,20 +54,20 @@ export function RunHistoryPanel({
               data-status={run.status}
             >
               <td className="step-row-state">
-                <span className="step-glyph">{STATUS_TEXT[run.status].glyph}</span>{' '}
+                <Icon name={STATUS_TEXT[run.status].icon} size={14} className="step-glyph" />{' '}
                 {STATUS_TEXT[run.status].label}
               </td>
               <td>{formatStarted(run)}</td>
               <td>{formatDuration(run.durationSecs)}</td>
               <td>{formatCounts(run)}</td>
               <td>
-                <button
-                  className="panel-button"
+                <Button
+                  size="sm"
                   data-testid="open-report"
                   onClick={() => onOpenReport(run.report)}
                 >
                   Open report
-                </button>
+                </Button>
               </td>
             </tr>
           ))}

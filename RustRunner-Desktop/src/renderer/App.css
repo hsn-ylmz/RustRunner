@@ -1,1166 +1,372 @@
 /* =============================================================================
-   RustRunner Desktop - Main Stylesheet
-   v1.1.0 - With Wildcards Support
+   RustRunner Desktop: application layout and app-specific components.
+
+   Colours, sizes, spacing, radii, shadows and motion come from
+   styles/tokens.css (see the ui-ux skill); the generic controls live in
+   ui/ui.css. Nothing here may contain a raw colour value.
    ============================================================================= */
-
-:root {
-  /* Canvas/Background */
-  --canvas-background: #f5f3f0;
-  --canvas-grid: #7e7e7e78;
-
-  /* Primary Colors */
-  --green-light: #7dd663;
-  --green-dark: #5cb33d;
-  --blue-light: #63a7dd;
-  --blue-dark: #3d84b3;
-  --red-light: #dd637d;
-  --red-dark: #b33d5c;
-
-  /* Neutral */
-  --gray-light: #c4c4c4;
-  --gray-dark: #8a8a8a;
-
-  /* Panel */
-  --panel-background: #2c3e50;
-  --panel-text: #ecf0f1;
-}
 
 /* =============================================================================
    Layout
    ============================================================================= */
 
 .workflow-editor {
-  height: 100vh;
-  width: 100vw;
   display: flex;
   flex-direction: column;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
-    Ubuntu, Cantarell, sans-serif;
+  width: 100vw;
+  height: 100vh;
+  color: var(--text);
+  background-color: var(--bg);
+  font-family: var(--font-sans);
 }
 
 .main-content {
-  flex: 1;
   display: flex;
+  flex: 1;
   flex-direction: row;
   min-height: 0;
   overflow: hidden;
 }
 
 .flow-container {
-  flex: 1;
   position: relative;
+  flex: 1;
   min-height: 0;
 }
 
 /* =============================================================================
-   Top Toolbar
+   Top toolbar
    ============================================================================= */
 
 .top-toolbar {
   position: absolute;
-  top: 10px;
-  left: 10px;
-  right: 10px;
+  top: var(--space-2);
+  right: var(--space-2);
+  left: var(--space-2);
   z-index: 10;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 16px;
-  background: rgba(255, 255, 255, 0.95);
-  padding: 12px 16px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
 }
 
 .workflow-info {
   display: flex;
   flex-direction: column;
-  min-width: 180px;
+  gap: var(--space-half);
+  min-width: 0;
+  max-width: 240px;
 }
 
 .workflow-title {
-  font-size: 16px;
-  font-weight: bold;
-  color: #333;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
 }
 
-/* Unsaved-changes dot next to the workflow name. */
-.dirty-marker {
-  margin-left: 6px;
-  color: var(--red-dark);
-  font-size: 18px;
-  line-height: 1;
-  vertical-align: middle;
+.workflow-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .working-directory {
-  font-size: 11px;
-  color: #666;
-  font-family: monospace;
-  margin-top: 2px;
-  white-space: nowrap;
+  max-width: 100%;
   overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
   text-overflow: ellipsis;
-  max-width: 200px;
+  white-space: nowrap;
 }
 
 .file-buttons,
 .edit-buttons {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: var(--space-1);
 }
 
-.toolbar-button {
-  padding: 8px 16px;
-  background: white;
-  color: #333;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.2s ease;
+.file-buttons {
+  gap: 0;
 }
 
-.toolbar-button:hover {
-  background: #f5f5f5;
-  border-color: #bbb;
-  transform: translateY(-1px);
+.file-buttons .btn {
+  padding: 0 var(--space-2);
 }
 
-.toolbar-button:active {
-  transform: translateY(0);
-}
-
-.add-button {
-  background: var(--green-light);
-  color: white;
-  border-color: var(--green-dark);
-}
-
-.add-button:hover {
-  background: var(--green-dark);
-}
-
-.delete-button {
-  background: var(--red-light);
-  color: white;
-  border-color: var(--red-dark);
-}
-
-.delete-button:hover {
-  background: var(--red-dark);
+.edit-buttons {
+  margin-left: auto;
 }
 
 /* =============================================================================
-   Execution Controls
+   Run controls
    ============================================================================= */
 
 .execution-controls {
   position: absolute;
-  top: 80px;
-  left: 10px;
+  top: 72px;
+  left: var(--space-2);
   z-index: 10;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-2);
+  width: 148px;
 }
 
-/* Live "N / M steps" counter under the execution buttons. */
+/* Live "N / M steps" counter under the run buttons. */
 .execution-progress {
-  padding: 6px 10px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.65);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
   text-align: center;
+  color: var(--text);
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
 }
 
-.execution-button {
-  padding: 14px 28px;
-  font-size: 16px;
-  font-weight: bold;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  min-width: 140px;
-}
-
-.execution-button:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
-}
-
-.execution-button:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.execution-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.run-button {
-  background: var(--green-light);
-  color: white;
-}
-
-.run-button:hover:not(:disabled) {
-  background: var(--green-dark);
-}
-
-.run-button.active {
-  background: var(--green-dark);
-  animation: pulse 2s infinite;
-}
-
-.pause-button {
-  background: var(--red-light);
-  color: white;
-}
-
-.pause-button:hover:not(:disabled) {
-  background: var(--red-dark);
-}
-
-.pause-button.active {
-  background: var(--red-dark);
-}
-
-.dry-run-button {
-  background: var(--blue-light);
-  color: white;
-}
-
-.dry-run-button:hover:not(:disabled) {
-  background: var(--blue-dark);
-}
-
-/* Run from scratch: outlined so the plain "Run" stays the primary action. */
-.resume-button {
-  background: var(--panel-background);
-  color: var(--panel-text);
-}
-
-.resume-button:hover:not(:disabled) {
-  background: #1f2d3a;
-}
-
-/* Stop: neutral dark so it reads as distinct from the red Pause button. */
-.stop-button {
-  background: #4a4a52;
-  color: white;
-}
-
-.stop-button:hover:not(:disabled) {
-  background: #33333a;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    box-shadow: 0 4px 12px rgba(125, 214, 99, 0.3);
-  }
-  50% {
-    box-shadow: 0 4px 20px rgba(125, 214, 99, 0.6);
-  }
+.mock-warning {
+  align-self: flex-start;
 }
 
 /* =============================================================================
-   Custom Node
+   React Flow: the library's variables pointed at our tokens, so the minimap,
+   zoom controls, attribution and handles follow the theme.
+   ============================================================================= */
+
+.react-flow {
+  --xy-background-color: var(--bg);
+  --xy-edge-stroke: var(--edge-default);
+  --xy-edge-stroke-selected: var(--accent);
+  --xy-connectionline-stroke: var(--edge-default);
+  --xy-handle-background-color: var(--surface);
+  --xy-handle-border-color: var(--edge-default);
+  --xy-minimap-background-color: var(--surface);
+  --xy-minimap-mask-background-color: var(--active-bg);
+  --xy-minimap-node-background-color: var(--node-border);
+  --xy-controls-button-background-color: var(--surface);
+  --xy-controls-button-background-color-hover: var(--surface-muted);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-color-hover: var(--text);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: var(--shadow-sm);
+  --xy-attribution-background-color: var(--surface);
+}
+
+.react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+
+.react-flow__attribution a {
+  color: var(--text-muted);
+}
+
+/* Connection points are small by default; a bigger target is easier to hit. */
+.react-flow__handle {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+}
+
+.react-flow__node:focus-visible,
+.react-flow__edge:focus-visible .react-flow__edge-path {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* =============================================================================
+   Custom node
    ============================================================================= */
 
 .custom-node {
-  padding: 12px 16px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  min-width: 120px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  cursor: pointer;
   position: relative;
-  transition: all 0.2s ease-in-out;
+  min-width: 120px;
+  padding: var(--space-3) var(--space-4);
+  color: var(--node-text);
+  cursor: pointer;
+  border: 2px solid var(--node-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
 }
 
+/* Selection is an outline outside the border, so it never fights the status
+   colour of the border itself. */
 .custom-node.selected {
-  border: 2px solid #3b82f6;
-  box-shadow: 0 8px 25px rgba(59, 130, 246, 0.15), 0 3px 10px rgba(59, 130, 246, 0.1);
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: 3px;
 }
 
 .node-label {
+  margin-bottom: var(--space-1);
+  font-weight: var(--weight-semibold);
   text-align: center;
-  font-weight: bold;
-  margin-bottom: 4px;
-  color: #333;
 }
 
 .node-tool {
+  font-size: var(--text-xs);
   text-align: center;
-  font-size: 12px;
-  color: #666;
+  color: var(--node-text-muted);
 }
 
-/* -----------------------------------------------------------------------------
-   Live execution status
-   Applied from engine log events while a workflow runs. `pending` is the
-   pre-run state; `idle` (no run yet) carries no styling at all.
-   -------------------------------------------------------------------------- */
+.node-progress {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--node-text-muted);
+}
 
+/* Live execution status, applied from engine events while a workflow runs.
+   `idle` (no run yet) carries no styling. The border colour, the badge glyph
+   and the status panel say the same thing, so colour is never alone. */
 .custom-node.node-state-pending {
-  opacity: 0.55;
+  border-style: dotted;
+  border-color: var(--status-pending);
 }
 
 .custom-node.node-state-running {
-  border-color: var(--blue-dark);
-  box-shadow: 0 0 0 3px rgba(61, 132, 179, 0.35);
-  animation: pulse 1.4s ease-in-out infinite;
+  border-color: var(--status-running);
+  animation: node-pulse 1.4s ease-in-out infinite;
 }
 
 .custom-node.node-state-succeeded {
-  border-color: var(--green-dark);
+  border-color: var(--status-succeeded);
 }
 
 .custom-node.node-state-retrying {
-  border-color: #d98a00;
-  box-shadow: 0 0 0 3px rgba(217, 138, 0, 0.35);
+  border-color: var(--status-retrying);
 }
 
 .custom-node.node-state-skipped {
   border-style: dashed;
-  opacity: 0.7;
+  border-color: var(--status-skipped);
 }
 
 .custom-node.node-state-failed {
-  border-color: var(--red-dark);
-  box-shadow: 0 0 0 3px rgba(179, 61, 92, 0.3);
+  border-color: var(--status-failed);
+}
+
+@keyframes node-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 var(--status-running);
+  }
+  50% {
+    box-shadow: 0 0 0 4px var(--status-running);
+  }
+}
+
+.node-status-badge,
+.node-invalid-badge {
+  position: absolute;
+  top: calc(var(--space-2) * -1 - 2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--text-inverse);
+  border: 2px solid var(--bg);
+  border-radius: 50%;
 }
 
 .node-status-badge {
-  position: absolute;
-  top: -8px;
-  right: -8px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  line-height: 1;
-  color: white;
-  border: 2px solid white;
+  right: calc(var(--space-2) * -1 - 2px);
 }
 
 .node-status-running {
-  background: var(--blue-dark);
+  background-color: var(--status-running-solid);
 }
 
 .node-status-succeeded {
-  background: var(--green-dark);
+  background-color: var(--status-succeeded-solid);
 }
 
 .node-status-retrying {
-  background: #d98a00;
+  background-color: var(--status-retrying-solid);
 }
 
 .node-status-skipped {
-  background: var(--gray-dark);
+  background-color: var(--status-skipped-solid);
 }
 
 .node-status-failed {
-  background: var(--red-dark);
+  background-color: var(--status-failed-solid);
 }
 
-.node-progress {
-  text-align: center;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: #555;
-  margin-top: 4px;
-}
-
-/* Invalid step id (duplicate or empty after slugification). */
+/* Invalid step (duplicate or empty id). */
 .custom-node.node-invalid {
-  border-color: #e0a800;
   border-style: dashed;
+  border-color: var(--warning);
 }
 
 .node-invalid-badge {
-  position: absolute;
-  top: -8px;
-  left: -8px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
+  left: calc(var(--space-2) * -1 - 2px);
+  background-color: var(--warning-solid);
+}
+
+.node-mock-badge,
+.node-mocked-run {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  font-weight: bold;
-  line-height: 1;
-  color: #4a3800;
-  background: #ffc107;
-  border: 2px solid white;
-  cursor: help;
+  width: fit-content;
+  margin: 0 auto var(--space-half);
 }
 
-/* Reduced-motion users get the ring without the pulse. */
-@media (prefers-reduced-motion: reduce) {
-  .custom-node.node-state-running {
-    animation: none;
-  }
-}
-
-/* Color Picker */
+/* Colour choices above a selected node. */
 .color-picker-toolbar {
   display: flex;
-  gap: 4px;
-  border-radius: 8px;
-  border: 1px solid #e5e5e5;
-  background-color: white;
-  padding: 8px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  gap: var(--space-1);
+  padding: var(--space-2);
+  background-color: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
 }
 
 .color-button {
-  height: 24px;
   width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 2px solid var(--border-strong);
   border-radius: 50%;
-  border: 2px solid transparent;
-  cursor: pointer;
-  transition: transform 0.15s ease;
-}
-
-.color-button:hover {
-  transform: scale(1.1);
 }
 
 .color-button.selected {
-  border-color: #000;
+  border-color: var(--text);
+  box-shadow:
+    0 0 0 2px var(--elevated),
+    0 0 0 4px var(--text);
 }
 
 /* =============================================================================
-   Properties Panel
+   Typed edges: the file-type check
    ============================================================================= */
 
-.properties-panel {
-  width: 300px;
-  height: 100%;
-  background: #f5f5f5;
-  border-left: 1px solid #ddd;
-  padding: 20px;
-  box-sizing: border-box;
-  overflow-y: auto;
-}
-
-.properties-panel h3 {
-  margin-top: 0;
-  margin-bottom: 20px;
-  color: #333;
-  font-size: 18px;
-}
-
-.no-selection {
-  color: #666;
-  font-style: italic;
-}
-
-.property-group {
-  margin-bottom: 15px;
-}
-
-.property-label {
-  display: block;
-  margin-bottom: 5px;
-  font-weight: bold;
-  color: #333;
-  font-size: 14px;
-}
-
-.property-input {
-  width: 100%;
-  padding: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 14px;
-  transition: border-color 0.2s ease;
-  box-sizing: border-box;
-}
-
-.property-input:focus {
-  outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
-
-.property-textarea {
-  width: 100%;
-  padding: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  resize: vertical;
-  font-size: 14px;
-  font-family: monospace;
-  transition: border-color 0.2s ease;
-  box-sizing: border-box;
-}
-
-.property-textarea:focus {
-  outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
-
-.property-checkbox {
-  display: block;
-  margin: 4px 0;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.property-hint {
-  margin-top: 4px;
-  font-size: 12px;
-  color: #666;
-  font-style: italic;
-  font-family: monospace;
-}
-
-/* Validation message under a property field (e.g. duplicate step id). */
-.property-error {
-  margin-top: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #b33d5c;
-}
-
-/* =============================================================================
-   Wildcard File Selection (NEW)
-   ============================================================================= */
-
-.property-button {
-  width: 100%;
-  padding: 10px 12px;
-  background: var(--blue-light);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  margin-top: 5px;
-  transition: all 0.2s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.property-button:hover {
-  background: var(--blue-dark);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(99, 167, 221, 0.3);
-}
-
-.property-button:active {
-  transform: translateY(0);
-}
-
-.file-list {
-  max-height: 150px;
-  overflow-y: auto;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  padding: 8px;
-  margin-top: 8px;
-  background: #f9f9f9;
-}
-
-.file-list-header {
-  font-weight: bold;
-  margin-bottom: 6px;
-  color: #555;
-  font-size: 12px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-.file-item {
-  padding: 4px 8px;
-  font-family: monospace;
-  font-size: 12px;
-  color: #333;
-  margin: 2px 0;
-  border-radius: 3px;
-  transition: background 0.15s ease;
-}
-
-.file-item:hover {
-  background: #e8f4fd;
-}
-
-.file-item::before {
-  content: "📄 ";
-  margin-right: 6px;
-}
-
-.file-item-more {
-  font-style: italic;
-  color: #666;
-}
-
-.file-item-more::before {
-  content: "⋯ ";
-}
-
-.wildcard-pattern {
-  background: #e8f4fd;
-  padding: 6px 8px;
-  border-radius: 4px;
-  border-left: 3px solid var(--blue-light);
-  font-family: monospace;
-  font-style: normal;
-  color: #0277bd;
-  margin-top: 8px;
-}
-
-.wildcard-pattern code {
-  background: white;
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-weight: bold;
-  color: var(--blue-dark);
-}
-
-/* Scrollbar for file list */
-.file-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.file-list::-webkit-scrollbar-track {
-  background: #f1f1f1;
-  border-radius: 3px;
-}
-
-.file-list::-webkit-scrollbar-thumb {
-  background: #bbb;
-  border-radius: 3px;
-}
-
-.file-list::-webkit-scrollbar-thumb:hover {
-  background: #999;
-}
-
-/* =============================================================================
-   Execution Panel
-   ============================================================================= */
-
-.execution-panel {
-  position: relative;
-  background: #f9f9f9;
-  border-top: 2px solid #ddd;
-  display: flex;
-  flex-direction: column;
-  transition: all 0.3s ease;
-}
-
-.execution-panel.visible {
-  height: 220px;
-}
-
-.execution-panel.hidden {
-  height: 45px;
-}
-
-.execution-panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 15px;
-  background: #f0f0f0;
-  border-bottom: 1px solid #ddd;
-}
-
-.execution-panel-header h3 {
-  margin: 0;
-  font-size: 16px;
-  color: #333;
-}
-
-/* Logs / Step Status tabs in the execution panel header. */
-.execution-tabs {
-  display: flex;
-  gap: 4px;
-}
-
-.execution-tab {
-  padding: 4px 12px;
-  background: transparent;
-  color: #555;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.execution-tab.active {
-  color: #333;
-  border-bottom-color: var(--blue-dark);
-}
-
-/* Step Status panel */
-.step-status-empty {
-  padding: 12px;
-  color: #666;
-  font-style: italic;
-}
-
-.step-status-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 4px 10px;
-}
-
-.step-chip {
-  padding: 2px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  background: rgba(0, 0, 0, 0.07);
-}
-
-.step-status-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-
-.step-status-table th {
-  text-align: left;
-  padding: 4px 8px;
-  font-weight: 600;
-  opacity: 0.7;
-}
-
-.step-status-table td {
-  padding: 4px 8px;
-  border-top: 1px solid rgba(128, 128, 128, 0.25);
-  vertical-align: top;
-}
-
-.step-row-state {
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.step-row-details {
-  opacity: 0.8;
-}
-
-.step-state-running .step-glyph,
-.step-chip.step-state-running {
-  color: var(--blue-dark);
-}
-
-.step-state-retrying .step-glyph,
-.step-chip.step-state-retrying {
-  color: #d98a00;
-}
-
-.step-state-succeeded .step-glyph,
-.step-chip.step-state-succeeded {
-  color: var(--green-dark);
-}
-
-.step-state-failed .step-glyph,
-.step-chip.step-state-failed {
-  color: var(--red-dark);
-}
-
-.history-succeeded .step-glyph {
-  color: var(--green-dark);
-}
-
-.history-failed .step-glyph {
-  color: var(--red-dark);
-}
-
-.history-stopped .step-glyph {
-  color: #d98a00;
-}
-
-.step-state-pending,
-.step-state-skipped {
-  opacity: 0.75;
-}
-
-.execution-panel-controls {
-  display: flex;
-  gap: 8px;
-}
-
-.panel-button {
-  padding: 6px 12px;
-  background: white;
-  color: #333;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  transition: all 0.2s ease;
-}
-
-.panel-button:hover {
-  background: #e5e5e5;
-  border-color: #999;
-}
-
-.execution-panel-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 10px;
-  background: #fff;
-  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.log-entry {
-  padding: 4px 8px;
-  margin: 2px 0;
-  border-radius: 3px;
-  color: #333;
-}
-
-.log-entry.error {
-  background: #fee;
-  color: #c00;
-  border-left: 3px solid #c00;
-}
-
-.log-entry.success {
-  background: #efe;
-  color: #060;
-  border-left: 3px solid #060;
-}
-
-.log-entry.warning {
-  background: #fff3cd;
-  color: #856404;
-  border-left: 3px solid #ffc107;
-}
-
-.log-entry.info {
-  background: #e3f2fd;
-  color: #0277bd;
-  border-left: 3px solid #2196f3;
-}
-
-/* Scrollbar */
-.execution-panel-content::-webkit-scrollbar {
-  width: 8px;
-}
-
-.execution-panel-content::-webkit-scrollbar-track {
-  background: #f1f1f1;
-}
-
-.execution-panel-content::-webkit-scrollbar-thumb {
-  background: #888;
-  border-radius: 4px;
-}
-
-.execution-panel-content::-webkit-scrollbar-thumb:hover {
-  background: #555;
-}
-
-/* =============================================================================
-   Dialog
-   ============================================================================= */
-
-.dialog-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.dialog-box {
-  background: white;
-  padding: 30px;
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  min-width: 400px;
-  max-width: 500px;
-}
-
-.dialog-box h3 {
-  margin-top: 0;
-  margin-bottom: 20px;
-  color: #333;
-  font-size: 20px;
-}
-
-.dialog-box label {
-  display: block;
-  margin-bottom: 20px;
-  color: #333;
-  font-weight: bold;
-}
-
-.dialog-input {
-  display: block;
-  width: 100%;
-  margin-top: 8px;
-  padding: 10px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  font-size: 16px;
-  box-sizing: border-box;
-}
-
-.dialog-input:focus {
-  outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
-
-.dialog-box label.dialog-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 4px;
-  cursor: pointer;
-}
-
-.dialog-hint {
-  font-size: 13px;
-  color: #666;
-  margin: 10px 0;
-  font-style: italic;
-}
-
-.dialog-buttons {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-}
-
-.dialog-button {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 4px;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.dialog-button.cancel {
-  background: #e5e5e5;
-  color: #333;
-}
-
-.dialog-button.cancel:hover {
-  background: #d5d5d5;
-}
-
-.dialog-button.confirm {
-  background: var(--green-light);
-  color: white;
-}
-
-.dialog-button.confirm:hover {
-  background: var(--green-dark);
-}
-
-/* =============================================================================
-   Responsive
-   ============================================================================= */
-
-@media (max-width: 900px) {
-  .main-content {
-    flex-direction: column;
-  }
-
-  .properties-panel {
-    width: 100%;
-    height: 250px;
-    border-left: none;
-    border-top: 1px solid #ddd;
-  }
-
-  .top-toolbar {
-    flex-wrap: wrap;
-  }
-
-  .execution-controls {
-    flex-direction: row;
-    top: auto;
-    bottom: 280px;
-    left: 50%;
-    transform: translateX(-50%);
-  }
-
-  .execution-button {
-    padding: 10px 20px;
-    font-size: 14px;
-    min-width: 100px;
-  }
-}
-
-/* =============================================================================
-   Tool catalog: palette, parameter form and typed edges
-   ============================================================================= */
-
-.tool-palette {
-  position: absolute;
-  top: 80px;
-  left: 150px;
-  z-index: 20;
-  width: 340px;
-  max-height: calc(100% - 170px);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.98);
-  color: #333;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-}
-
-.tool-palette-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.tool-palette-header h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.tool-palette-close {
-  border: none;
-  background: none;
-  font-size: 22px;
-  line-height: 1;
-  cursor: pointer;
-  color: inherit;
-}
-
-.tool-palette-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.tool-palette-item {
-  display: flex;
-  gap: 10px;
-  padding: 8px;
-  text-align: left;
-  background: #fafafa;
-  color: inherit;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  cursor: pointer;
-  font: inherit;
-}
-
-.tool-palette-item:hover,
-.tool-palette-item:focus-visible {
-  border-color: var(--blue-dark);
-  background: #f0f6fb;
-}
-
-.tool-palette-swatch {
-  flex: none;
-  width: 6px;
-  border-radius: 3px;
-}
-
-.tool-palette-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.tool-palette-name {
-  font-weight: 600;
-  font-size: 14px;
-}
-
-.tool-palette-category {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #666;
-}
-
-.tool-palette-description {
-  font-size: 12px;
-  color: #444;
-}
-
-.tool-palette-types {
-  font-size: 11px;
-  font-family: monospace;
-  color: #666;
-}
-
-.tool-palette-empty,
-.tool-palette-footer {
-  font-size: 12px;
-  color: #666;
-}
-
-.catalog-section {
-  padding: 8px;
-  border: 1px solid #ddd;
-  border-radius: 6px;
-}
-
-.catalog-param {
-  margin-top: 10px;
-}
-
-.catalog-param-label {
-  font-weight: 500;
-  font-size: 13px;
-}
-
-/* Edge colours for the file-type check. Orange and green differ in lightness
-   as well as hue, and the tooltip spells the result out. */
 .typed-edge-match .react-flow__edge-path {
-  stroke: #1f9d55;
+  stroke: var(--edge-match);
   stroke-width: 3;
 }
 
 .typed-edge-mismatch .react-flow__edge-path {
-  stroke: #e8590c;
+  stroke: var(--edge-mismatch);
   stroke-width: 3;
 }
 
-/* Colour is not the only signal. A matching edge is solid; a mismatched one is
-   dashed (a long, still dash) and carries a "types differ" label. React Flow's
-   own animated dashes would make every edge look dashed, so they are turned off
-   for both typed verdicts. */
+/* Colour is not the only signal: a matching edge is solid, a mismatched one is
+   dashed, and each carries a label. React Flow's own animated dashes would make
+   every edge look dashed, so they are off for both typed verdicts. */
 .react-flow__edge.animated .typed-edge-match .react-flow__edge-path {
   stroke-dasharray: none;
   animation: none;
@@ -1176,487 +382,494 @@
 }
 
 .typed-edge-label text {
-  font-size: 11px;
-  font-weight: 600;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
 
 .typed-edge-label-mismatch rect {
-  fill: #fff4e6;
-  stroke: #e8590c;
+  fill: var(--edge-mismatch-subtle);
+  stroke: var(--edge-mismatch);
   stroke-width: 1.5;
 }
 
 .typed-edge-label-mismatch text {
-  fill: #9a3d05;
+  fill: var(--edge-mismatch-text);
+}
+
+.typed-edge-label-mismatch .edge-label-icon {
+  fill: none;
+  stroke: var(--edge-mismatch-text);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .typed-edge-label-match circle {
-  fill: #e6f6ec;
-  stroke: #1f9d55;
+  fill: var(--edge-match-subtle);
+  stroke: var(--edge-match);
   stroke-width: 1.5;
 }
 
 .typed-edge-label-match text {
-  fill: #147a40;
+  fill: var(--edge-match-text);
 }
 
-/* Mocked steps: a tag on the node, a tag in the status panel and a badge by
-   the run buttons. Always text, never colour alone. */
-.node-mock-badge,
-.node-mocked-run {
-  display: inline-block;
-  margin-bottom: 2px;
-  padding: 0 6px;
-  border: 1px dashed currentColor;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  background: #fff8e1;
-  color: #8a5a00;
+/* =============================================================================
+   Properties panel
+   ============================================================================= */
+
+.properties-panel {
+  flex: none;
+  width: 320px;
+  height: 100%;
+  border-left: 1px solid var(--border);
 }
 
-.mock-tag {
-  margin-left: 6px;
-  padding: 0 5px;
-  border: 1px dashed #b7791f;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  color: #8a5a00;
-  background: #fff8e1;
+.no-selection {
+  margin: 0;
+  color: var(--text-muted);
 }
 
-.mock-warning {
-  display: inline-block;
-  padding: 3px 10px;
-  border: 1px solid #b7791f;
-  border-radius: 6px;
-  background: #fff8e1;
-  color: #8a5a00;
-  font-size: 12px;
-  font-weight: 600;
+.property-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .check-target {
-  margin: 2px 0 6px 22px;
+  margin: 0 0 var(--space-1) var(--space-5);
 }
 
-.check-target-select {
-  font-size: 12px;
+.check-target .control {
+  font-size: var(--text-sm);
+}
+
+.file-list {
+  max-height: 150px;
+  padding: var(--space-2);
+  overflow-y: auto;
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.file-list-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-bottom: var(--space-1);
+  padding-bottom: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--success);
+  border-bottom: 1px solid var(--border);
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-half) var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
+.file-item .icon {
+  color: var(--text-muted);
+}
+
+.file-item-more {
+  color: var(--text-muted);
 }
 
 /* =============================================================================
-   Dark Mode
+   Execution panel
    ============================================================================= */
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas-background: #1a1a2e;
-    --canvas-grid: #ffffff20;
-  }
+.execution-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+  background-color: var(--surface-muted);
+  border-top: 1px solid var(--border-strong);
+  transition: height var(--duration-slow) var(--ease-standard);
+}
 
-  .properties-panel {
-    background: var(--panel-background);
-    border-left-color: #1a1a2e;
-  }
+.execution-panel.visible {
+  height: 240px;
+}
 
-  .properties-panel h3,
-  .property-label {
-    color: var(--panel-text);
-  }
+.execution-panel.hidden {
+  height: 45px;
+}
 
-  .property-input,
-  .property-textarea {
-    background: #34495e;
-    border-color: #34495e;
-    color: var(--panel-text);
-  }
+.execution-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  background-color: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
 
-  .property-input:focus,
-  .property-textarea:focus {
-    border-color: var(--blue-light);
-  }
+.execution-panel-header h3 {
+  margin: 0;
+  padding: var(--space-3) 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
 
-  .no-selection,
-  .property-hint {
-    color: var(--gray-light);
-  }
+.execution-tabs {
+  display: flex;
+  gap: var(--space-1);
+}
 
-  .top-toolbar {
-    background: rgba(44, 62, 80, 0.95);
-  }
+.execution-tab {
+  padding: var(--space-3) var(--space-3) calc(var(--space-3) - 2px);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  transition: color var(--duration-fast) var(--ease-standard);
+}
 
-  .tool-palette {
-    background: var(--panel-background);
-    color: var(--panel-text);
-  }
+.execution-tab:hover {
+  color: var(--text);
+}
 
-  .tool-palette-item {
-    background: #34495e;
-    border-color: #34495e;
-  }
+.execution-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
 
-  .tool-palette-item:hover,
-  .tool-palette-item:focus-visible {
-    background: #3d566e;
-  }
+.execution-panel-controls {
+  display: flex;
+  gap: var(--space-2);
+}
 
-  .tool-palette-description,
-  .tool-palette-category,
-  .tool-palette-types,
-  .tool-palette-empty,
-  .tool-palette-footer {
-    color: var(--gray-light);
-  }
+.execution-panel-content {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-3);
+  overflow-y: auto;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  background-color: var(--surface-sunken);
+}
 
-  .catalog-section {
-    border-color: #34495e;
-  }
+.log-content {
+  font-family: var(--font-mono);
+}
 
-  .typed-edge-match .react-flow__edge-path {
-    stroke: #4ade80;
-  }
+.log-entry {
+  margin: var(--space-half) 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text);
+  border-radius: var(--radius-control);
+}
 
-  .typed-edge-mismatch .react-flow__edge-path {
-    stroke: #fb923c;
-  }
+.log-entry.error {
+  color: var(--danger);
+  background-color: var(--danger-subtle);
+  border-left: 3px solid var(--danger);
+}
 
-  .typed-edge-label-mismatch rect {
-    fill: #3a2410;
-    stroke: #fb923c;
-  }
+.log-entry.success {
+  color: var(--success);
+  background-color: var(--success-subtle);
+  border-left: 3px solid var(--success);
+}
 
-  .typed-edge-label-mismatch text {
-    fill: #fdba74;
-  }
+.log-entry.warning {
+  color: var(--warning);
+  background-color: var(--warning-subtle);
+  border-left: 3px solid var(--warning);
+}
 
-  .typed-edge-label-match circle {
-    fill: #12301f;
-    stroke: #4ade80;
-  }
+.log-entry.info {
+  color: var(--info);
+  background-color: var(--info-subtle);
+  border-left: 3px solid var(--info);
+}
 
-  .typed-edge-label-match text {
-    fill: #86efac;
-  }
+/* Step status and run history */
+.step-status-empty {
+  padding: var(--space-3);
+  color: var(--text-muted);
+}
 
-  .node-mock-badge,
-  .node-mocked-run,
-  .mock-tag,
-  .mock-warning {
-    background: #3a2f10;
-    color: #fcd34d;
-    border-color: #fcd34d;
-  }
+.step-status-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+}
 
-  .workflow-title {
-    color: var(--panel-text);
-  }
+.step-status-table {
+  width: 100%;
+  border-collapse: collapse;
+}
 
-  .toolbar-button {
-    background: #34495e;
-    color: var(--panel-text);
-    border-color: #2c3e50;
-  }
+.step-status-table th {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  text-align: left;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 
-  .toolbar-button:hover {
-    background: #2c3e50;
-  }
+.step-status-table td {
+  padding: var(--space-1) var(--space-2);
+  vertical-align: top;
+  border-top: 1px solid var(--border);
+}
 
-  .color-picker-toolbar {
-    background-color: #34495e;
-    border-color: #34495e;
-  }
+.step-row-state {
+  white-space: nowrap;
+  font-weight: var(--weight-semibold);
+}
 
-  .dialog-box {
-    background: #2c3e50;
-  }
+.step-row-state .step-glyph {
+  vertical-align: text-bottom;
+}
 
-  .dialog-box h3,
-  .dialog-box label {
-    color: var(--panel-text);
-  }
+.step-row-details {
+  color: var(--text-muted);
+}
 
-  .dialog-input {
-    background: #34495e;
-    border-color: #34495e;
-    color: var(--panel-text);
-  }
+.step-state-running .step-row-state,
+.history-running .step-row-state {
+  color: var(--status-running);
+}
 
-  .dialog-button.cancel {
-    background: #34495e;
-    color: var(--panel-text);
-  }
+.step-state-retrying .step-row-state {
+  color: var(--status-retrying);
+}
 
-  .execution-panel {
-    background: #23313f;
-    border-top-color: #2c3e50;
-  }
+.step-state-succeeded .step-row-state,
+.history-succeeded .step-row-state {
+  color: var(--status-succeeded);
+}
 
-  .execution-panel-header {
-    background: #2c3e50;
-    border-bottom-color: #34495e;
-  }
+.step-state-failed .step-row-state,
+.history-failed .step-row-state {
+  color: var(--status-failed);
+}
 
-  .execution-panel-header h3 {
-    color: var(--panel-text);
-  }
+.history-stopped .step-row-state {
+  color: var(--status-retrying);
+}
 
-  .execution-tab {
-    color: #aab7c4;
-  }
+.step-state-pending .step-row-state,
+.step-state-skipped .step-row-state {
+  color: var(--text-muted);
+}
 
-  .execution-tab.active {
-    color: var(--panel-text);
-  }
-
-  .step-chip {
-    background: rgba(255, 255, 255, 0.12);
-    color: var(--panel-text);
-  }
-
-  .step-status-table,
-  .step-status-empty {
-    color: var(--panel-text);
-  }
-
-  .panel-button {
-    background: #34495e;
-    color: var(--panel-text);
-    border-color: #2c3e50;
-  }
-
-  .panel-button:hover {
-    background: #2c3e50;
-  }
-
-  .execution-panel-content {
-    background: #1a2332;
-  }
-
-  .log-entry {
-    color: var(--panel-text);
-  }
-
-  .log-entry.error {
-    background: rgba(255, 0, 0, 0.1);
-    color: #ff6b6b;
-    border-left-color: #ff6b6b;
-  }
-
-  .log-entry.success {
-    background: rgba(0, 255, 0, 0.1);
-    color: #69db7c;
-    border-left-color: #69db7c;
-  }
-
-  .log-entry.warning {
-    background: rgba(255, 193, 7, 0.1);
-    color: #ffd43b;
-    border-left-color: #ffd43b;
-  }
-
-  .log-entry.info {
-    background: rgba(33, 150, 243, 0.1);
-    color: #74c0fc;
-    border-left-color: #74c0fc;
-  }
-
-  .custom-node {
-    border-color: #4a5568;
-  }
-
-  .node-label {
-    color: #1a1a2e;
-  }
-
-  .node-tool {
-    color: #4a5568;
-  }
-
-  /* Node bodies keep their light fill in dark mode, so badges need a
-     dark ring to separate from the canvas rather than a white one. */
-  .node-status-badge,
-  .node-invalid-badge {
-    border-color: #1a1a2e;
-  }
-
-  .node-progress {
-    color: #4a5568;
-  }
-
-  .property-error {
-    color: #ff8fa3;
-  }
-
-  .execution-progress {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  /* Dark mode wildcard styles */
-  .file-list {
-    background: #34495e;
-    border-color: #2c3e50;
-  }
-
-  .file-list-header {
-    color: var(--gray-light);
-    border-bottom-color: #2c3e50;
-  }
-
-  .file-item {
-    color: var(--panel-text);
-  }
-
-  .file-item:hover {
-    background: #2c3e50;
-  }
-
-  .file-item-more {
-    color: var(--gray-light);
-  }
-
-  .wildcard-pattern {
-    background: rgba(99, 167, 221, 0.15);
-    border-left-color: var(--blue-light);
-    color: #74c0fc;
-  }
-
-  .wildcard-pattern code {
-    background: #2c3e50;
-    color: var(--blue-light);
-  }
-
-  .update-banner {
-    background: #23313f;
-    border-bottom-color: #2c3e50;
-    color: var(--panel-text);
-  }
-
-  .update-banner-detail {
-    color: var(--gray-light);
-  }
-
-  .update-banner-progress {
-    background: #2c3e50;
-  }
-
-  .update-banner-dismiss {
-    color: var(--gray-light);
-  }
-
-  .update-banner-dismiss:hover {
-    background: #34495e;
-    color: var(--panel-text);
-  }
+.mock-tag {
+  margin-left: var(--space-2);
 }
 
 /* =============================================================================
-   Auto-Update Banner
+   Tool catalog palette and the catalog parameter form
+   ============================================================================= */
+
+.tool-palette {
+  position: absolute;
+  top: 72px;
+  left: 168px;
+  z-index: 20;
+  width: 340px;
+  max-height: calc(100% - 150px);
+  background-color: var(--elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.tool-palette .panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.tool-palette-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.tool-palette-item {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-2);
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.tool-palette-item:hover {
+  background-color: var(--accent-subtle);
+  border-color: var(--accent);
+}
+
+.tool-palette-swatch {
+  flex: none;
+  width: 6px;
+  border-radius: var(--radius-control);
+}
+
+.tool-palette-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-half);
+  min-width: 0;
+}
+
+.tool-palette-name {
+  font-weight: var(--weight-semibold);
+}
+
+.tool-palette-category {
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tool-palette-description {
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
+.tool-palette-types {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.tool-palette-empty,
+.tool-palette-footer {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.catalog-param {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* =============================================================================
+   Auto-update banner
    ============================================================================= */
 
 .update-banner {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 16px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
-  font-size: 13px;
-  color: #1e293b;
   position: relative;
   z-index: 20;
-}
-
-.update-banner-info {
-  /* Default styling — nothing extra needed. */
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background-color: var(--surface);
+  border-bottom: 1px solid var(--border);
 }
 
 .update-banner-success {
-  background: #ecfdf5;
-  border-bottom-color: #a7f3d0;
+  background-color: var(--success-subtle);
+  border-bottom-color: var(--success);
 }
 
 .update-banner-error {
-  background: #fef2f2;
-  border-bottom-color: #fecaca;
+  background-color: var(--danger-subtle);
+  border-bottom-color: var(--danger);
 }
 
 .update-banner-text {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
   flex: 1;
+  flex-direction: column;
+  gap: var(--space-half);
   min-width: 0;
 }
 
 .update-banner-title {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .update-banner-detail {
-  font-size: 12px;
-  color: #64748b;
   overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Thin progress strip — fixed width so it doesn't push the title around. */
+/* Thin progress strip, fixed width so it does not push the title around. */
 .update-banner-progress {
+  flex-shrink: 0;
   width: 160px;
   height: 4px;
-  background: #e2e8f0;
-  border-radius: 2px;
   overflow: hidden;
-  flex-shrink: 0;
+  background-color: var(--border);
+  border-radius: var(--radius-control);
 }
 
 .update-banner-progress-bar {
   height: 100%;
-  background: var(--blue-light, #63a7dd);
-  transition: width 200ms ease-out;
+  background-color: var(--accent-solid);
+  transition: width 200ms var(--ease-standard);
 }
 
 .update-banner-actions {
   display: flex;
-  align-items: center;
-  gap: 8px;
   flex-shrink: 0;
-}
-
-.update-banner-button {
-  background: var(--blue-light, #63a7dd);
-  color: #fff;
-  border: none;
-  padding: 6px 12px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.update-banner-button:hover {
-  background: var(--blue-dark, #3d84b3);
-}
-
-.update-banner-dismiss {
-  background: transparent;
-  border: none;
-  color: #64748b;
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  padding: 0;
-  display: inline-flex;
   align-items: center;
-  justify-content: center;
+  gap: var(--space-2);
 }
 
-.update-banner-dismiss:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: #1e293b;
+/* =============================================================================
+   Narrow windows
+   ============================================================================= */
+
+@media (max-width: 900px) {
+  .main-content {
+    flex-direction: column;
+  }
+
+  .properties-panel {
+    width: 100%;
+    height: 250px;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .execution-controls {
+    top: auto;
+    bottom: 280px;
+    left: 50%;
+    flex-direction: row;
+    width: auto;
+    transform: translateX(-50%);
+  }
 }
