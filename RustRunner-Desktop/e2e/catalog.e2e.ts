@@ -172,7 +172,8 @@ test('connecting bwa to samtools sort shows a green edge; a mismatch is orange',
   await expect(orange.locator('title')).toHaveText(/Types differ: FastQC makes html, zip/);
   // Not colour alone: a mismatched edge is dashed and says so on the edge.
   expect(await dashOf(orange)).not.toBe('none');
-  await expect(orange.getByTestId('typed-edge-label')).toContainText('types differ');
+  // The label says what differs, not just that something does.
+  await expect(orange.getByTestId('typed-edge-label')).toContainText(/needs .+, gets .+/);
 
   // A custom node has no types: its edge stays neutral.
   await connect(page, 'samtools sort', 'Node 4');

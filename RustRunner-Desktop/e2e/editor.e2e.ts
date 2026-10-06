@@ -11,7 +11,7 @@ test('a mocked step creates placeholder outputs, shows MOCKED, and a real run th
     { label: 'Copy', command: 'cp {input} {output}', input: 'a.txt', output: 'b.txt' },
   ]);
   await page.getByTestId('set-directory').click();
-  await expect(page.locator('.working-directory')).toBeVisible();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
 
   // No mocked step, no warning.
   await expect(page.getByTestId('mock-warning')).toHaveCount(0);

@@ -44,4 +44,12 @@ describe('formatStarted', () => {
     expect(formatStarted({ startedAt: 'garbage', startedMs: null })).toBe('garbage');
     expect(formatStarted(run())).not.toBe('');
   });
+
+  it('writes the month as a word, so 07/10 cannot be read two ways', () => {
+    const ms = new Date(2026, 9, 7, 0, 1).getTime();
+    const text = formatStarted({ startedAt: '', startedMs: ms }, 'en-GB');
+    expect(text).toContain('Oct');
+    expect(text).toContain('2026');
+    expect(text).toContain('00:01');
+  });
 });

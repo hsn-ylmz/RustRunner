@@ -225,6 +225,18 @@ describe('buildStatusRows', () => {
     expect(buildStatusRows({}, nodes, 'none')).toEqual([]);
   });
 
+  it('names each per-file run by its file, and a plain step by nothing extra', () => {
+    const runs = fold([
+      { kind: 'start', stepId: 'align_sample_1' },
+      { kind: 'start', stepId: 'sort' },
+    ]);
+    const rows = buildStatusRows(runs, nodes, 'active');
+    expect(rows.map((r) => [r.label, r.instance])).toEqual([
+      ['Align', 'sample_1'],
+      ['Sort', undefined],
+    ]);
+  });
+
   it('lists unstarted nodes as pending while the run is active', () => {
     const runs = fold([{ kind: 'start', stepId: 'align' }]);
     const rows = buildStatusRows(runs, nodes, 'active');

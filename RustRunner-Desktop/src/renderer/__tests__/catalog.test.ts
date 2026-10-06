@@ -419,6 +419,8 @@ describe('file type matching', () => {
     expect(check.message).toContain('FastQC');
     expect(check.message).toContain('samtools sort');
     expect(check.message).toContain('still works');
+    expect(check.made).toEqual(tool('fastqc')!.outputTypes);
+    expect(check.expected).toEqual(tool('samtools-sort')!.inputTypes);
     expect(checkConnection(tool('bwa-mem'), tool('samtools-index')).status).toBe('mismatch');
   });
 

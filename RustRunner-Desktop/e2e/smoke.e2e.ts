@@ -217,7 +217,7 @@ test('a second Run skips every up-to-date step and Run from scratch runs them ag
 }) => {
   await buildChain(page, TWO_STEPS);
   await page.getByTestId('set-directory').click();
-  await expect(page.locator('.working-directory')).toBeVisible();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
   // A directory with no saved state: Run is available and says nothing is saved.
   await expect(page.getByTestId('run')).toBeEnabled();
   await expect(await showRunTooltip(page)).toContainText('No saved run');
@@ -272,7 +272,7 @@ test('editing a command re-runs that step and its children, not its parents', as
     { label: 'Count', command: 'echo run >> count.log; wc -c < {input} > {output}', input: 'b.txt', output: 'c.txt' },
   ]);
   await page.getByTestId('set-directory').click();
-  await expect(page.locator('.working-directory')).toBeVisible();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
 
   const runsOf = () => ['make', 'copy', 'count'].map((n) => lineCount(sandbox.workDir, `${n}.log`));
 
@@ -399,7 +399,7 @@ test('keep going runs the independent branch after a failure', async ({ page, sa
 test('renaming the workflow keeps its saved run for Run', async ({ page }) => {
   await buildChain(page, TWO_STEPS);
   await page.getByTestId('set-directory').click();
-  await expect(page.locator('.working-directory')).toBeVisible();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
 
   await page.getByTestId('run-from-scratch').click();
   await openStepStatus(page);

@@ -9,8 +9,6 @@ import {
   Controls,
   Handle,
   Position,
-  NodeToolbar,
-  useReactFlow,
   MiniMap,
   BaseEdge,
   getBezierPath,
@@ -21,9 +19,9 @@ import type { NodeStatus } from '../stepEvents';
 import { nodeStatusLine, stateView } from '../runFeedback';
 import { firstFreePosition, type Rect } from '../nodePlacement';
 import type { TypeCheck } from '../tools/catalog';
-import { NODE_COLORS, nodeColorVar, normalizeNodeColor } from '../nodeColors';
-import { MISMATCH_LABEL, edgeLabelWidth } from '../edgeLabel';
-import { Badge, Icon, Tooltip, type IconName } from '../ui';
+import { nodeColorVar, normalizeNodeColor } from '../nodeColors';
+import { edgeLabelWidth, mismatchLabel } from '../edgeLabel';
+import { Badge, Icon, type IconName } from '../ui';
 
 /**
  * Chooses where a newly added node should appear.
@@ -33,8 +31,9 @@ import { Badge, Icon, Tooltip, type IconName } from '../ui';
  * window-relative placement lands nodes near the canvas's bottom-right corner.
  *
  * Placement also has to dodge the floating overlays, which sit above the nodes
- * and swallow clicks on anything underneath them — the execution controls
+ * and swallow clicks on anything underneath them — the run controls
  * (top-left), the MiniMap (bottom-right) and the zoom Controls (bottom-left).
+ * The toolbar is a row above the canvas, not an overlay.
  * Nodes are laid out on a 3x2 grid inside the remaining box and cycle through
  * its cells, so consecutive nodes never stack on each other either.
  *
@@ -60,8 +59,8 @@ export function nextNodePosition(
   // Insets clearing the floating overlays. Generous rather than exact — the
   // cost of being wrong is an unclickable node.
   const box = {
-    left: rect.x + 210,
-    top: rect.y + 90,
+    left: rect.x + 230,
+    top: rect.y + 24,
     right: rect.right - 230,
     bottom: rect.bottom - 60,
   };
@@ -115,13 +114,12 @@ const STATUS_NAME: Record<string, string> = {
   failed: 'Failed',
 };
 
-function CustomNode({ id, data, selected }: any) {
-  const { updateNodeData } = useReactFlow();
-
-  const handleColorChange = (newColor: string) => {
-    updateNodeData(id, { color: newColor });
-  };
-
+/**
+ * A step on the canvas. Its colour is chosen in the properties panel (Basics),
+ * not in a toolbar floating over the canvas, which used to cover neighbouring
+ * nodes and edges.
+ */
+function CustomNode({ data, selected }: any) {
   const nodeColor = normalizeNodeColor(data.color);
 
   // Injected by the editor rather than stored on the node, so execution state
@@ -135,23 +133,6 @@ function CustomNode({ id, data, selected }: any) {
 
   return (
     <>
-      <NodeToolbar isVisible={selected} className="nopan">
-        <div className="color-picker-toolbar">
-          {NODE_COLORS.map((option) => (
-            <Tooltip key={option.id} content={option.label} placement="top">
-              <button
-                type="button"
-                onClick={() => handleColorChange(option.id)}
-                className={`color-button ${option.id === nodeColor ? 'selected' : ''}`}
-                style={{ backgroundColor: nodeColorVar(option.id) }}
-                aria-label={`Node colour: ${option.label}`}
-                aria-pressed={option.id === nodeColor}
-              />
-            </Tooltip>
-          ))}
-        </div>
-      </NodeToolbar>
-
       <div
         className={[
           'custom-node',
@@ -235,7 +216,7 @@ function CustomNode({ id, data, selected }: any) {
 /**
  * An edge coloured by its file-type check: green and solid with a check mark
  * when an output type of the source is an input type of the target, orange and
- * dashed with a "types differ" label when not, neutral when either end is not a
+ * dashed with a "needs sam/bam, gets fastq" label when not, neutral when either end is not a
  * catalog tool. Dash and label carry the verdict without colour. The editor
  * injects the check under `__typeCheck` (like `__status` on nodes), so it never
  * reaches a saved workflow. The title
@@ -265,7 +246,8 @@ function TypedEdge({
   const check = (data as { __typeCheck?: TypeCheck } | undefined)?.__typeCheck;
   const active = (data as { __active?: boolean } | undefined)?.__active === true;
   const status = check?.status ?? 'unknown';
-  const mismatchWidth = edgeLabelWidth(MISMATCH_LABEL, 12);
+  const label = check ? mismatchLabel(check) : '';
+  const mismatchWidth = edgeLabelWidth(label, 12);
 
   return (
     <g
@@ -307,7 +289,7 @@ function TypedEdge({
             <path d="M8 6.5v3M8 11.3v.2" />
           </g>
           <text x={8} textAnchor="middle" dominantBaseline="central">
-            {MISMATCH_LABEL}
+            {label}
           </text>
         </g>
       )}
@@ -329,7 +311,8 @@ function TypedEdge({
 
 const nodeTypes = { custom: CustomNode };
 const edgeTypes = { typed: TypedEdge };
-const defaultEdgeOptions = { animated: true, type: 'typed' };
+/** What every new connection gets; React Flow applies it to dragged ones only. */
+export const DEFAULT_EDGE_OPTIONS = { animated: true, type: 'typed' };
 
 export function WorkflowCanvas({
   nodes,
@@ -353,7 +336,7 @@ export function WorkflowCanvas({
     <ReactFlow
       nodes={nodes}
       edges={edges}
-      defaultEdgeOptions={defaultEdgeOptions}
+      defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
@@ -375,7 +358,8 @@ export function WorkflowCanvas({
         gap={30}
         color="var(--canvas-dot)"
       />
-      <Controls />
+      {/* Top right: the run controls own the left edge, the minimap the bottom right. */}
+      <Controls position="top-right" orientation="horizontal" />
       <MiniMap nodeStrokeWidth={1} nodeColor={(node: any) => nodeColorVar(node.data?.color)} />
     </ReactFlow>
   );

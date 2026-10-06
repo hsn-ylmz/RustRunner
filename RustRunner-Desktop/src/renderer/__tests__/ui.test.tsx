@@ -8,12 +8,14 @@ import {
   CollapsibleSection,
   ConfirmDialog,
   Dialog,
+  FieldGroup,
   Kbd,
   IconButton,
   NumberField,
   Panel,
   Section,
   Select,
+  SwatchPicker,
   TextArea,
   TextField,
   Tooltip,
@@ -330,5 +332,44 @@ describe('ConfirmDialog and Kbd', () => {
 
   it('draws one key cap per key', () => {
     expect((html(<Kbd keys="Shift+Cmd+Z" />).match(/<kbd/g) ?? []).length).toBe(3);
+  });
+});
+
+describe('FieldGroup', () => {
+  it('is a fieldset named by its legend and described by its hint', () => {
+    const markup = html(
+      <FieldGroup id="g" label="Runs after" hint="Ticked steps finish first.">
+        <Checkbox id="c" label="Trim" />
+      </FieldGroup>
+    );
+    expect(markup).toMatch(/^<fieldset/);
+    expect(markup).toContain('<legend class="field-label">Runs after</legend>');
+    expect(attr(markup, 'fieldset', 'aria-describedby')).toBe('g-hint');
+    expect(markup).toContain('id="g-hint"');
+  });
+});
+
+describe('SwatchPicker', () => {
+  const swatches = [
+    { id: 'mint', label: 'Mint', color: 'var(--node-mint)' },
+    { id: 'rose', label: 'Rose', color: 'var(--node-rose)' },
+  ];
+
+  it('is a labelled radio group with one tab stop on the chosen swatch', () => {
+    const markup = html(<SwatchPicker label="Node colour" swatches={swatches} value="rose" onChange={() => {}} />);
+    expect(attr(markup, 'div', 'role')).toBe('radiogroup');
+    expect(attr(markup, 'div', 'aria-label')).toBe('Node colour');
+    const radios = markup.match(/<button[^>]*>/g) ?? [];
+    expect(radios).toHaveLength(2);
+    expect(radios[0]).toContain('aria-label="Mint"');
+    expect(radios[0]).toContain('aria-checked="false"');
+    expect(radios[0]).toContain('tabindex="-1"');
+    expect(radios[1]).toContain('aria-checked="true"');
+    expect(radios[1]).toContain('tabindex="0"');
+  });
+
+  it('keeps a tab stop when the value is unknown', () => {
+    const markup = html(<SwatchPicker label="Node colour" swatches={swatches} value="gone" onChange={() => {}} />);
+    expect((markup.match(/tabindex="0"/g) ?? []).length).toBe(1);
   });
 });

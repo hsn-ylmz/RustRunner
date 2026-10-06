@@ -34,13 +34,17 @@ import {
   Callout,
   Checkbox,
   CollapsibleSection,
+  FieldGroup,
   Icon,
   NumberField,
   Panel,
   Select,
+  SwatchPicker,
   TextArea,
   TextField,
 } from '../ui';
+import { NODE_COLORS, nodeColorVar, normalizeNodeColor } from '../nodeColors';
+import type { UpstreamChoice } from '../connections';
 import { useEffect, useState } from 'react';
 import {
   SECTION_TITLES,
@@ -131,6 +135,8 @@ export function PropertiesPanel({
   onFocusHandled,
   keepGoing = false,
   onOpenDetails,
+  upstream = [],
+  onConnectionChange,
 }: {
   selectedNode: any;
   onNodeUpdate: (nodeId: string, field: string, value: string | boolean) => void;
@@ -147,6 +153,10 @@ export function PropertiesPanel({
   /** The workflow-wide keep-going setting, shown in Reliability. */
   keepGoing?: boolean;
   onOpenDetails?: () => void;
+  /** The other steps, for the "Runs after" list (see connections.ts). */
+  upstream?: UpstreamChoice[];
+  /** Connects (or disconnects) `sourceId` into the selected step. */
+  onConnectionChange?: (sourceId: string, connected: boolean) => void;
 }) {
   // Which sections the person opened or closed, remembered between sessions.
   const [chosen, setChosen] = useState<OpenState>(loadOpenState);
@@ -217,7 +227,7 @@ export function PropertiesPanel({
     (Object.keys(fieldIssues) as IssueField[]).filter(
       (f) => sectionForField(f) === section && errorFor(f)
     ).length;
-  const sectionProps = (section: SectionId, extra: { fileCount?: number } = {}) => ({
+  const sectionProps = (section: SectionId, extra: { fileCount?: number; upstreamCount?: number } = {}) => ({
     title: SECTION_TITLES[section],
     open: isSectionOpen(section, chosen, data),
     onToggle: (open: boolean) => setSectionOpen(section, open),
@@ -376,7 +386,7 @@ export function PropertiesPanel({
           error={errorFor('label')}
           hint={
             selectedNode.data.label && !errorFor('label')
-              ? `Step ID: ${labelToId(selectedNode.data.label)}`
+              ? `Its results and log lines are marked "${labelToId(selectedNode.data.label)}".`
               : undefined
           }
         />
@@ -388,11 +398,11 @@ export function PropertiesPanel({
           onChange={(e) => handleToolChange(e.target.value)}
           onBlur={() => visit('tool')}
           error={errorFor('tool')}
-          placeholder="e.g., bash, fastqc, bowtie2"
+          placeholder="e.g. bash, fastqc, bowtie2"
           hint={
             catalogTool
               ? 'From the tool catalog. Changing the tool makes this a free-form step.'
-              : undefined
+              : 'The program this step runs. It is installed with conda when the workflow first runs.'
           }
         />
 
@@ -404,18 +414,58 @@ export function PropertiesPanel({
           data-testid="prop-threads"
           onChange={(e) => handleThreadsChange(e.target.value)}
           onBlur={(e) => handleThreadsChange(String(normalizeThreads(e.target.value)))}
-          hint="CPU threads this step requests from the scheduler."
+          hint="How many processor cores this step may use."
         />
+
+        <div className="field">
+          <span className="field-label" id="prop-color-label">
+            Colour
+          </span>
+          <SwatchPicker
+            label="Node colour"
+            swatches={NODE_COLORS.map((c) => ({ ...c, color: nodeColorVar(c.id) }))}
+            value={normalizeNodeColor(selectedNode.data.color)}
+            onChange={(color) => handleInputChange('color', color)}
+            data-testid="prop-color"
+          />
+        </div>
       </CollapsibleSection>
 
-      <CollapsibleSection {...sectionProps('io', { fileCount: nodeFiles?.length })}>
+      <CollapsibleSection
+        {...sectionProps('io', {
+          fileCount: nodeFiles?.length,
+          upstreamCount: upstream.filter((u) => u.connected).length,
+        })}
+      >
+        {upstream.length > 0 && (
+          <FieldGroup
+            label="Runs after"
+            data-testid="prop-upstream"
+            hint="Ticked steps finish before this one starts, and their outputs can be its inputs. The same as drawing a connection on the canvas."
+          >
+            {upstream.map((choice) => (
+              <Checkbox
+                key={choice.nodeId}
+                label={choice.wouldLoop ? `${choice.label} (runs after this step)` : choice.label}
+                checked={choice.connected}
+                disabled={choice.wouldLoop || !onConnectionChange}
+                data-testid={`prop-upstream-${choice.nodeId}`}
+                onChange={(e) => onConnectionChange?.(choice.nodeId, e.target.checked)}
+              />
+            ))}
+          </FieldGroup>
+        )}
+
         <div className="field" role="group" aria-labelledby="prop-input-files-label">
           <span className="field-label" id="prop-input-files-label">
-            Input files
+            Run once per file
           </span>
-          <Button icon="folder" fullWidth onClick={handleFileSelection}>
-            Select files for batch processing
+          <Button icon="folder" fullWidth onClick={handleFileSelection} data-testid="prop-choose-files">
+            Choose input files…
           </Button>
+          <div className="field-hint">
+            Optional. Pick several files and this step runs once for each of them.
+          </div>
         </div>
 
         {nodeFiles && nodeFiles.length > 0 && (
@@ -437,8 +487,10 @@ export function PropertiesPanel({
             </div>
 
             <Callout tone="info">
-              Pattern: <code>{generatePattern(nodeFiles, wildcardName)}</code>
-              <div>Will create {nodeFiles.length} step instance(s).</div>
+              Input: <code>{generatePattern(nodeFiles, wildcardName)}</code>
+              <div>
+                The step runs {nodeFiles.length} time{nodeFiles.length === 1 ? '' : 's'}, once per file.
+              </div>
             </Callout>
 
             <div className="property-actions">
@@ -450,7 +502,7 @@ export function PropertiesPanel({
         )}
 
         <TextField
-          label="Wildcard name"
+          label="Name for each file"
           value={selectedNode.data.wildcardName ?? ''}
           data-testid="prop-wildcard-name"
           onChange={(e) => handleWildcardNameChange(e.target.value)}
@@ -460,40 +512,40 @@ export function PropertiesPanel({
           hint={
             wildcardNameProblem ? undefined : (
               <>
-                Write it as <code>{`{${wildcardName}}`}</code> in the input and output patterns; each
-                selected file fills it in. Leave empty for "sample".
+                <code>{`{${wildcardName}}`}</code> in the input and output below stands for each
+                chosen file, e.g. <code>{`out/{${wildcardName}}.bam`}</code>. Empty means "sample".
               </>
             )
           }
         />
 
         <TextField
-          label="Input pattern"
+          label="Input file"
           value={selectedNode.data.input || ''}
           data-testid="prop-input"
           onChange={(e) => handleInputChange('input', e.target.value)}
           onBlur={() => visit('input')}
           error={errorFor('input')}
-          placeholder="e.g., {sample}.fastq or data/{sample}.txt"
+          placeholder="e.g. reads.fastq or data/{sample}.fastq"
           hint={
             hasWildcards(selectedNode.data.input || '')
-              ? 'Wildcard detected: this will process multiple files.'
-              : undefined
+              ? 'Has a {name}: the step runs once for each matching file.'
+              : 'What the command reads, written as {input} in it. Separate several with commas.'
           }
         />
 
         <TextField
-          label="Output pattern"
+          label="Output file"
           value={selectedNode.data.output || ''}
           data-testid="prop-output"
           onChange={(e) => handleInputChange('output', e.target.value)}
           onBlur={() => visit('output')}
           error={errorFor('output')}
-          placeholder="e.g., output/{sample}.txt"
+          placeholder="e.g. results/counts.tsv"
           hint={
             hasWildcards(selectedNode.data.output || '')
-              ? 'Output will be generated for each input file.'
-              : undefined
+              ? 'One output is made for each input file.'
+              : 'What the command writes, written as {output} in it. Later steps can read it.'
           }
         />
       </CollapsibleSection>
@@ -619,17 +671,17 @@ export function PropertiesPanel({
         {normalizeRetries(selectedNode.data.retries) > 0 && (
           <>
             <Select
-              label="Retry delay mode"
+              label="Wait between retries"
               value={normalizeBackoff(selectedNode.data.retryBackoff)}
               data-testid="prop-retry-backoff"
               onChange={(e) => handleInputChange('retryBackoff', e.target.value)}
             >
-              <option value="fixed">Fixed</option>
-              <option value="exponential">Exponential (doubles each retry)</option>
+              <option value="fixed">The same each time</option>
+              <option value="exponential">Doubles each time</option>
             </Select>
 
             <NumberField
-              label="Retry delay"
+              label="First wait"
               unit="seconds"
               min={0}
               max={MAX_RETRY_DELAY_SECS}
@@ -640,7 +692,7 @@ export function PropertiesPanel({
               onBlur={(e) =>
                 handleInputChange('retryDelaySecs', String(normalizeRetryDelay(e.target.value)))
               }
-              hint="Wait before the first retry; exponential mode doubles it each time."
+              hint="How long to wait before the first retry."
             />
           </>
         )}
@@ -677,6 +729,11 @@ export function PropertiesPanel({
       </CollapsibleSection>
 
       <CollapsibleSection {...sectionProps('checks')}>
+        <div className="field-hint" data-testid="checks-hint">
+          {hasOutput
+            ? 'Checked after the step succeeds. Each check can cover all outputs or just one.'
+            : 'Set an output file first (in Inputs and outputs): checks look at what the step writes.'}
+        </div>
         <Checkbox
           label="Outputs must exist"
           checked={checksOn(selectedNode.data.checkExists)}
@@ -741,11 +798,16 @@ export function PropertiesPanel({
           />
         )}
         <Checkbox
-          label="Blocking: stop here if a check fails"
+          label="Stop the run if a check fails"
           checked={isBlocking(selectedNode.data.checkBlocking)}
           data-testid="prop-check-blocking"
           disabled={!hasOutput}
           onChange={(e) => handleInputChange('checkBlocking', e.target.checked)}
+          hint={
+            hasOutput
+              ? 'On: the step fails and the steps after it do not run (the tool is not re-run). Off: a failed check is only a warning.'
+              : undefined
+          }
         />
         {isMocked && (
           <Callout tone="warning" data-testid="mock-checks-note">
@@ -753,11 +815,6 @@ export function PropertiesPanel({
             runs.
           </Callout>
         )}
-        <div className="field-hint">
-          {hasOutput
-            ? 'Run after the step succeeds. Each check can cover all outputs or just one. A failed blocking check fails the step and skips everything after it; the tool is not re-run. Unchecked "Blocking" only logs a warning.'
-            : "Set an output file first; checks look at the step's outputs."}
-        </div>
       </CollapsibleSection>
 
       <CollapsibleSection {...sectionProps('advanced')}>
@@ -770,7 +827,7 @@ export function PropertiesPanel({
           onChange={(e) => handleCommandChange(e.target.value)}
           onBlur={() => visit('command')}
           error={errorFor('command')}
-          placeholder="Enter command to execute"
+          placeholder="e.g. fastqc {input} -o results"
           hint={
             <>
               The shell command this step runs. Use <code>{'{input}'}</code> and{' '}
@@ -780,11 +837,11 @@ export function PropertiesPanel({
         />
 
         <Checkbox
-          label="Mock (don't run the tool)"
+          label="Test run: skip the tool, make empty outputs"
           checked={isMocked}
           data-testid="prop-mock"
           onChange={(e) => handleInputChange('mock', e.target.checked)}
-          hint="Creates the step's outputs instead of running it: empty files, and folders for paths ending in /. Use it to try the rest of the workflow without the real tool. Non-empty and line-count checks are skipped. A mocked step, and every step after it, never counts as up to date, so a real run executes them."
+          hint="Tries the rest of the workflow without this tool: empty files (folders for paths ending in /) stand in for its outputs. Non-empty and line-count checks are skipped, and a later real run executes this step and every step after it."
         />
       </CollapsibleSection>
     </Panel>

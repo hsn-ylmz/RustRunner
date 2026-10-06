@@ -277,6 +277,9 @@ export interface TypeCheck {
   shared: string[];
   /** One sentence for the edge tooltip. */
   message: string;
+  /** For `mismatch`: what the source makes and what the target expects. */
+  made?: string[];
+  expected?: string[];
 }
 
 /**
@@ -306,6 +309,8 @@ export function checkConnection(
   return {
     status: 'mismatch',
     shared: [],
+    made: source.outputTypes,
+    expected: target.inputTypes,
     message:
       `Types differ: ${source.name} makes ${source.outputTypes.join(', ')}, ` +
       `but ${target.name} expects ${target.inputTypes.join(', ')}. The connection still works.`,

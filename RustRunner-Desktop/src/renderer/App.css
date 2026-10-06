@@ -29,8 +29,12 @@
 }
 
 .flow-container {
+  /* A size container: the overlays below adapt to the canvas, not the window
+     (the properties panel takes 320px of it). */
+  container: canvas / size;
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -39,28 +43,25 @@
    ============================================================================= */
 
 .top-toolbar {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
-  left: var(--space-2);
-  z-index: 10;
+  position: relative;
+  z-index: 15;
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: var(--space-2) var(--space-3);
+  gap: var(--space-3);
+  min-width: 0;
   padding: var(--space-2) var(--space-3);
   background-color: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  box-shadow: var(--shadow-md);
+  border-bottom: 1px solid var(--border);
 }
 
 .workflow-info {
   display: flex;
+  flex: 0 1 auto;
   flex-direction: column;
   gap: var(--space-half);
   min-width: 0;
-  max-width: 240px;
 }
 
 .workflow-title {
@@ -68,22 +69,94 @@
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+}
+
+
+/* The name is the way into the workflow details: it looks like a title and
+   behaves like a button. */
+.workflow-title .tooltip-anchor {
+  min-width: 0;
+}
+
+.workflow-name-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-half) var(--space-1);
+  margin-left: calc(-1 * var(--space-1));
   font-size: var(--text-lg);
   font-weight: var(--weight-semibold);
   line-height: var(--leading-tight);
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+}
+
+.workflow-name-button:hover {
+  background-color: var(--surface-muted);
 }
 
 .workflow-name {
+  /* Long names end in an ellipsis; the full name is in the details dialog. */
+  max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.workflow-name-icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.workflow-location {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.workflow-location .tooltip-anchor {
+  min-width: 0;
+}
+
 .working-directory {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   max-width: 100%;
+  min-width: 0;
+  padding: 0 var(--space-1);
+  margin-left: calc(-1 * var(--space-1));
   overflow: hidden;
   font-size: var(--text-xs);
   color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+}
+
+.working-directory:hover {
+  color: var(--text);
+  background-color: var(--surface-muted);
+}
+
+.working-directory.is-unset {
+  color: var(--accent);
+}
+
+.workflow-file {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -91,7 +164,8 @@
 .file-buttons,
 .edit-buttons {
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
+  flex-wrap: nowrap;
   gap: var(--space-1);
 }
 
@@ -107,19 +181,25 @@
   margin-left: auto;
 }
 
+.top-toolbar .btn {
+  white-space: nowrap;
+}
+
 /* =============================================================================
    Run controls
    ============================================================================= */
 
 .execution-controls {
   position: absolute;
-  top: 72px;
+  top: var(--space-2);
   left: var(--space-2);
   z-index: 10;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  width: 172px;
+  width: 184px;
+  max-height: calc(100% - 2 * var(--space-2));
+  overflow-y: auto;
   padding: var(--space-2);
   background-color: var(--surface);
   border: 1px solid var(--border);
@@ -143,6 +223,16 @@
 .run-group + .run-group {
   padding-top: var(--space-2);
   border-top: 1px solid var(--border);
+}
+
+/* Pause and Stop side by side: they only matter during a run. */
+.run-group-row {
+  flex-direction: row;
+}
+
+.run-group-row > * {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Live "N / M steps" counter under the run buttons. */
@@ -190,6 +280,13 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   overflow: hidden;
+}
+
+/* In a small canvas the minimap would cover the steps it maps. */
+@container canvas (max-width: 760px) or (max-height: 420px) {
+  .react-flow__minimap {
+    display: none;
+  }
 }
 
 .react-flow__attribution a {
@@ -348,31 +445,6 @@
 }
 
 /* Colour choices above a selected node. */
-.color-picker-toolbar {
-  display: flex;
-  gap: var(--space-1);
-  padding: var(--space-2);
-  background-color: var(--elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  box-shadow: var(--shadow-md);
-}
-
-.color-button {
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 2px solid var(--border-strong);
-  border-radius: 50%;
-}
-
-.color-button.selected {
-  border-color: var(--text);
-  box-shadow:
-    0 0 0 2px var(--elevated),
-    0 0 0 4px var(--text);
-}
-
 /* =============================================================================
    Typed edges: the file-type check
    ============================================================================= */
@@ -521,8 +593,9 @@
   transition: height var(--duration-slow) var(--ease-standard);
 }
 
+/* Heights follow the window, so a 700px window keeps a usable canvas. */
 .execution-panel.visible {
-  height: 240px;
+  height: clamp(160px, 28vh, 240px);
 }
 
 .execution-panel.hidden {
@@ -707,11 +780,14 @@
 .tool-palette,
 .problems-panel {
   position: absolute;
-  top: 72px;
-  left: 188px;
+  top: var(--space-2);
+  left: calc(184px + 2 * var(--space-2) + var(--space-1));
   z-index: 20;
+  display: flex;
+  flex-direction: column;
   width: 340px;
-  max-height: calc(100% - 150px);
+  max-width: calc(100% - 184px - 4 * var(--space-2));
+  max-height: calc(100% - 2 * var(--space-2));
   background-color: var(--elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
@@ -872,44 +948,9 @@
   gap: var(--space-2);
 }
 
-/* =============================================================================
-   Narrow windows
-   ============================================================================= */
-
-@media (max-width: 900px) {
-  .main-content {
-    flex-direction: column;
-  }
-
-  .properties-panel {
-    width: 100%;
-    height: 250px;
-    border-top: 1px solid var(--border);
-    border-left: 0;
-  }
-
-  .execution-controls {
-    top: auto;
-    bottom: 280px;
-    left: 50%;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    width: auto;
-    transform: translateX(-50%);
-  }
-
-  .run-group {
-    flex-direction: row;
-  }
-
-  .run-group + .run-group {
-    padding-top: 0;
-    padding-left: var(--space-2);
-    border-top: 0;
-    border-left: 1px solid var(--border);
-  }
-}
+/* The window cannot be narrower than 1000px (main.ts minWidth), so there is no
+   narrow-window layout: the canvas overlays adapt through the "canvas"
+   container queries instead. */
 
 /* =============================================================================
    Empty canvas, problem list, shortcuts
@@ -923,7 +964,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 80px 220px var(--space-5) 200px;
+  padding: var(--space-2) var(--space-2) var(--space-2) calc(184px + 3 * var(--space-2));
   pointer-events: none;
 }
 
@@ -933,6 +974,8 @@
   gap: var(--space-3);
   width: 100%;
   max-width: 460px;
+  max-height: 100%;
+  overflow-y: auto;
   padding: var(--space-5);
   background-color: var(--surface);
   border: 1px solid var(--border);
@@ -987,6 +1030,19 @@
   color: var(--accent);
   background-color: var(--accent-subtle);
   border-radius: var(--radius-pill);
+}
+
+/* A short canvas keeps the actions and drops the explanation. */
+@container canvas (max-height: 520px) {
+  .empty-state {
+    gap: var(--space-2);
+    padding: var(--space-4);
+  }
+
+  .empty-state-steps,
+  .empty-state-tip {
+    display: none;
+  }
 }
 
 .empty-state-tip {
@@ -1133,11 +1189,11 @@
 /* ---- Execution panel: banner and log tools ---- */
 
 .execution-panel.has-summary.visible {
-  height: 290px;
+  height: clamp(200px, 34vh, 290px);
 }
 
 .execution-panel.has-failure.visible {
-  height: 390px;
+  height: clamp(250px, 44vh, 390px);
 }
 
 .execution-banner {
@@ -1364,4 +1420,11 @@
   flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* Which file a per-file step's row is about. */
+.step-row-instance {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
 }

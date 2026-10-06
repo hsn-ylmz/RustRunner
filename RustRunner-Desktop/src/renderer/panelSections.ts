@@ -102,7 +102,7 @@ function clip(text: string, max = 28): string {
 export function sectionSummary(
   section: SectionId,
   data: Record<string, any>,
-  extra: { fileCount?: number } = {}
+  extra: { fileCount?: number; upstreamCount?: number } = {}
 ): string {
   switch (section) {
     case 'basics': {
@@ -112,6 +112,9 @@ export function sectionSummary(
     }
     case 'io': {
       const parts: string[] = [];
+      if (extra.upstreamCount) {
+        parts.push(`after ${extra.upstreamCount} step${extra.upstreamCount === 1 ? '' : 's'}`);
+      }
       if (extra.fileCount) parts.push(`${extra.fileCount} file${extra.fileCount === 1 ? '' : 's'}`);
       else if (data.input) parts.push(`in: ${clip(String(data.input))}`);
       else parts.push('no input');

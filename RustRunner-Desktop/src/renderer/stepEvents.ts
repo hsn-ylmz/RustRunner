@@ -303,6 +303,8 @@ export interface StatusRow {
   id: string;
   /** Canvas node label the step belongs to. */
   label: string;
+  /** For a step that runs once per file: which run this row is ("sample1"). */
+  instance?: string;
   state: StepState;
   attempt?: number;
   maxAttempts?: number;
@@ -345,7 +347,9 @@ export function buildStatusRows(
       continue;
     }
     for (const [engineId, run] of own) {
-      rows.push({ id: engineId, label: node.label, ...run });
+      const instance =
+        engineId === node.stepId ? undefined : engineId.slice(node.stepId.length + 1) || undefined;
+      rows.push({ id: engineId, label: node.label, ...(instance ? { instance } : {}), ...run });
     }
   }
   return rows;

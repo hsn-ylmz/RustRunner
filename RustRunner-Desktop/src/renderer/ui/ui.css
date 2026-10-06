@@ -177,6 +177,47 @@
   margin-top: var(--space-half);
 }
 
+/* A fieldset that looks like a field: no browser border or padding. */
+.field-group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.field-group > legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+
+.field-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* ---- Swatch picker --------------------------------------------------------- */
+
+.swatch-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.swatch {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+
+.swatch.is-checked {
+  border-color: var(--text);
+  box-shadow:
+    0 0 0 2px var(--surface-muted),
+    0 0 0 4px var(--text);
+}
+
 .control {
   width: 100%;
   min-height: 32px;

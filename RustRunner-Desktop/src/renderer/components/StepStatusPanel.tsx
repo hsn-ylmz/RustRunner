@@ -89,7 +89,11 @@ export function StepStatusPanel({
                   </Badge>
                 )}
               </td>
-              <td title={row.label}>{row.id}</td>
+              {/* The name the person gave the step; the engine id is in the log. */}
+              <td className="step-row-name" title={row.id}>
+                {row.label}
+                {row.instance && <span className="step-row-instance"> {row.instance}</span>}
+              </td>
               <td className="step-row-details">{rowDetails(row)}</td>
             </tr>
           ))}

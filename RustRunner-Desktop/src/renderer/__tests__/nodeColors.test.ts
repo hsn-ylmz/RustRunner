@@ -9,7 +9,7 @@ import {
   normalizeNodeColor,
 } from '../nodeColors';
 import { loadThemes } from './tokenModel';
-import { edgeLabelWidth, MISMATCH_LABEL } from '../edgeLabel';
+import { edgeLabelWidth, MISMATCH_LABEL, mismatchLabel } from '../edgeLabel';
 
 describe('node colours', () => {
   it('has a token for every colour a person can pick', () => {
@@ -69,5 +69,20 @@ describe('edge label width', () => {
 
   it('is wide enough for 12px text (about 6.5px per character)', () => {
     expect(edgeLabelWidth(MISMATCH_LABEL, 12)).toBeGreaterThanOrEqual(MISMATCH_LABEL.length * 6.5 + 12);
+  });
+});
+
+describe('mismatchLabel', () => {
+  it('says what the next step needs and what it gets', () => {
+    expect(mismatchLabel({ made: ['fastq'], expected: ['sam', 'bam'] })).toBe('needs sam/bam, gets fastq');
+  });
+
+  it('shortens long type lists', () => {
+    expect(mismatchLabel({ made: ['a', 'b', 'c'], expected: ['x'] })).toBe('needs x, gets a/b…');
+  });
+
+  it('falls back to the generic label without types', () => {
+    expect(mismatchLabel({})).toBe(MISMATCH_LABEL);
+    expect(mismatchLabel({ made: [], expected: ['x'] })).toBe(MISMATCH_LABEL);
   });
 });

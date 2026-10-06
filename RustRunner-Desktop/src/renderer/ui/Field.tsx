@@ -297,3 +297,35 @@ export function Checkbox({
     </div>
   );
 }
+
+/**
+ * A labelled group of related controls (checkboxes, swatches): a fieldset
+ * whose legend is the visible label and whose hint describes the whole group.
+ * Use it whenever several controls answer one question ("Runs after").
+ */
+export function FieldGroup({
+  label,
+  hint,
+  error,
+  id,
+  className,
+  children,
+  'data-testid': testId,
+}: Omit<FieldChrome, 'required' | 'optional' | 'hideLabel'> & {
+  className?: string;
+  children: ReactNode;
+  'data-testid'?: string;
+}) {
+  const ids = useFieldIds(id);
+  return (
+    <fieldset
+      className={cx('field', 'field-group', error && 'has-error', className)}
+      aria-describedby={describedBy(ids, { hint, error })}
+      data-testid={testId}
+    >
+      <legend className="field-label">{label}</legend>
+      <div className="field-group-body">{children}</div>
+      <FieldMessage ids={ids} hint={hint} error={error} />
+    </fieldset>
+  );
+}

@@ -4,6 +4,7 @@ import {
   buildFailureCard,
   describeRunResult,
   nodeStatusLine,
+  plainCheck,
   plainFailure,
   sectionToEdit,
   stateView,
@@ -104,6 +105,29 @@ describe('describeRunResult', () => {
       result({ summary: { ...summary, total: 1, succeeded: 1, failed: 0, skipped: 0 } })
     );
     expect(view.detail).toBe('4.2 s, 1 succeeded of 1 step');
+  });
+});
+
+describe('plainCheck', () => {
+  it('names the file, the check as the panel labels it, and the fix', () => {
+    expect(plainCheck('non_empty on all outputs: empty.txt: is empty')).toBe(
+      'empty.txt is empty, but "Outputs must be non-empty" is on. Check the command, or turn the check off.'
+    );
+    expect(plainCheck('min_lines 5 on counts.tsv: counts.tsv: has 2 lines, expected at least 5')).toBe(
+      'counts.tsv has 2 lines, expected at least 5, but "At least 5 lines" is on. Check the command, or turn the check off.'
+    );
+    expect(plainCheck('exists on out/{sample}.bam (non-blocking): out/a.bam: does not exist')).toContain(
+      'out/a.bam does not exist, but "Outputs must exist" is on.'
+    );
+  });
+
+  it('explains a check aimed at no output', () => {
+    expect(plainCheck('exists on gone.txt: no matching output to check')).toContain('no output matches');
+  });
+
+  it('keeps text in another shape', () => {
+    expect(plainCheck('empty.txt is empty')).toBe('empty.txt is empty');
+    expect(plainCheck(undefined)).toBe('');
   });
 });
 

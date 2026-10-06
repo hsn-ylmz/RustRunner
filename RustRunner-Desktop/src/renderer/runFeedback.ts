@@ -152,6 +152,35 @@ export function plainFailure(message: string | undefined): string {
   return text;
 }
 
+/** The output-check names as the properties panel shows them. */
+const CHECK_NAMES: Record<string, (lines?: string) => string> = {
+  exists: () => 'Outputs must exist',
+  non_empty: () => 'Outputs must be non-empty',
+  min_lines: (lines) => (lines ? `At least ${lines} lines` : 'At least N lines'),
+};
+
+/**
+ * An engine check failure ("non_empty on all outputs: empty.txt: is empty")
+ * as a sentence that names the file, the check as the panel labels it, and
+ * what to do. Text in another shape is returned unchanged.
+ */
+export function plainCheck(message: string | undefined): string {
+  const text = (message ?? '').trim();
+  const m = /^(exists|non_empty|min_lines)(?: (\d+))? on .+?(?: \(non-blocking\))?: (.+)$/.exec(text);
+  if (!m) return text;
+  const name = CHECK_NAMES[m[1]](m[2]);
+  const detail = m[3];
+  if (detail === 'no matching output to check') {
+    return `"${name}" is on, but no output matches what it should check. Pick another output for it.`;
+  }
+  const split =
+    /^(.*?): (does not exist|is empty|has \d+ lines?, expected at least \d+|is a directory, so lines cannot be counted|cannot be read.*)$/.exec(
+      detail
+    );
+  const what = split ? `${split[1]} ${split[2]}` : detail;
+  return `${what}, but "${name}" is on. Check the command, or turn the check off.`;
+}
+
 /**
  * Describes the first failed step, in canvas order, or null when nothing
  * failed. `logs` is the raw log, searched for the step's stderr.
@@ -179,7 +208,7 @@ export function buildFailureCard(
     engineId,
     headline: `"${node.label}" failed`,
     what: plainFailure(status.message),
-    check: status.failedCheck,
+    check: status.failedCheck ? plainCheck(status.failedCheck) : undefined,
     stderr: extractStderrTail(logs, engineId),
     notRun,
   };

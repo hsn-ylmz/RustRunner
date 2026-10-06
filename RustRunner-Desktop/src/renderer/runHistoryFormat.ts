@@ -16,10 +16,23 @@ export function formatDuration(secs: number): string {
   return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`;
 }
 
-/** The start time in the viewer's locale; the raw text when it is not a date. */
-export function formatStarted(entry: Pick<RunHistoryEntry, 'startedAt' | 'startedMs'>): string {
+/**
+ * The start time in the viewer's locale with the month as a word ("7 Oct
+ * 2026, 00:01"), so day and month cannot be confused; the raw text when it is
+ * not a date. `locale` is for tests.
+ */
+export function formatStarted(
+  entry: Pick<RunHistoryEntry, 'startedAt' | 'startedMs'>,
+  locale?: string
+): string {
   if (entry.startedMs === null) return entry.startedAt;
-  return new Date(entry.startedMs).toLocaleString();
+  return new Date(entry.startedMs).toLocaleString(locale, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 /** Icon and wording for each run outcome; the icon never stands alone. */

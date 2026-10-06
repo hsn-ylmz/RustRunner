@@ -22,6 +22,7 @@ export type IconName =
   | 'file'
   | 'spinner'
   | 'chevron-down'
+  | 'pencil'
   | 'play'
   | 'pause'
   | 'stop';
@@ -64,6 +65,7 @@ const PATHS: Record<IconName, ReactNode> = {
   ),
   spinner: <path d="M8 2a6 6 0 1 0 6 6" />,
   'chevron-down': <path d="M4 6l4 4 4-4" />,
+  pencil: <path d="M10.5 3.5l2 2L6 12H4v-2l6.5-6.5zM9 5l2 2" />,
   play: <path d="M5 3.5v9l7.5-4.5z" />,
   pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
   stop: <path d="M4.5 4.5h7v7h-7z" />,

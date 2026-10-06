@@ -73,6 +73,8 @@ describe('summaries', () => {
     expect(sectionSummary('io', { input: 'a.txt', output: 'b.txt' })).toBe('in: a.txt, out: b.txt');
     expect(sectionSummary('io', { input: '', output: '' })).toBe('no input, no output');
     expect(sectionSummary('io', { output: 'o' }, { fileCount: 3 })).toBe('3 files, out: o');
+    expect(sectionSummary('io', { input: 'a', output: 'b' }, { upstreamCount: 1 })).toBe('after 1 step, in: a, out: b');
+    expect(sectionSummary('io', { output: 'b' }, { upstreamCount: 2 })).toMatch(/^after 2 steps, /);
     expect(sectionSummary('io', { input: 'x'.repeat(60), output: '' })).toMatch(/…/);
   });
 

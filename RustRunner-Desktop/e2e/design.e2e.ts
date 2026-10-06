@@ -69,5 +69,12 @@ test('tabs move with the arrow keys and node colours have names', async ({ page 
 
   await page.getByTestId('add-node').click();
   await selectNode(page, 'Node 1');
-  await expect(page.getByRole('button', { name: 'Node colour: Rose' })).toBeVisible();
+  // Colour is a named radio group in the panel: arrow keys move and choose.
+  const colours = page.getByRole('radiogroup', { name: 'Node colour' });
+  await expect(colours.getByRole('radio', { name: 'Rose' })).toBeVisible();
+  await colours.getByRole('radio', { checked: true }).focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(colours.getByRole('radio', { name: 'Lilac' })).toBeFocused();
+  await expect(colours.getByRole('radio', { name: 'Lilac' })).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('workflow-node').first()).toHaveAttribute('style', /--node-lilac/);
 });

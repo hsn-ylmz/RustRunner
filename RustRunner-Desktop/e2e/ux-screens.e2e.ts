@@ -42,12 +42,12 @@ function shooter(page: Page, scheme: Scheme, group: string) {
   };
 }
 
-async function prepare(page: Page, app: any, scheme: Scheme) {
-  await app.evaluate(({ BrowserWindow }: any) => {
+async function prepare(page: Page, app: any, scheme: Scheme, size = { width: 1440, height: 900 }) {
+  await app.evaluate(({ BrowserWindow }: any, { width, height }: { width: number; height: number }) => {
     const w = BrowserWindow.getAllWindows()[0];
-    w.setContentSize(1440, 900);
+    w.setContentSize(width, height);
     w.center();
-  });
+  }, size);
   await page.emulateMedia({ colorScheme: scheme });
   await page.waitForTimeout(300);
 }
@@ -221,7 +221,8 @@ for (const scheme of SCHEMES) {
     await selectNode(page, 'Node 3');
     await shoot('validation-incomplete-step');
 
-    await page.getByTestId('problems-close').click();
+    // Adding a step closed the problem list, so it does not cover the new step.
+    await expect(page.getByTestId('problems-panel')).toHaveCount(0);
     await page.getByTestId('run').hover();
     await shoot('validation-run-disabled-reason');
   });
@@ -251,5 +252,36 @@ for (const scheme of SCHEMES) {
     await shoot('logs-search-and-copy-toast');
     await page.getByTestId('log-search').fill('zzz-no-such-text');
     await shoot('logs-no-match');
+  });
+
+  test(`${scheme}: compact window (1024x700)`, async ({ page, app }) => {
+    await prepare(page, app, scheme, { width: 1024, height: 700 });
+    const shoot = shooter(page, scheme, 'compact');
+
+    await shoot('empty-canvas');
+    await page.getByTestId('open-palette').click();
+    await shoot('catalog-palette');
+    await page.getByTestId('palette-search').press('Escape');
+
+    await buildChain(page, [
+      { label: 'Empty', command: 'touch {output}', output: 'empty.txt' },
+      { label: 'Next', command: 'cp {input} {output}', input: 'empty.txt', output: 'next.txt' },
+    ]);
+    await selectNode(page, 'Empty');
+    await shoot('node-selected');
+    await openSection(page, 'checks');
+    await page.getByTestId('prop-check-non-empty').check();
+    await page.keyboard.press('Escape');
+
+    await page.getByTestId('run-from-scratch').click();
+    await expect(page.getByTestId('failure-card')).toBeVisible();
+    await shoot('failed-run');
+
+    await selectNode(page, 'Empty');
+    await shoot('failed-node-selected');
+
+    await page.getByTestId('details').click();
+    await shoot('dialog-details');
+    await page.getByRole('button', { name: 'Cancel' }).click();
   });
 }

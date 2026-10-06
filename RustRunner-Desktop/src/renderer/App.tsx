@@ -36,7 +36,12 @@ import {
   labelToId,
   validateWorkflow,
 } from './workflowConversion';
-import { occupiedRects } from './nodePlacement';
+import {
+  belowPosition,
+  occupiedRects,
+  typicalNodeSize,
+  viewportToReveal,
+} from './nodePlacement';
 import {
   emptyHistory,
   record,
@@ -77,7 +82,12 @@ import {
   validateCatalogNodes,
   type CatalogTool,
 } from './tools/catalog';
-import { WorkflowCanvas, nextNodePosition } from './components/WorkflowCanvas';
+import {
+  DEFAULT_EDGE_OPTIONS,
+  WorkflowCanvas,
+  nextNodePosition,
+} from './components/WorkflowCanvas';
+import { setConnection, upstreamChoices } from './connections';
 import { DEFAULT_NODE_COLOR } from './nodeColors';
 import {
   Badge,
@@ -85,10 +95,12 @@ import {
   Checkbox,
   ConfirmDialog,
   Dialog,
+  Icon,
   IconButton,
   Kbd,
   TextField,
   ToastHost,
+  Tooltip,
   useToasts,
   type ConfirmRequest,
 } from './ui';
@@ -161,7 +173,7 @@ function WorkflowEditorInner() {
   const flowWrapperRef = useRef<HTMLDivElement>(null);
   /** The catalog button, so closing the palette hands focus back to it. */
   const paletteButtonRef = useRef<HTMLButtonElement>(null);
-  const { screenToFlowPosition, fitView } = useReactFlow();
+  const { screenToFlowPosition, fitView, getViewport, setViewport } = useReactFlow();
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   /** The problem list is open (the person asked, or tried to run with problems). */
@@ -490,6 +502,19 @@ function WorkflowEditorInner() {
     [markDirty, recordEdit]
   );
 
+  /**
+   * "Runs after" in the properties panel: the keyboard's way to connect two
+   * steps. Same edge as a drag, one undo step; loops are refused.
+   */
+  const onConnectionChange = useCallback(
+    (sourceId: string, targetId: string, connected: boolean) => {
+      recordEdit();
+      setEdges((eds) => setConnection(eds, sourceId, targetId, connected, DEFAULT_EDGE_OPTIONS));
+      markDirty();
+    },
+    [markDirty, recordEdit]
+  );
+
   /** A drag is one undo step: the state from before it started. */
   const onDragStart = useCallback(() => recordEdit(), [recordEdit]);
 
@@ -531,19 +556,47 @@ function WorkflowEditorInner() {
     [markDirty, recordEdit]
   );
 
+  /**
+   * Where a new step goes: under the selected step, or under the one added
+   * last, so a chain reads top to bottom and its connections run straight
+   * down (see belowPosition). The view pans when that spot is off screen.
+   * With nothing to follow, the first free cell of the visible canvas.
+   */
+  const placeNewNode = useCallback((): { x: number; y: number } => {
+    const occupied = occupiedRects(nodes);
+    const anchorNode = nodes.find((n: any) => n.id === selectedNodeId) ?? nodes[nodes.length - 1];
+    const below = anchorNode ? belowPosition(occupiedRects([anchorNode])[0], occupied) : null;
+    if (!below) {
+      return nextNodePosition(flowWrapperRef.current, nodes.length, screenToFlowPosition, occupied);
+    }
+    const wrapper = flowWrapperRef.current;
+    if (wrapper) {
+      const box = wrapper.getBoundingClientRect();
+      const current = getViewport();
+      const next = viewportToReveal(
+        current,
+        { ...below, ...typicalNodeSize(occupied) },
+        { width: box.width, height: box.height },
+        // Clear of the run controls on the left; on the right, of the
+        // properties panel that opens when nothing was selected yet.
+        { top: 16, left: 216, bottom: 24, right: 24 + (selectedNodeId ? 0 : 320) }
+      );
+      if (next.x !== current.x || next.y !== current.y) void setViewport(next);
+    }
+    return below;
+  }, [nodes, selectedNodeId, screenToFlowPosition, getViewport, setViewport]);
+
   const addNode = useCallback(() => {
     recordEdit();
 
-    const position = nextNodePosition(
-      flowWrapperRef.current,
-      nodes.length,
-      screenToFlowPosition,
-      occupiedRects(nodes)
-    );
+    const position = placeNewNode();
 
+    // Selected at once, like a step from the catalog, so its properties are
+    // next in the tab order and the keyboard can fill it in straight away.
     const newNode = {
       id: `node_${Date.now()}`,
       position,
+      selected: true,
       data: {
         label: `Node ${nodes.length + 1}`,
         tool: '',
@@ -555,21 +608,20 @@ function WorkflowEditorInner() {
       },
       type: 'custom',
     };
-    setNodes((nds) => [...nds, newNode]);
+    setNodes((nds) => [...nds.map((n: any) => (n.selected ? { ...n, selected: false } : n)), newNode]);
+    setEdges((eds) => (eds.some((e: any) => e.selected) ? eds.map((e: any) => ({ ...e, selected: false })) : eds));
+    setSelectedNodeId(newNode.id);
+    // The problem list would cover the new step; its button stays.
+    setProblemsOpen(false);
     markDirty();
-  }, [nodes, screenToFlowPosition, recordEdit, markDirty]);
+  }, [nodes, placeNewNode, recordEdit, markDirty]);
 
   /** Adds a node prefilled from a catalog tool and selects it, so its options show. */
   const addCatalogNode = useCallback(
     (tool: CatalogTool) => {
       recordEdit();
 
-      const position = nextNodePosition(
-        flowWrapperRef.current,
-        nodes.length,
-        screenToFlowPosition,
-        occupiedRects(nodes)
-      );
+      const position = placeNewNode();
 
       const newNode = {
         id: `node_${Date.now()}`,
@@ -584,9 +636,10 @@ function WorkflowEditorInner() {
       setNodes((nds) => [...nds.map((n: any) => ({ ...n, selected: false })), newNode]);
       setSelectedNodeId(newNode.id);
       setPaletteOpen(false);
+      setProblemsOpen(false);
       markDirty();
     },
-    [nodes, screenToFlowPosition, recordEdit, markDirty]
+    [nodes, placeNewNode, recordEdit, markDirty]
   );
 
   /** Removes the selected steps (with their connections) and the selected connections. */
@@ -1349,87 +1402,119 @@ function WorkflowEditorInner() {
         />
       )}
 
+      {/* The workflow bar: a row above the canvas, never over it, so the canvas
+          and its overlays keep their place whatever the window width. */}
+      <header className="top-toolbar" aria-label="Workflow">
+        <div className="workflow-info">
+          <div className="workflow-title" data-testid="workflow-title">
+            <Tooltip content="Rename the workflow, set its version and what happens after a failure">
+              <button
+                type="button"
+                className="workflow-name-button"
+                data-testid="details"
+                onClick={handleEditDetails}
+              >
+                <span className="workflow-name">{workflowName}</span>
+                <Icon name="pencil" size={14} className="workflow-name-icon" />
+                <span className="visually-hidden">(workflow details)</span>
+              </button>
+            </Tooltip>
+            {isDirty && (
+              <Badge tone="neutral" variant="outline" className="dirty-marker">
+                Unsaved
+              </Badge>
+            )}
+          </div>
+          <div className="workflow-location">
+            <Tooltip
+              content={
+                workingDirectory
+                  ? `Results go to ${workingDirectory}. Click to choose another folder.`
+                  : 'Choose the folder where results are written. Run asks for one if none is set.'
+              }
+            >
+              <button
+                type="button"
+                className={workingDirectory ? 'working-directory' : 'working-directory is-unset'}
+                data-testid="set-directory"
+                onClick={handleSelectDirectory}
+              >
+                <Icon name="folder" size={12} />
+                {workingDirectory
+                  ? `Folder: ${workingDirectory.replace(/^.*[\\/]/, '')}`
+                  : 'Choose results folder'}
+              </button>
+            </Tooltip>
+            {currentFilePath && (
+              <span className="workflow-file" title={currentFilePath}>
+                <Icon name="file" size={12} />
+                {currentFilePath.replace(/^.*[\\/]/, '')}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="file-buttons" role="group" aria-label="File">
+          <Button variant="ghost" onClick={handleNew}>New</Button>
+          <Button variant="ghost" onClick={handleOpen}>Open</Button>
+          <Button variant="ghost" onClick={handleSave}>Save</Button>
+          <Button variant="ghost" onClick={handleSaveAs}>Save as</Button>
+          <Button
+            variant="ghost"
+            onClick={handleClear}
+            tooltip="Remove every step from the canvas"
+          >
+            Clear canvas
+          </Button>
+        </div>
+
+        <div className="edit-buttons" role="group" aria-label="Steps">
+          <Button
+            ref={paletteButtonRef}
+            onClick={() => (paletteOpen ? closePalette() : openPalette())}
+            data-testid="open-palette"
+            aria-expanded={paletteOpen}
+            tooltip={
+              <>
+                Search the bundled catalog of common bioinformatics tools{' '}
+                <Kbd keys={formatKeys('Mod+K', IS_MAC)} />
+              </>
+            }
+          >
+            Tool catalog
+          </Button>
+          <Button
+            icon="plus"
+            onClick={addNode}
+            data-testid="add-node"
+            tooltip="Add a step whose command you write yourself"
+          >
+            Add node
+          </Button>
+          <Button
+            icon="trash"
+            onClick={deleteSelection}
+            data-testid="delete-node"
+            disabledReason={
+              selectedNode || selectedEdgeCount > 0
+                ? undefined
+                : 'Select a step or a connection to delete it'
+            }
+            tooltip="Delete the selected step or connection (Delete key)"
+          >
+            Delete
+          </Button>
+          <IconButton
+            icon="info"
+            label="Keyboard shortcuts (?)"
+            onClick={() => setShortcutsOpen(true)}
+            data-testid="open-shortcuts"
+          />
+        </div>
+      </header>
+
       <div className="main-content">
         <div className="flow-container" ref={flowWrapperRef}>
-          {/* Top Toolbar */}
-          <div className="top-toolbar" role="toolbar" aria-label="Workflow">
-            <div className="workflow-info">
-              <div className="workflow-title" data-testid="workflow-title">
-                <span className="workflow-name">{workflowName}</span>
-                {isDirty && (
-                  <Badge tone="neutral" variant="outline" className="dirty-marker">
-                    Unsaved
-                  </Badge>
-                )}
-              </div>
-              {(currentFilePath || workingDirectory) && (
-                <div className="working-directory" title={currentFilePath || workingDirectory}>
-                  {currentFilePath ? 'File' : 'Folder'}:{' '}
-                  {(currentFilePath || workingDirectory).replace(/^.*[\\\/]/, '')}
-                </div>
-              )}
-            </div>
-
-            <div className="file-buttons">
-              <Button variant="ghost" onClick={handleNew}>New</Button>
-              <Button variant="ghost" onClick={handleOpen}>Open</Button>
-              <Button variant="ghost" onClick={handleSave}>Save</Button>
-              <Button variant="ghost" onClick={handleSaveAs}>Save as</Button>
-              <Button
-                variant="ghost"
-                onClick={handleClear}
-                tooltip="Remove every step from the canvas"
-              >
-                Clear canvas
-              </Button>
-              <Button variant="ghost" data-testid="details" onClick={handleEditDetails}>
-                Details
-              </Button>
-              <Button variant="ghost" onClick={handleSelectDirectory} data-testid="set-directory">
-                Set directory
-              </Button>
-            </div>
-
-            <div className="edit-buttons">
-              <Button
-                ref={paletteButtonRef}
-                onClick={() => (paletteOpen ? closePalette() : openPalette())}
-                data-testid="open-palette"
-                aria-expanded={paletteOpen}
-                tooltip={
-                  <>
-                    Search the bundled catalog of common bioinformatics tools{' '}
-                    <Kbd keys={formatKeys('Mod+K', IS_MAC)} />
-                  </>
-                }
-              >
-                Tool catalog
-              </Button>
-              <Button icon="plus" onClick={addNode} data-testid="add-node">
-                Add node
-              </Button>
-              <Button
-                icon="trash"
-                onClick={deleteSelection}
-                data-testid="delete-node"
-                disabledReason={
-                  selectedNode || selectedEdgeCount > 0
-                    ? undefined
-                    : 'Select a step or a connection to delete it'
-                }
-                tooltip="Delete the selected step or connection (Delete key)"
-              >
-                Delete
-              </Button>
-              <IconButton
-                icon="info"
-                label="Keyboard shortcuts (?)"
-                onClick={() => setShortcutsOpen(true)}
-                data-testid="open-shortcuts"
-              />
-            </div>
-          </div>
-
           {/* Run controls: what is happening, how to start, how to hold or end it. */}
           <div
             className="execution-controls"
@@ -1472,6 +1557,7 @@ function WorkflowEditorInner() {
               </Button>
 
               <Button
+                size="sm"
                 fullWidth
                 onClick={handleRunFromScratch}
                 data-testid="run-from-scratch"
@@ -1486,6 +1572,7 @@ function WorkflowEditorInner() {
               </Button>
 
               <Button
+                size="sm"
                 fullWidth
                 onClick={handleDryRun}
                 data-testid="dry-run"
@@ -1500,8 +1587,9 @@ function WorkflowEditorInner() {
               </Button>
             </div>
 
-            <div className="run-group" role="group" aria-label="During a run">
+            <div className="run-group run-group-row" role="group" aria-label="During a run">
               <Button
+                size="sm"
                 fullWidth
                 icon="pause"
                 pressed={executionState === 'paused'}
@@ -1522,6 +1610,7 @@ function WorkflowEditorInner() {
 
               <Button
                 variant="danger"
+                size="sm"
                 fullWidth
                 icon="stop"
                 onClick={handleStop}
@@ -1619,6 +1708,10 @@ function WorkflowEditorInner() {
             onFocusHandled={() => setFocusRequest(null)}
             keepGoing={keepGoing}
             onOpenDetails={handleEditDetails}
+            upstream={upstreamChoices(nodes, edges, selectedNode.id)}
+            onConnectionChange={(sourceId, connected) =>
+              onConnectionChange(sourceId, selectedNode.id, connected)
+            }
           />
         )}
       </div>
