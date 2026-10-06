@@ -589,8 +589,8 @@ export function PropertiesPanel({
         <div className="property-hint">
           Creates the step's outputs instead of running it: empty files, and folders for
           paths ending in /. Use it to try the rest of the workflow without the real tool.
-          Non-empty and line-count checks are skipped, and a mocked step never counts as up
-          to date, so a real run executes it.
+          Non-empty and line-count checks are skipped. A mocked step, and every step after
+          it, never counts as up to date, so a real run executes them.
         </div>
       </div>
 

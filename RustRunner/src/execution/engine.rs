@@ -351,6 +351,35 @@ impl Engine {
             .any(|s| s.id == step_id && s.mock)
     }
 
+    /// Whether the step's result rests on a mock: the step is mocked, or a
+    /// step it depends on (directly or further up) is. Such a step's outputs
+    /// were made from placeholders, so its success is never remembered as up
+    /// to date; otherwise removing the mocked step later would leave a
+    /// placeholder-derived result that looks current.
+    fn rests_on_mock(&self, step_id: &str) -> bool {
+        let by_id: HashMap<&str, &crate::workflow::Step> = self
+            .workflow
+            .steps
+            .iter()
+            .map(|s| (s.id.as_str(), s))
+            .collect();
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut stack = vec![step_id];
+        while let Some(id) = stack.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            let Some(step) = by_id.get(id) else {
+                continue;
+            };
+            if step.mock {
+                return true;
+            }
+            stack.extend(step.previous.iter().map(String::as_str));
+        }
+        false
+    }
+
     /// Reports a finished step: its event and the run totals.
     fn report_completion(&self, step_id: &str, attempts: u32, result: &Result<(), String>) {
         let mocked = self.is_mocked(step_id);
@@ -756,9 +785,10 @@ impl Engine {
                         info!("Step '{}' completed successfully", step_id);
                         planner.mark_step_completed(&step_id);
                         timeline.add_event(step_id.clone(), EventType::Completed);
-                        // A mocked step made placeholders: it must not be
-                        // remembered as done, or a later real run would skip it.
-                        if !self.is_mocked(&step_id) {
+                        // A mocked step made placeholders, and a step after it
+                        // consumed them: neither may be remembered as done, or a
+                        // later real run could skip it.
+                        if !self.rests_on_mock(&step_id) {
                             state.mark_completed(&step_id);
                             record_definition(&mut state, &definitions, &step_id);
                         }
@@ -828,7 +858,7 @@ impl Engine {
                         info!("Step '{}' completed successfully", done.step_id);
                         planner.mark_step_completed(&done.step_id);
                         timeline.add_event(done.step_id.clone(), EventType::Completed);
-                        if !self.is_mocked(&done.step_id) {
+                        if !self.rests_on_mock(&done.step_id) {
                             state.mark_completed(&done.step_id);
                             record_definition(&mut state, &definitions, &done.step_id);
                         }
@@ -2073,8 +2103,10 @@ mod tests {
         let state = state_in(dir.path());
         assert!(!state.completed_steps.contains("mk_m3_up"));
         assert!(!state.step_hashes.contains_key("mk_m3_up"));
-        // The real step after it is remembered as usual.
-        assert!(state.completed_steps.contains("mk_m3_down"));
+        // The real step after it ran on placeholder inputs, so its result is
+        // not remembered either (see the test below for why).
+        assert!(!state.completed_steps.contains("mk_m3_down"));
+        assert!(!state.step_hashes.contains_key("mk_m3_down"));
 
         // The same workflow, no longer mocked: the tool runs now even though
         // the placeholder outputs exist, and so does everything downstream.
@@ -2093,6 +2125,53 @@ mod tests {
         let state = state_in(dir.path());
         assert!(state.completed_steps.contains("mk_m3_up"));
         assert!(state.step_hashes.contains_key("mk_m3_up"));
+        // Once everything ran for real, the downstream step is remembered too.
+        assert!(state.completed_steps.contains("mk_m3_down"));
+        assert!(state.step_hashes.contains_key("mk_m3_down"));
+    }
+
+    #[test]
+    fn test_a_step_that_ran_on_mocked_inputs_is_never_up_to_date() {
+        let dir = tempdir().unwrap();
+        // up (mocked) -> down -> after: down and after consume placeholders,
+        // directly and through down.
+        let mut wf = mock_workflow("m7", true);
+        let after = Step::new(
+            "mk_m7_after",
+            "bash",
+            "touch m7.after.ran; echo a > after.txt",
+        )
+        .with_output("after.txt")
+        .depends_on("mk_m7_down");
+        wf.steps[1].next.push("mk_m7_after".to_string());
+        wf.steps.push(after);
+        let (result, _) = run_with_events_in(wf, dir.path(), false);
+        result.unwrap();
+        assert!(dir.path().join("m7.down.ran").exists());
+        assert!(dir.path().join("m7.after.ran").exists());
+
+        let state = state_in(dir.path());
+        for id in ["mk_m7_up", "mk_m7_down", "mk_m7_after"] {
+            assert!(!state.completed_steps.contains(id), "{id} remembered");
+            assert!(!state.step_hashes.contains_key(id), "{id} hashed");
+        }
+
+        // The mocked step is removed from the workflow altogether. The step
+        // that consumed its placeholder keeps the very same definition and its
+        // output exists, but its result came from a placeholder, so it must
+        // run again rather than be skipped as up to date.
+        fs::remove_file(dir.path().join("m7.down.ran")).unwrap();
+        std::thread::sleep(Duration::from_millis(1100));
+        let down_only = Workflow::from_steps(vec![Step::new(
+            "mk_m7_down",
+            "bash",
+            "touch m7.down.ran; echo d > down.txt",
+        )
+        .with_output("down.txt")]);
+        let (result, events) = run_with_events_in(down_only, dir.path(), false);
+        result.unwrap();
+        assert!(dir.path().join("m7.down.ran").exists(), "must re-run");
+        assert!(events.iter().all(|e| e["event"] != "step_skipped"));
     }
 
     #[test]

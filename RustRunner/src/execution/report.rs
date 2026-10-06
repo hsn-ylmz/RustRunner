@@ -35,6 +35,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use log::warn;
@@ -1079,8 +1080,15 @@ pub fn is_safe_run_id(id: &str) -> bool {
 
 /// Writes `contents` to `path` through a temporary file, so a reader (or a
 /// process that is killed half way) never sees a partial file.
+///
+/// The temporary name carries the process id and a per-process counter: two
+/// engines finishing in the same working directory at once must not truncate
+/// or rename each other's temporary file (the index is then last write wins,
+/// but neither write fails).
 fn write_atomic(path: &Path, contents: &str) -> io::Result<()> {
-    let tmp = path.with_extension("tmp");
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = path.with_extension(format!("{}-{}.tmp", std::process::id(), unique));
     {
         let mut file = fs::File::create(&tmp)?;
         file.write_all(contents.as_bytes())?;
@@ -1548,6 +1556,53 @@ mod tests {
         let ctx = context(&runs, vec![info("a", &[])]);
         store_run(&runs, &record("run-1", &ctx, &RunLog::default()), 1).unwrap();
         assert!(victim.is_dir());
+    }
+
+    #[test]
+    fn test_writes_do_not_collide_with_another_writers_temporary_file() {
+        // Another engine process writing the same index at the same moment
+        // has its own temporary file in flight; it must not make this run's
+        // write fail (that would drop `report` from `run_finished`).
+        let tmp = tempfile::tempdir().unwrap();
+        let runs = tmp.path().join(RUNS_DIR);
+        fs::create_dir_all(runs.join("index.tmp")).unwrap();
+        let ctx = context(&runs, vec![info("a", &[])]);
+        let report = write_run(&runs, &record("run-1", &ctx, &RunLog::default())).unwrap();
+        assert!(report.is_file());
+        assert_eq!(read_index(&runs).len(), 1);
+        // The foreign file is left alone, and none of ours is left behind.
+        assert!(runs.join("index.tmp").is_dir());
+        let leftovers: Vec<String> = fs::read_dir(&runs)
+            .unwrap()
+            .chain(fs::read_dir(runs.join("run-1")).unwrap())
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp") && name != "index.tmp")
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_pruning_a_symlinked_run_removes_only_the_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs = tmp.path().join(RUNS_DIR);
+        let victim = tmp.path().join("precious");
+        fs::create_dir_all(&victim).unwrap();
+        fs::write(victim.join("keep.txt"), "data").unwrap();
+        fs::create_dir_all(&runs).unwrap();
+        std::os::unix::fs::symlink(&victim, runs.join("run-0")).unwrap();
+        let entry = serde_json::json!({
+            "version": 1,
+            "runs": [{
+                "run_id": "run-0", "workflow": "x", "status": "failed",
+                "started_at": "", "report": "run-0/report.html"
+            }]
+        });
+        fs::write(runs.join(INDEX_FILE), entry.to_string()).unwrap();
+        let ctx = context(&runs, vec![info("a", &[])]);
+        store_run(&runs, &record("run-1", &ctx, &RunLog::default()), 1).unwrap();
+        assert!(fs::symlink_metadata(runs.join("run-0")).is_err());
+        assert_eq!(fs::read_to_string(victim.join("keep.txt")).unwrap(), "data");
     }
 
     #[test]

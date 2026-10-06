@@ -260,7 +260,8 @@ pub struct Step {
     /// Do not run the tool: create (or touch) the declared outputs instead, so
     /// the rest of the workflow can be tried out without the real tool or its
     /// data. Files are created empty, outputs ending in `/` become
-    /// directories. A mocked step never counts as up to date.
+    /// directories. A mocked step never counts as up to date, and neither
+    /// does a step after it (its result came from placeholders).
     #[serde(default, skip_serializing_if = "is_false")]
     pub mock: bool,
 }
