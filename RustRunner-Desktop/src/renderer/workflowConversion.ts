@@ -68,6 +68,12 @@ export function convertNodesToWorkflow(
       step.timeout_secs = timeoutSecs;
     }
 
+    // Output checks mirror the Rust `checks` list; omitted when none apply.
+    const checks = buildChecks(node.data);
+    if (checks.length > 0) {
+      step.checks = checks;
+    }
+
     // Omit the key entirely when empty — Rust skips serializing empty maps and
     // an empty mapping would just be noise in the YAML.
     if (files.length > 0) {
@@ -111,6 +117,55 @@ export function normalizeRetryDelay(value: unknown): number {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n) || n < 0) return DEFAULT_RETRY_DELAY_SECS;
   return Math.min(n, MAX_RETRY_DELAY_SECS);
+}
+
+/** An output check as the Rust `OutputCheck` deserializes it. */
+export interface OutputCheckYaml {
+  kind: 'exists' | 'non_empty' | 'min_lines';
+  lines?: number;
+  blocking?: false;
+}
+
+/** A positive whole number of lines, or undefined when not usable. */
+export function normalizeMinLines(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n >= 1 ? n : undefined;
+}
+
+/** Checkbox state is stored as a boolean, but tolerate 'true' from old/loose data. */
+function isOn(value: unknown): boolean {
+  return value === true || value === 'true';
+}
+
+/** The "Blocking" toggle defaults to on; only an explicit off disables it. */
+export function isBlocking(value: unknown): boolean {
+  return !(value === false || value === 'false');
+}
+
+/**
+ * Turns the Properties panel's check presets into the engine's `checks` list.
+ * Checks need an output to look at, so a step without one emits none (the
+ * Rust validator would reject them). `blocking` is only written when off,
+ * because true is the engine default.
+ */
+export function buildChecks(data: any): OutputCheckYaml[] {
+  if (!data?.output) return [];
+  const checks: OutputCheckYaml[] = [];
+  if (isOn(data.checkExists)) checks.push({ kind: 'exists' });
+  if (isOn(data.checkNonEmpty)) checks.push({ kind: 'non_empty' });
+  if (isOn(data.checkMinLinesEnabled)) {
+    // An enabled preset with an unusable N would be rejected by the engine
+    // (min_lines 0 can never fail), so it is dropped instead.
+    const lines = normalizeMinLines(data.checkMinLines);
+    if (lines !== undefined) checks.push({ kind: 'min_lines', lines });
+  }
+  if (!isBlocking(data.checkBlocking)) {
+    checks.forEach((c) => {
+      c.blocking = false;
+    });
+  }
+  return checks;
 }
 
 /** A positive whole number of seconds, or undefined for "no timeout". */

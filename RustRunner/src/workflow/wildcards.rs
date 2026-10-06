@@ -239,6 +239,14 @@ pub fn expand_workflow_wildcards(
                 .map(|output| substitute_wildcard(output, wildcard_name, value))
                 .collect();
 
+            // Substitute wildcards in check targets so they keep matching
+            // the expanded outputs
+            for check in &mut new_step.checks {
+                if let Some(target) = check.target.as_mut() {
+                    *target = substitute_wildcard(target, wildcard_name, value);
+                }
+            }
+
             // Substitute wildcards in command
             new_step.command = substitute_wildcard(&step.command, wildcard_name, value);
 
@@ -284,6 +292,27 @@ fn substitute_wildcard(text: &str, wildcard_name: &str, value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::{CheckKind, OutputCheck, Step};
+
+    #[test]
+    fn test_expansion_substitutes_check_targets() {
+        let step = Step::new("count", "bash", "wc -l {input} > {output}")
+            .with_input("{sample}.txt")
+            .with_output("{sample}.cnt")
+            .with_check(OutputCheck::new(CheckKind::Exists).with_target("{sample}.cnt"));
+        let mut wf = Workflow::from_steps(vec![step]);
+        let mut files = HashMap::new();
+        files.insert(
+            "sample".to_string(),
+            vec!["a.txt".to_string(), "b.txt".to_string()],
+        );
+        expand_workflow_wildcards(&mut wf, &files).unwrap();
+        assert_eq!(wf.steps.len(), 2);
+        for s in &wf.steps {
+            let target = s.checks[0].target.clone().unwrap();
+            assert_eq!(vec![target], s.output);
+        }
+    }
 
     #[test]
     fn test_extract_wildcard_values() {

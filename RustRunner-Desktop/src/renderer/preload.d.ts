@@ -18,6 +18,13 @@ interface WorkflowData {
     retry_delay_secs?: number;
     /** Per-attempt wall-clock limit; the step is killed when exceeded. */
     timeout_secs?: number;
+    /** Output checks run after the step succeeds (see the Rust `OutputCheck`). */
+    checks?: Array<{
+      kind: 'exists' | 'non_empty' | 'min_lines';
+      lines?: number;
+      target?: string;
+      blocking?: boolean;
+    }>;
     /**
      * Per-step wildcard mappings (wildcard name -> concrete files). snake_case
      * on purpose: this is serialized straight to YAML and read by the Rust

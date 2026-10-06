@@ -50,6 +50,146 @@ impl RetryBackoff {
     }
 }
 
+/// What an output check verifies.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckKind {
+    /// The output path exists.
+    Exists,
+    /// The output exists and is not empty: a file with at least one byte, or a
+    /// directory with at least one entry.
+    NonEmpty,
+    /// The output is a file with at least `lines` lines.
+    MinLines,
+}
+
+impl CheckKind {
+    /// The YAML spelling of this kind.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Exists => "exists",
+            Self::NonEmpty => "non_empty",
+            Self::MinLines => "min_lines",
+        }
+    }
+}
+
+/// A sanity check run on a step's outputs after the step itself succeeded
+/// (in the spirit of Dagster asset checks).
+///
+/// ```yaml
+/// checks:
+///   - kind: non_empty
+///   - kind: min_lines
+///     lines: 100
+///     target: counts.tsv
+///     blocking: false
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct OutputCheck {
+    /// What to verify.
+    pub kind: CheckKind,
+
+    /// Required line count for `min_lines` (at least 1); must be absent for
+    /// the other kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<u64>,
+
+    /// Which output to check, spelled exactly as in the step's `output`.
+    /// `None` checks every output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+
+    /// A failing blocking check fails the step (and so the workflow); a
+    /// failing non-blocking check only logs a warning.
+    #[serde(default = "default_blocking", skip_serializing_if = "is_true")]
+    pub blocking: bool,
+}
+
+fn default_blocking() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+impl OutputCheck {
+    /// A blocking check of `kind` over all outputs.
+    pub fn new(kind: CheckKind) -> Self {
+        Self {
+            kind,
+            lines: None,
+            target: None,
+            blocking: true,
+        }
+    }
+
+    /// A blocking "at least `lines` lines" check over all outputs.
+    pub fn min_lines(lines: u64) -> Self {
+        Self {
+            lines: Some(lines),
+            ..Self::new(CheckKind::MinLines)
+        }
+    }
+
+    /// Restricts the check to one output.
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    /// Makes a failure only a warning.
+    pub fn non_blocking(mut self) -> Self {
+        self.blocking = false;
+        self
+    }
+
+    /// Human-readable description, e.g. `min_lines 10 on counts.tsv`.
+    pub fn describe(&self) -> String {
+        let mut text = self.kind.as_str().to_string();
+        if let Some(n) = self.lines {
+            text.push_str(&format!(" {}", n));
+        }
+        text.push_str(&format!(
+            " on {}",
+            self.target.as_deref().unwrap_or("all outputs")
+        ));
+        if !self.blocking {
+            text.push_str(" (non-blocking)");
+        }
+        text
+    }
+
+    /// Returns why this check is nonsensical for `step`, if it is.
+    pub fn config_problem(&self, step: &Step) -> Option<String> {
+        match (self.kind, self.lines) {
+            (CheckKind::MinLines, None) => {
+                return Some("min_lines needs a `lines` value".to_string())
+            }
+            (CheckKind::MinLines, Some(0)) => {
+                return Some("min_lines with 0 lines can never fail; use at least 1".to_string())
+            }
+            (CheckKind::Exists | CheckKind::NonEmpty, Some(_)) => {
+                return Some(format!(
+                    "`lines` only applies to min_lines, not {}",
+                    self.kind.as_str()
+                ))
+            }
+            _ => {}
+        }
+        let outputs = step.output_paths();
+        match &self.target {
+            Some(target) if !outputs.iter().any(|o| o == target.trim()) => Some(format!(
+                "target '{}' is not one of the step's outputs",
+                target
+            )),
+            None if outputs.is_empty() => Some("the step has no outputs to check".to_string()),
+            _ => None,
+        }
+    }
+}
+
 /// Represents a single step in a workflow.
 ///
 /// Each step defines a command to execute, along with its inputs, outputs,
@@ -111,6 +251,11 @@ pub struct Step {
     /// killed when it is exceeded. `None` means no limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+
+    /// Checks run on the outputs after the step succeeds. Blocking failures
+    /// fail the step without re-running the tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<OutputCheck>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -192,7 +337,24 @@ impl Step {
             retry_backoff: RetryBackoff::Fixed,
             retry_delay_secs: DEFAULT_RETRY_DELAY_SECS,
             timeout_secs: None,
+            checks: Vec::new(),
         }
+    }
+
+    /// Adds an output check.
+    pub fn with_check(mut self, check: OutputCheck) -> Self {
+        self.checks.push(check);
+        self
+    }
+
+    /// Individual output paths, with comma-separated entries split and trimmed.
+    pub fn output_paths(&self) -> Vec<String> {
+        self.output
+            .iter()
+            .flat_map(|s| s.split(','))
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty())
+            .collect()
     }
 
     /// Sets how many times a failed step is retried.
@@ -483,6 +645,37 @@ impl Default for Workflow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_old_yaml_without_checks_has_none() {
+        let step: Step = serde_yaml::from_str("id: a\ntool: bash\ncommand: x\n").unwrap();
+        assert!(step.checks.is_empty());
+        // And an unchecked step does not serialize the field.
+        assert!(!serde_yaml::to_string(&step).unwrap().contains("checks"));
+    }
+
+    #[test]
+    fn test_checks_parse_with_defaults_and_round_trip() {
+        let yaml = "id: a\ntool: bash\ncommand: x\noutput: o.tsv\nchecks:\n\
+                    \x20 - kind: exists\n\
+                    \x20 - kind: min_lines\n\x20   lines: 10\n\x20   target: o.tsv\n\x20   blocking: false\n";
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.checks[0], OutputCheck::new(CheckKind::Exists));
+        assert_eq!(
+            step.checks[1],
+            OutputCheck::min_lines(10)
+                .with_target("o.tsv")
+                .non_blocking()
+        );
+        let again: Step = serde_yaml::from_str(&serde_yaml::to_string(&step).unwrap()).unwrap();
+        assert_eq!(again.checks, step.checks);
+    }
+
+    #[test]
+    fn test_unknown_check_kind_is_rejected() {
+        let yaml = "id: a\ntool: bash\ncommand: x\nchecks:\n  - kind: sorted\n";
+        assert!(serde_yaml::from_str::<Step>(yaml).is_err());
+    }
 
     #[test]
     fn test_old_yaml_without_retry_fields_gets_defaults() {

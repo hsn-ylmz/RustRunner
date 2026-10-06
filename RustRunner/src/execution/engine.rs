@@ -21,6 +21,7 @@ use crate::environment::conda::{create_env, ToolEnvMap};
 use crate::monitoring::{EventType, ExecutionTimeline, ResourceMonitor};
 use crate::workflow::{ExecutionPlanner, Workflow, WorkflowState};
 
+use super::checks::run_checks;
 use super::step::execute_step_with_retries;
 use super::tools::is_system_tool;
 
@@ -30,9 +31,58 @@ const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 /// Interval for resource monitoring samples.
 const MONITOR_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Message a worker thread sends when its step is done: step id, attempts
-/// used and the final result.
-type StepCompletion = (String, u32, Result<(), String>);
+/// Message a worker thread sends when its step is done.
+struct StepCompletion {
+    step_id: String,
+    /// Attempts used by the tool run (output checks never add attempts).
+    attempts: u32,
+    /// Final result, including blocking output-check failures.
+    result: Result<(), String>,
+    /// Non-blocking output-check failures, to be shown in the summary.
+    warnings: Vec<String>,
+}
+
+/// Runs the checks of a step whose command succeeded. A blocking failure
+/// turns the result into an error; non-blocking ones come back as warnings.
+fn apply_checks(
+    step: &crate::workflow::Step,
+    working_dir: &Option<PathBuf>,
+) -> (Result<(), String>, Vec<String>) {
+    let failures = run_checks(step, working_dir);
+    let mut blocking = Vec::new();
+    let mut warnings = Vec::new();
+    for failure in failures {
+        if failure.blocking {
+            blocking.push(failure.render());
+        } else {
+            warn!(
+                "Step '{}': output check failed: {}",
+                step.id,
+                failure.render()
+            );
+            warnings.push(format!("{}: {}", step.id, failure.render()));
+        }
+    }
+    let result = if blocking.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("output check failed: {}", blocking.join("; ")))
+    };
+    (result, warnings)
+}
+
+/// Formats the "output check warnings" section of the run summary, or `None`
+/// when there are none.
+fn format_check_warnings(warnings: &[String]) -> Option<String> {
+    if warnings.is_empty() {
+        return None;
+    }
+    let mut out = String::from("Output check warnings:");
+    for w in warnings {
+        out.push_str(&format!("\n  {}", w));
+    }
+    Some(out)
+}
 
 /// Formats the "retried steps" section of the run summary, or `None` when no
 /// step needed more than one attempt.
@@ -202,6 +252,7 @@ impl Engine {
 
         // Create channel for step completion
         let (tx, rx): (Sender<StepCompletion>, Receiver<StepCompletion>) = channel();
+        let mut check_warnings: Vec<String> = Vec::new();
 
         // Start resource monitoring
         let monitor_running = Arc::new(AtomicBool::new(true));
@@ -266,6 +317,9 @@ impl Engine {
                         if let Some(secs) = step.timeout_secs {
                             println!("  Timeout: {}s", secs);
                         }
+                        for check in &step.checks {
+                            println!("  Check: {}", check.describe());
+                        }
 
                         timeline.add_event(step.id.clone(), EventType::Completed);
                         planner.mark_step_completed(&step.id);
@@ -286,9 +340,20 @@ impl Engine {
                             &working_dir_clone,
                             pause_clone.as_deref().map(Path::new),
                         );
-                        let result = run.result.map_err(|e| e.to_string());
+                        let mut result = run.result.map_err(|e| e.to_string());
+                        let mut warnings = Vec::new();
+                        if result.is_ok() {
+                            let (checked, warned) = apply_checks(&step_clone, &working_dir_clone);
+                            result = checked;
+                            warnings = warned;
+                        }
 
-                        if let Err(e) = tx.send((step_clone.id.clone(), run.attempts, result)) {
+                        if let Err(e) = tx.send(StepCompletion {
+                            step_id: step_clone.id.clone(),
+                            attempts: run.attempts,
+                            result,
+                            warnings,
+                        }) {
                             error!("Failed to send completion signal: {}", e);
                         }
                     });
@@ -321,7 +386,12 @@ impl Engine {
 
             // Wait for step completion (skip in dry run)
             if running_count > 0 && !self.dry_run {
-                let (step_id, attempts, result) = match rx.recv() {
+                let StepCompletion {
+                    step_id,
+                    attempts,
+                    result,
+                    warnings,
+                } = match rx.recv() {
                     Ok(msg) => msg,
                     Err(e) => {
                         run_error =
@@ -331,6 +401,7 @@ impl Engine {
                 };
 
                 running_count -= 1;
+                check_warnings.extend(warnings);
                 planner.record_attempts(&step_id, attempts);
                 state.record_attempts(&step_id, attempts);
 
@@ -383,6 +454,10 @@ impl Engine {
         println!("Total execution time: {:.2?}", total_time);
         println!();
         if let Some(summary) = format_retry_summary(&planner.retried_steps()) {
+            println!("{}", summary);
+            println!();
+        }
+        if let Some(summary) = format_check_warnings(&check_warnings) {
             println!("{}", summary);
             println!();
         }
@@ -487,7 +562,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::{Step, Workflow};
+    use crate::workflow::{CheckKind, OutputCheck, Step, Workflow};
     use std::fs;
     use tempfile::tempdir;
 
@@ -617,6 +692,101 @@ mod tests {
         assert_eq!(engine.workflow_path, "");
         let _ = engine.run();
         assert_eq!(engine.workflow_path, "workflow.yaml");
+    }
+
+    /// Runs a workflow in a fresh temp dir; returns the run result, the dir
+    /// and the engine's error text, if any.
+    fn run_in_tempdir(workflow: Workflow) -> (Result<(), String>, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        let mut engine = Engine::new(workflow);
+        engine.set_working_dir(dir.path().to_path_buf());
+        engine.set_workflow_path(dir.path().join("wf.yaml").to_str().unwrap());
+        let result = engine.run().map_err(|e| e.to_string());
+        (result, dir)
+    }
+
+    /// Builds `first` plus a dependent step. Step ids are the key of the temp
+    /// script file, so concurrently running tests must use distinct ids.
+    fn two_step_workflow(first: Step) -> Workflow {
+        let up_id = first.id.clone();
+        let down_id = format!("{}_down", up_id);
+        let mut wf = Workflow::from_steps(vec![
+            first,
+            Step::new(down_id.as_str(), "bash", "echo done > down.txt")
+                .with_output("down.txt")
+                .depends_on(up_id.as_str()),
+        ]);
+        wf.steps[0].next.push(down_id);
+        wf
+    }
+
+    #[test]
+    fn test_blocking_check_failure_fails_step_and_skips_downstream() {
+        let up = Step::new("blk_up", "bash", "touch up.txt")
+            .with_output("up.txt")
+            .with_check(OutputCheck::new(CheckKind::NonEmpty));
+        let (result, dir) = run_in_tempdir(two_step_workflow(up));
+        let err = result.unwrap_err();
+        assert!(err.contains("Workflow failed at step 'blk_up'"), "{err}");
+        assert!(err.contains("output check failed"), "{err}");
+        assert!(err.contains("is empty"), "{err}");
+        assert!(
+            !dir.path().join("down.txt").exists(),
+            "downstream must not run"
+        );
+    }
+
+    #[test]
+    fn test_check_failure_does_not_rerun_the_tool() {
+        // retries = 2, but the check fails after the (successful) command, so
+        // the command must run exactly once.
+        let up = Step::new("norerun_up", "bash", "echo run >> runs.log; touch up.txt")
+            .with_output("up.txt")
+            .with_retries(2)
+            .with_retry_backoff(crate::workflow::RetryBackoff::Fixed, 0)
+            .with_check(OutputCheck::new(CheckKind::NonEmpty));
+        let (result, dir) = run_in_tempdir(two_step_workflow(up));
+        assert!(result.is_err());
+        let runs = fs::read_to_string(dir.path().join("runs.log")).unwrap();
+        assert_eq!(runs.lines().count(), 1);
+    }
+
+    #[test]
+    fn test_non_blocking_check_failure_lets_workflow_finish() {
+        let up = Step::new("nonblk_up", "bash", "touch up.txt")
+            .with_output("up.txt")
+            .with_check(OutputCheck::min_lines(5).non_blocking());
+        let (result, dir) = run_in_tempdir(two_step_workflow(up));
+        assert!(result.is_ok(), "{:?}", result);
+        assert!(dir.path().join("down.txt").exists());
+    }
+
+    #[test]
+    fn test_passing_checks_let_workflow_finish() {
+        let up = Step::new("pass_up", "bash", "printf 'a\\nb\\n' > up.txt")
+            .with_output("up.txt")
+            .with_check(OutputCheck::new(CheckKind::Exists))
+            .with_check(OutputCheck::new(CheckKind::NonEmpty))
+            .with_check(OutputCheck::min_lines(2));
+        let (result, _dir) = run_in_tempdir(two_step_workflow(up));
+        assert!(result.is_ok(), "{:?}", result);
+    }
+
+    #[test]
+    fn test_apply_checks_splits_blocking_and_warnings() {
+        let dir = tempdir().unwrap();
+        let step = Step::new("s", "bash", "x")
+            .with_output("missing.txt")
+            .with_check(OutputCheck::new(CheckKind::Exists).non_blocking())
+            .with_check(OutputCheck::new(CheckKind::NonEmpty));
+        let (result, warnings) = apply_checks(&step, &Some(dir.path().to_path_buf()));
+        assert!(result.unwrap_err().contains("non_empty"));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("s: exists"));
+        assert!(format_check_warnings(&warnings)
+            .unwrap()
+            .starts_with("Output check warnings:"));
+        assert_eq!(format_check_warnings(&[]), None);
     }
 
     #[test]

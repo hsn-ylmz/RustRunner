@@ -269,7 +269,7 @@ function WorkflowEditorInner() {
   );
 
   const onNodeUpdate = useCallback(
-    (nodeId: string, field: string, value: string) => {
+    (nodeId: string, field: string, value: string | boolean) => {
       setNodes((nds) =>
         nds.map((node: any) =>
           node.id === nodeId

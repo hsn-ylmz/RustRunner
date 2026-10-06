@@ -5,12 +5,17 @@ import {
   generatePattern,
   hasWildcards,
   labelToId,
+  isBlocking,
   normalizeBackoff,
+  normalizeMinLines,
   normalizeRetries,
   normalizeRetryDelay,
   normalizeThreads,
   normalizeTimeout,
 } from '../workflowConversion';
+
+/** Checkbox state may be a boolean or, from loose data, the string 'true'. */
+const checksOn = (value: unknown) => value === true || value === 'true';
 
 export function PropertiesPanel({
   selectedNode,
@@ -29,7 +34,9 @@ export function PropertiesPanel({
     );
   }
 
-  const handleInputChange = (field: string, value: string) => {
+  const hasOutput = Boolean(selectedNode.data.output);
+
+  const handleInputChange = (field: string, value: string | boolean) => {
     onNodeUpdate(selectedNode.id, field, value);
   };
 
@@ -279,6 +286,65 @@ export function PropertiesPanel({
         />
         <div className="property-hint">
           Each attempt is killed if it runs longer than this. Leave empty for no limit.
+        </div>
+      </div>
+      <div className="property-group">
+        <label className="property-label">Output Checks:</label>
+        <label className="property-checkbox">
+          <input
+            type="checkbox"
+            checked={checksOn(selectedNode.data.checkExists)}
+            disabled={!hasOutput}
+            onChange={(e) => handleInputChange('checkExists', e.target.checked)}
+          />{' '}
+          Outputs must exist
+        </label>
+        <label className="property-checkbox">
+          <input
+            type="checkbox"
+            checked={checksOn(selectedNode.data.checkNonEmpty)}
+            disabled={!hasOutput}
+            onChange={(e) => handleInputChange('checkNonEmpty', e.target.checked)}
+          />{' '}
+          Outputs must be non-empty
+        </label>
+        <label className="property-checkbox">
+          <input
+            type="checkbox"
+            checked={checksOn(selectedNode.data.checkMinLinesEnabled)}
+            disabled={!hasOutput}
+            onChange={(e) => handleInputChange('checkMinLinesEnabled', e.target.checked)}
+          />{' '}
+          At least N lines
+        </label>
+        {checksOn(selectedNode.data.checkMinLinesEnabled) && (
+          <input
+            type="number"
+            min={1}
+            step={1}
+            className="property-input"
+            value={selectedNode.data.checkMinLines ?? ''}
+            disabled={!hasOutput}
+            onChange={(e) => handleInputChange('checkMinLines', e.target.value)}
+            onBlur={(e) =>
+              handleInputChange('checkMinLines', String(normalizeMinLines(e.target.value) ?? ''))
+            }
+            placeholder="Minimum lines, e.g. 10"
+          />
+        )}
+        <label className="property-checkbox">
+          <input
+            type="checkbox"
+            checked={isBlocking(selectedNode.data.checkBlocking)}
+            disabled={!hasOutput}
+            onChange={(e) => handleInputChange('checkBlocking', e.target.checked)}
+          />{' '}
+          Blocking
+        </label>
+        <div className="property-hint">
+          {hasOutput
+            ? 'Run after the step succeeds. A failed blocking check fails the step and skips everything after it; the tool is not re-run. Unchecked "Blocking" only logs a warning.'
+            : 'Set an output file first; checks look at the step\'s outputs.'}
         </div>
       </div>
     </div>

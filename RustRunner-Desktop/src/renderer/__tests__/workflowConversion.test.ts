@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import yaml from 'js-yaml';
 import {
   WILDCARD_NAME,
+  buildChecks,
   convertNodesToWorkflow,
+  isBlocking,
+  normalizeMinLines,
   findInvalidNodeIds,
   generatePattern,
   hasWildcards,
@@ -217,5 +220,65 @@ describe('retry and timeout settings', () => {
     ['60', 60], [1, 1], ['', undefined], [0, undefined], [-5, undefined], ['abc', undefined], [null, undefined],
   ])('normalizeTimeout(%p) -> %p', (input, expected) => {
     expect(normalizeTimeout(input)).toBe(expected);
+  });
+});
+
+describe('output checks', () => {
+  const withOutput = (data: Record<string, unknown>) => node('a', 'A', { output: 'out.tsv', ...data });
+
+  it('emits no checks by default, keeping old YAML unchanged', () => {
+    const { steps } = convertNodesToWorkflow([withOutput({})], []);
+    expect(steps[0]).not.toHaveProperty('checks');
+  });
+
+  it('emits each preset as a blocking check, in a stable order', () => {
+    const { steps } = convertNodesToWorkflow(
+      [withOutput({ checkMinLinesEnabled: true, checkMinLines: '10', checkNonEmpty: true, checkExists: true })],
+      []
+    );
+    expect(steps[0].checks).toEqual([
+      { kind: 'exists' },
+      { kind: 'non_empty' },
+      { kind: 'min_lines', lines: 10 },
+    ]);
+  });
+
+  it('writes blocking: false on every check when Blocking is off', () => {
+    const checks = buildChecks({ output: 'o', checkExists: true, checkNonEmpty: true, checkBlocking: false });
+    expect(checks).toEqual([
+      { kind: 'exists', blocking: false },
+      { kind: 'non_empty', blocking: false },
+    ]);
+  });
+
+  it('treats Blocking as on unless explicitly off', () => {
+    expect(isBlocking(undefined)).toBe(true);
+    expect(isBlocking(true)).toBe(true);
+    expect(isBlocking(false)).toBe(false);
+    expect(isBlocking('false')).toBe(false);
+  });
+
+  it('drops min_lines when N is unusable (the engine rejects 0)', () => {
+    for (const bad of ['', '0', '-3', 'abc', undefined]) {
+      expect(buildChecks({ output: 'o', checkMinLinesEnabled: true, checkMinLines: bad })).toEqual([]);
+    }
+    expect(normalizeMinLines('7.9')).toBe(7);
+  });
+
+  it('ignores a min_lines value whose checkbox is off', () => {
+    expect(buildChecks({ output: 'o', checkMinLines: '5' })).toEqual([]);
+  });
+
+  it('emits nothing for a step without an output', () => {
+    expect(buildChecks({ output: '', checkExists: true })).toEqual([]);
+  });
+
+  it('serializes to YAML the engine can read', () => {
+    const { steps } = convertNodesToWorkflow(
+      [withOutput({ checkMinLinesEnabled: true, checkMinLines: 3, checkBlocking: false })],
+      []
+    );
+    const parsed: any = yaml.load(yaml.dump({ steps }));
+    expect(parsed.steps[0].checks).toEqual([{ kind: 'min_lines', lines: 3, blocking: false }]);
   });
 });

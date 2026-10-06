@@ -29,6 +29,7 @@ pub enum ValidationError {
     TooManyRetries { step: String, retries: u32 },
     RetryDelayTooLong { step: String, secs: u64 },
     ZeroTimeout(String),
+    InvalidCheck { step: String, reason: String },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -70,8 +71,26 @@ impl std::fmt::Display for ValidationError {
                 "Step '{}': timeout_secs must be greater than 0 (leave it empty for no timeout)",
                 step
             ),
+            Self::InvalidCheck { step, reason } => {
+                write!(f, "Step '{}': invalid output check: {}", step, reason)
+            }
         }
     }
+}
+
+/// Validates a step's output checks.
+fn validate_check_settings(step: &Step) -> Vec<ValidationError> {
+    step.checks
+        .iter()
+        .filter_map(|check| {
+            check
+                .config_problem(step)
+                .map(|reason| ValidationError::InvalidCheck {
+                    step: step.id.clone(),
+                    reason: format!("{} ({})", reason, check.describe()),
+                })
+        })
+        .collect()
 }
 
 /// Validates a step's retry and timeout settings.
@@ -127,6 +146,7 @@ fn validate_step(step: &Step) -> Vec<ValidationError> {
     }
 
     errors.extend(validate_retry_settings(step));
+    errors.extend(validate_check_settings(step));
 
     // Warn about placeholder mismatches
     if step.command.contains("{input}") && step.input.is_empty() {
@@ -335,6 +355,7 @@ pub fn quick_validate(workflow: &Workflow) -> Vec<String> {
         }
 
         errors.extend(validate_retry_settings(step).iter().map(|e| e.to_string()));
+        errors.extend(validate_check_settings(step).iter().map(|e| e.to_string()));
 
         for prev_id in &step.previous {
             if !step_ids.contains(prev_id.as_str()) {
@@ -387,6 +408,55 @@ mod tests {
             let quick = quick_validate(&wf);
             assert!(quick.iter().any(|m| m.contains(needle)), "{quick:?}");
         }
+    }
+
+    #[test]
+    fn test_invalid_checks_rejected() {
+        use crate::workflow::{CheckKind, OutputCheck};
+        let base = || Step::new("a", "bash", "x").with_output("out.txt");
+        let mut lines_on_exists = OutputCheck::new(CheckKind::Exists);
+        lines_on_exists.lines = Some(3);
+        let cases = vec![
+            (base().with_check(OutputCheck::min_lines(0)), "0 lines"),
+            (
+                base().with_check(OutputCheck::new(CheckKind::MinLines)),
+                "needs a `lines`",
+            ),
+            (
+                base().with_check(lines_on_exists),
+                "only applies to min_lines",
+            ),
+            (
+                base().with_check(OutputCheck::new(CheckKind::Exists).with_target("other.txt")),
+                "not one of the step's outputs",
+            ),
+            (
+                Step::new("a", "bash", "x").with_check(OutputCheck::new(CheckKind::NonEmpty)),
+                "no outputs",
+            ),
+        ];
+        for (step, needle) in cases {
+            let mut wf = Workflow::from_steps(vec![step]);
+            let err = validate_workflow(&mut wf).unwrap_err();
+            assert!(err.contains(needle), "{err}");
+            let quick = quick_validate(&wf);
+            assert!(quick.iter().any(|m| m.contains(needle)), "{quick:?}");
+        }
+    }
+
+    #[test]
+    fn test_valid_checks_accepted() {
+        use crate::workflow::{CheckKind, OutputCheck};
+        let step = Step::new("a", "bash", "x")
+            .with_outputs(vec!["a.txt, b.txt".to_string()])
+            .with_check(OutputCheck::new(CheckKind::Exists))
+            .with_check(
+                OutputCheck::min_lines(5)
+                    .with_target("b.txt")
+                    .non_blocking(),
+            );
+        let mut wf = Workflow::from_steps(vec![step]);
+        assert!(validate_workflow(&mut wf).is_ok());
     }
 
     #[test]

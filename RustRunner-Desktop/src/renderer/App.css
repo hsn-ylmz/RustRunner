@@ -485,6 +485,13 @@
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
+.property-checkbox {
+  display: block;
+  margin: 4px 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
 .property-hint {
   margin-top: 4px;
   font-size: 12px;
