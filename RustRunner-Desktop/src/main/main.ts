@@ -349,8 +349,8 @@ ipcMain.on(
       // (engineEvents.ts); the human log keeps flowing next to them.
       const args = [workflowPath, pauseFlagPath, '--json-events'];
       if (dryRun) args.push('--dry-run');
-      // Without --fresh the engine resumes from the saved state of an earlier
-      // run (completed steps are skipped).
+      // Without --fresh the engine skips every step whose outputs are up to
+      // date according to the saved state of an earlier run.
       if (fresh) args.push('--fresh');
       if (workingDir) args.push('--working-dir', workingDir);
 
@@ -431,7 +431,7 @@ ipcMain.on(
 // Pause workflow
 /**
  * Reports whether the engine has a saved run for this workflow in the working
- * directory, so the renderer can enable "Resume last run".
+ * directory, so the renderer can describe what a normal Run will build on.
  */
 ipcMain.handle(
   'get-resume-info',

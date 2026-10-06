@@ -24,7 +24,8 @@ test('app launches without console errors', async ({ page, consoleErrors }) => {
   await expect(page.getByTestId('run')).toHaveText('Run from scratch');
   // Nothing to run yet.
   await expect(page.getByTestId('run')).toBeDisabled();
-  await expect(page.getByTestId('resume')).toBeDisabled();
+  await expect(page.getByTestId('run-normal')).toHaveText('Run');
+  await expect(page.getByTestId('run-normal')).toBeDisabled();
   await expect(page.getByTestId('stop')).toBeDisabled();
   // Give late errors (React warnings, CSP violations) a moment to surface.
   await page.waitForTimeout(500);
@@ -203,33 +204,35 @@ test('Stop during a long step ends the run and leaves no sleep process', async (
   await expect(stepRow(page, 'after')).not.toHaveAttribute('data-state', 'succeeded');
 });
 
-test('Resume is disabled with no saved run, then enabled and skipping after one', async ({
+test('a second Run skips every up-to-date step and Run from scratch runs them again', async ({
   page,
   sandbox,
 }) => {
   await buildChain(page, TWO_STEPS);
   await page.getByTestId('set-directory').click();
   await expect(page.locator('.working-directory')).toBeVisible();
-  // A directory with no saved state: nothing to resume.
-  await expect(page.getByTestId('resume')).toBeDisabled();
+  // A directory with no saved state: Run is available and says nothing is saved.
+  await expect(page.getByTestId('run-normal')).toBeEnabled();
+  await expect(page.getByTestId('run-normal')).toHaveAttribute('title', /No saved run/);
 
-  await page.getByTestId('run').click();
+  await page.getByTestId('run-normal').click();
   await openStepStatus(page);
   await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'succeeded');
-  await expect(page.getByTestId('run')).toBeEnabled();
+  await expect(stepRow(page, 'make')).toHaveAttribute('data-state', 'succeeded');
+  await expect(page.getByTestId('run-normal')).toBeEnabled();
 
-  // The engine's state file now exists, so Resume becomes available.
-  await expect(page.getByTestId('resume')).toBeEnabled();
-  await expect(page.getByTestId('resume')).toHaveAttribute('title', /2 step/);
+  // The engine's state file now exists and the tooltip counts its steps.
+  await expect(page.getByTestId('run-normal')).toHaveAttribute('title', /2 step/);
 
-  // Both outputs still exist, so resuming skips both steps.
-  await page.getByTestId('resume').click();
-  await expect(page.getByTestId('run')).toBeEnabled();
+  // Both outputs are current, so the second Run skips both steps.
+  await page.getByTestId('run-normal').click();
   await expect(stepRow(page, 'make')).toHaveAttribute('data-state', 'skipped');
   await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'skipped');
+  await expect(stepRow(page, 'make').locator('.step-row-details')).toContainText('up to date');
+  await expect(page.getByTestId('run-normal')).toBeEnabled();
   await page.getByTestId('tab-logs').click();
   await expect(
-    page.getByTestId('log-entry').filter({ hasText: 'Resuming last run' })
+    page.getByTestId('log-entry').filter({ hasText: 'steps whose outputs are up to date are skipped' })
   ).not.toHaveCount(0);
 
   // Run from scratch discards the saved progress and runs everything again.
@@ -238,10 +241,68 @@ test('Resume is disabled with no saved run, then enabled and skipping after one'
   await openStepStatus(page);
   await expect(stepRow(page, 'make')).toHaveAttribute('data-state', 'succeeded');
   await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'succeeded');
+  await expect(page.getByTestId('run')).toBeEnabled();
   expect(fs.existsSync(path.join(sandbox.workDir, 'b.txt'))).toBe(true);
 });
 
-test('Resume after a failure re-runs only the failed step', async ({ page, sandbox }) => {
+/** Number of lines in a file of the sandbox (0 while it does not exist). */
+const lineCount = (dir: string, name: string): number => {
+  try {
+    return fs.readFileSync(path.join(dir, name), 'utf-8').split('\n').filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+};
+
+test('editing a command re-runs that step and its children, not its parents', async ({
+  page,
+  sandbox,
+}) => {
+  // Every step appends to its own log, so runs can be counted exactly.
+  await buildChain(page, [
+    { label: 'Make', command: 'echo run >> make.log; echo hello > {output}', output: 'a.txt' },
+    { label: 'Copy', command: 'echo run >> copy.log; cp {input} {output}', input: 'a.txt', output: 'b.txt' },
+    { label: 'Count', command: 'echo run >> count.log; wc -c < {input} > {output}', input: 'b.txt', output: 'c.txt' },
+  ]);
+  await page.getByTestId('set-directory').click();
+  await expect(page.locator('.working-directory')).toBeVisible();
+
+  const runsOf = () => ['make', 'copy', 'count'].map((n) => lineCount(sandbox.workDir, `${n}.log`));
+
+  await page.getByTestId('run-normal').click();
+  await expect.poll(runsOf, { timeout: 30_000 }).toEqual([1, 1, 1]);
+  await expect(page.getByTestId('stop')).toBeDisabled();
+
+  // Nothing changed: the second Run skips all three and runs nothing.
+  await page.getByTestId('run-normal').click();
+  await openStepStatus(page);
+  for (const id of ['make', 'copy', 'count']) {
+    await expect(stepRow(page, id)).toHaveAttribute('data-state', 'skipped');
+  }
+  await expect(page.getByTestId('stop')).toBeDisabled();
+  expect(runsOf()).toEqual([1, 1, 1]);
+
+  // Edit the middle step: it and its child run, the parent is skipped.
+  await selectNode(page, 'Copy');
+  await page
+    .getByTestId('prop-command')
+    .fill('echo run >> copy.log; cp -f {input} {output}');
+  await page.getByTestId('run-normal').click();
+  await expect.poll(runsOf, { timeout: 30_000 }).toEqual([1, 2, 2]);
+  await expect(page.getByTestId('stop')).toBeDisabled();
+  await expect(stepRow(page, 'make')).toHaveAttribute('data-state', 'skipped');
+  await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'succeeded');
+  await expect(stepRow(page, 'count')).toHaveAttribute('data-state', 'succeeded');
+
+  // The edited definition is recorded: the next Run skips everything again.
+  await page.getByTestId('run-normal').click();
+  await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'skipped');
+  await expect(stepRow(page, 'count')).toHaveAttribute('data-state', 'skipped');
+  await expect(page.getByTestId('stop')).toBeDisabled();
+  expect(runsOf()).toEqual([1, 2, 2]);
+});
+
+test('Run after a failure re-runs only the failed step', async ({ page, sandbox }) => {
   // The second step fails until a marker file exists.
   await buildChain(page, [
     { label: 'First', command: 'echo one > {output}', output: 'one.txt' },
@@ -258,10 +319,10 @@ test('Resume after a failure re-runs only the failed step', async ({ page, sandb
   await expect(stepRow(page, 'gate')).toHaveAttribute('data-state', 'failed');
   await expect(stepRow(page, 'first')).toHaveAttribute('data-state', 'succeeded');
   await expect(page.getByTestId('run')).toBeEnabled();
-  await expect(page.getByTestId('resume')).toBeEnabled();
+  await expect(page.getByTestId('run-normal')).toBeEnabled();
 
   fs.writeFileSync(path.join(sandbox.workDir, 'gate.ok'), '');
-  await page.getByTestId('resume').click();
+  await page.getByTestId('run-normal').click();
   await expect(stepRow(page, 'gate')).toHaveAttribute('data-state', 'succeeded');
   await expect(stepRow(page, 'first')).toHaveAttribute('data-state', 'skipped');
 });
@@ -328,7 +389,7 @@ test('keep going runs the independent branch after a failure', async ({ page, sa
   expect(fs.existsSync(path.join(sandbox.workDir, 'after.txt'))).toBe(false);
 });
 
-test('renaming the workflow keeps its saved run for Resume', async ({ page }) => {
+test('renaming the workflow keeps its saved run for Run', async ({ page }) => {
   await buildChain(page, TWO_STEPS);
   await page.getByTestId('set-directory').click();
   await expect(page.locator('.working-directory')).toBeVisible();
@@ -336,14 +397,14 @@ test('renaming the workflow keeps its saved run for Resume', async ({ page }) =>
   await page.getByTestId('run').click();
   await openStepStatus(page);
   await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'succeeded');
-  await expect(page.getByTestId('resume')).toBeEnabled();
+  await expect(page.getByTestId('run-normal')).toBeEnabled();
 
   await editDetails(page, { name: 'A completely different name' });
   await expect(page.getByTestId('workflow-title')).toContainText('A completely different name');
-  await expect(page.getByTestId('resume')).toBeEnabled();
-  await expect(page.getByTestId('resume')).toHaveAttribute('title', /2 step/);
+  await expect(page.getByTestId('run-normal')).toBeEnabled();
+  await expect(page.getByTestId('run-normal')).toHaveAttribute('title', /2 step/);
 
-  await page.getByTestId('resume').click();
+  await page.getByTestId('run-normal').click();
   await expect(page.getByTestId('run')).toBeEnabled();
   await expect(stepRow(page, 'make')).toHaveAttribute('data-state', 'skipped');
   await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'skipped');

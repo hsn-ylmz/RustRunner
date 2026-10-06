@@ -239,7 +239,7 @@
   background: var(--blue-dark);
 }
 
-/* Resume: outlined so "Run from scratch" stays the primary action. */
+/* Run from scratch: outlined so the plain "Run" stays the primary action. */
 .resume-button {
   background: var(--panel-background);
   color: var(--panel-text);

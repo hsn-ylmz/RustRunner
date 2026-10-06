@@ -38,6 +38,17 @@ export type StepEvent =
   | { kind: 'failed'; stepId: string; message: string }
   | { kind: 'check'; stepId: string; blocking: boolean; message: string };
 
+/** Reason the engine gives for a step it skipped because its outputs are current. */
+export const UP_TO_DATE_REASON = 'up_to_date';
+
+/** Reader-friendly text for a `step_skipped` reason; other reasons are shown as sent. */
+export function describeSkipReason(reason?: string): string | undefined {
+  if (reason === UP_TO_DATE_REASON) {
+    return 'up to date: outputs exist, inputs and command unchanged';
+  }
+  return reason;
+}
+
 /**
  * Translates an engine event into a step event, or null for the events that do
  * not concern a single step (`run_started`, `run_finished`).
@@ -169,7 +180,7 @@ export function applyRunEvent(runs: StepRuns, event: StepEvent): StepRuns {
       next = { ...prev, state: 'succeeded', message: undefined, delaySecs: undefined };
       break;
     case 'skipped':
-      next = { state: 'skipped', message: event.reason };
+      next = { state: 'skipped', message: describeSkipReason(event.reason) };
       break;
     case 'failed':
       next = { ...prev, state: 'failed', message: event.message, delaySecs: undefined };

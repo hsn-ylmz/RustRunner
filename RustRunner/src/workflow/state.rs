@@ -43,6 +43,12 @@ pub struct WorkflowState {
     #[serde(default)]
     pub step_attempts: HashMap<String, u32>,
 
+    /// Hash of each step's effective definition when it last succeeded (see
+    /// `freshness::definition_hash`). A completed step without an entry (state
+    /// written before this existed) has an unknown definition and runs again.
+    #[serde(default)]
+    pub step_hashes: HashMap<String, String>,
+
     /// Name of the workflow the last run executed, from its metadata
     /// (absent in state files written before metadata existed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -71,6 +77,7 @@ impl WorkflowState {
             failed_step: None,
             timestamp: SystemTime::now(),
             step_attempts: HashMap::new(),
+            step_hashes: HashMap::new(),
             workflow_name: None,
             workflow_version: None,
             workflow_id: None,
@@ -88,6 +95,17 @@ impl WorkflowState {
     /// Records how many attempts a step used.
     pub fn record_attempts(&mut self, step_id: &str, attempts: u32) {
         self.step_attempts.insert(step_id.to_string(), attempts);
+    }
+
+    /// Records the definition hash of a step that has just succeeded.
+    pub fn record_definition(&mut self, step_id: &str, hash: String) {
+        self.step_hashes.insert(step_id.to_string(), hash);
+    }
+
+    /// Forgets that a step succeeded (it is stale and will run again).
+    pub fn invalidate(&mut self, step_id: &str) {
+        self.completed_steps.remove(step_id);
+        self.step_hashes.remove(step_id);
     }
 
     /// Keys this state's file on a workflow id instead of the file stem.
@@ -277,6 +295,7 @@ impl WorkflowState {
         self.completed_steps.clear();
         self.failed_step = None;
         self.step_attempts.clear();
+        self.step_hashes.clear();
         self.timestamp = SystemTime::now();
     }
 
@@ -317,6 +336,43 @@ mod tests {
         value.as_object_mut().unwrap().remove("step_attempts");
         let old: WorkflowState = serde_json::from_value(value).unwrap();
         assert!(old.step_attempts.is_empty());
+    }
+
+    #[test]
+    fn test_definition_hashes_roundtrip_and_old_state_compat() {
+        let mut state = WorkflowState::new("t.yaml");
+        state.mark_completed("align");
+        state.record_definition("align", "00ff".to_string());
+        let json = serde_json::to_string(&state).unwrap();
+        let loaded: WorkflowState = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            loaded.step_hashes.get("align").map(String::as_str),
+            Some("00ff")
+        );
+
+        // A state file written before hashes existed loads with none recorded.
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value.as_object_mut().unwrap().remove("step_hashes");
+        let old: WorkflowState = serde_json::from_value(value).unwrap();
+        assert!(old.step_hashes.is_empty());
+        assert!(old.completed_steps.contains("align"));
+    }
+
+    #[test]
+    fn test_invalidate_forgets_a_success_and_clear_drops_hashes() {
+        let mut state = WorkflowState::new("t.yaml");
+        state.mark_completed("a");
+        state.record_definition("a", "1".to_string());
+        state.mark_completed("b");
+        state.record_definition("b", "2".to_string());
+
+        state.invalidate("a");
+        assert!(!state.completed_steps.contains("a"));
+        assert!(!state.step_hashes.contains_key("a"));
+        assert!(state.completed_steps.contains("b"));
+
+        state.clear();
+        assert!(state.step_hashes.is_empty());
     }
 
     #[test]

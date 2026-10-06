@@ -16,7 +16,7 @@ export interface ResumeInfo {
   workflowVersion: string | null;
 }
 
-/** Tooltip for the "Resume last run" button. */
+/** Saved-run part of the Run button tooltip. */
 export function describeResume(
   info: ResumeInfo | null,
   hasWorkingDirectory: boolean,

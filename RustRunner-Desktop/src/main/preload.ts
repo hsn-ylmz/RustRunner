@@ -91,7 +91,7 @@ const electronHandler = {
       ipcRenderer.send('run-workflow', workflowData, dryRun, workingDir, fresh);
     },
 
-    // Saved-run info for "Resume last run".
+    // Saved-run info for the Run button tooltip.
     getResumeInfo(
       workflowName: string,
       workingDir: string,

@@ -90,7 +90,7 @@ interface ElectronAPI {
     sendMessage(channel: string, ...args: unknown[]): void;
     on(channel: string, func: (...args: unknown[]) => void): () => void;
     once(channel: string, func: (...args: unknown[]) => void): void;
-    /** `fresh` runs every step again; otherwise the engine resumes saved state. */
+    /** `fresh` runs every step again; otherwise the engine skips steps whose outputs are up to date. */
     runWorkflow(
       workflowData: WorkflowData,
       dryRun?: boolean,

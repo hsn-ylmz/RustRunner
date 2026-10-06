@@ -25,7 +25,7 @@
 //! | `step_retrying` | `step`, `attempt` (the one that failed), `max_attempts`, `delay_secs`, `reason` |
 //! | `step_succeeded` | `step`, `attempts` |
 //! | `step_failed` | `step`, `reason`, `attempts` |
-//! | `step_skipped` | `step`, `reason` (finished in an earlier run, or never reached) |
+//! | `step_skipped` | `step`, `reason` (`up_to_date` when its outputs are current, else why it was never reached) |
 //! | `check_failed` | `step`, `kind`, `blocking`, `message` |
 //! | `run_finished` | `status` (`succeeded`, `failed`, `stopped`), `summary` |
 //!
@@ -71,7 +71,7 @@ pub struct RunSummary {
     /// Steps that succeeded in this run.
     pub succeeded: usize,
     pub failed: usize,
-    /// Steps not run: finished in an earlier run, or never reached.
+    /// Steps not run: `up_to_date` (outputs are current), or never reached.
     pub skipped: usize,
     /// Steps that needed more than one attempt.
     pub retried: usize,

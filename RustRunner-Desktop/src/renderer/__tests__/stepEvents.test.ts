@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   applyRunEvent,
   buildStatusRows,
+  describeSkipReason,
   resolveBaseStepId,
   rollupNodeStatuses,
   summarizeRows,
@@ -153,6 +154,20 @@ describe('retrying with attempt N/M', () => {
   it('keeps the reason of a skipped step', () => {
     const runs = fold([{ kind: 'skipped', stepId: 'a', reason: 'completed in an earlier run' }]);
     expect(runs.a).toEqual({ state: 'skipped', message: 'completed in an earlier run' });
+  });
+});
+
+describe('up-to-date skips', () => {
+  it('turns the engine reason into readable text and leaves others alone', () => {
+    expect(describeSkipReason('up_to_date')).toMatch(/^up to date/);
+    expect(describeSkipReason("not run: step 'a' failed")).toBe("not run: step 'a' failed");
+    expect(describeSkipReason(undefined)).toBeUndefined();
+  });
+
+  it('shows an up_to_date skip as such in the status', () => {
+    const runs = fold([{ kind: 'skipped', stepId: 'a', reason: 'up_to_date' }]);
+    expect(runs.a.state).toBe('skipped');
+    expect(runs.a.message).toBe(describeSkipReason('up_to_date'));
   });
 });
 

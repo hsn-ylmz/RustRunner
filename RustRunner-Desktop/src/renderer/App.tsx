@@ -71,7 +71,7 @@ function WorkflowEditorInner() {
   const [isDirty, setIsDirty] = useState(false);
   const [executionState, setExecutionState] = useState<'idle' | 'running' | 'paused'>('idle');
   const [workflowVersion, setWorkflowVersion] = useState('');
-  // Stable id: keys the engine's saved run, so renaming keeps "Resume last run".
+  // Stable id: keys the engine's saved run, so renaming keeps its up-to-date steps.
   const [workflowId, setWorkflowId] = useState(() => generateWorkflowId());
   /** Keep running independent steps after one fails. */
   const [keepGoing, setKeepGoing] = useState(false);
@@ -697,7 +697,7 @@ function WorkflowEditorInner() {
     ]
   );
 
-  // Which saved run (if any) "Resume last run" would continue. Looked up in
+  // Which saved run (if any) a normal Run builds on. Looked up in
   // the working directory, where the engine keeps its state, and refreshed
   // whenever a run ends since the engine writes it after every step.
   useEffect(() => {
@@ -719,20 +719,25 @@ function WorkflowEditorInner() {
     };
   }, [workflowName, workflowId, workingDirectory, executionState]);
 
-  // Execution. "Run from scratch" asks the engine to ignore any saved state;
-  // "Resume last run" lets it pick the state up and skip finished steps.
+  // Execution. A normal run lets the engine skip every step whose outputs are
+  // up to date (they exist, are newer than the inputs, and the step's command
+  // is unchanged since it last succeeded); steps that are out of date run
+  // together with everything downstream. "Run from scratch" asks the engine to
+  // ignore its saved state so that every step runs.
   const startRun = useCallback(
     async (fresh: boolean) => {
-      const prepared = await prepareRun(fresh ? 'workflow files' : 'resume');
+      const prepared = await prepareRun(fresh ? 'run from scratch' : 'run');
       if (!prepared) return;
 
-      if (!fresh && resumeInfo?.canResume) {
-        addLog(
-          `Resuming last run: ${resumeInfo.completedCount} step(s) already finished` +
-            (resumeInfo.failedStep ? `, it stopped at "${resumeInfo.failedStep}"` : '')
-        );
-      } else if (fresh) {
+      if (fresh) {
         addLog('Running from scratch: any saved progress is discarded');
+      } else if (resumeInfo?.canResume) {
+        addLog(
+          `Running: steps whose outputs are up to date are skipped (${resumeInfo.completedCount} finished earlier)` +
+            (resumeInfo.failedStep ? `, the last run stopped at "${resumeInfo.failedStep}"` : '')
+        );
+      } else {
+        addLog('Running: no saved progress for this workflow yet, every step runs');
       }
 
       setExecutionState('running');
@@ -747,18 +752,19 @@ function WorkflowEditorInner() {
       window.electron.ipcRenderer.resumeWorkflow();
       return;
     }
-    await startRun(true);
+    await startRun(false);
   }, [executionState, startRun]);
 
-  const handleResumeLast = useCallback(() => startRun(false), [startRun]);
+  const handleRunFromScratch = useCallback(() => startRun(true), [startRun]);
 
   const handleDryRun = useCallback(async () => {
     const prepared = await prepareRun('dry run');
     if (!prepared) return;
 
     addLog('Starting dry run (commands will not execute)...');
-    // Fresh so the preview lists every step; a dry run never touches saved state.
-    window.electron.ipcRenderer.runWorkflow(prepared.workflow, true, prepared.dir, true);
+    // Not fresh: the preview shows which steps would be skipped as up to date
+    // and why the others would run. A dry run never touches saved state.
+    window.electron.ipcRenderer.runWorkflow(prepared.workflow, true, prepared.dir, false);
   }, [prepareRun, addLog]);
 
   const handlePause = useCallback(() => {
@@ -906,20 +912,28 @@ function WorkflowEditorInner() {
             <button
               className={`execution-button run-button ${executionState === 'running' ? 'active' : ''}`}
               onClick={handleRun}
-              data-testid="run"
+              data-testid="run-normal"
               disabled={nodes.length === 0 || executionState === 'running'}
+              title={
+                executionState === 'paused'
+                  ? 'Continue the paused run.'
+                  : `Run the workflow, skipping steps whose outputs are already up to date. ${describeResume(
+                      resumeInfo,
+                      Boolean(workingDirectory)
+                    )}`
+              }
             >
-              {executionState === 'paused' ? 'Continue' : 'Run from scratch'}
+              {executionState === 'paused' ? 'Continue' : 'Run'}
             </button>
 
             <button
               className="execution-button resume-button"
-              onClick={handleResumeLast}
-              data-testid="resume"
-              disabled={nodes.length === 0 || executionState !== 'idle' || !resumeInfo?.canResume}
-              title={describeResume(resumeInfo, Boolean(workingDirectory))}
+              onClick={handleRunFromScratch}
+              data-testid="run"
+              disabled={nodes.length === 0 || executionState !== 'idle'}
+              title="Discard saved progress and run every step again."
             >
-              Resume last run
+              Run from scratch
             </button>
 
             <button
@@ -1037,7 +1051,7 @@ function WorkflowEditorInner() {
             <p className="dialog-hint">
               {nameDialog === 'new'
                 ? 'You will choose a working directory when you click Run.'
-                : 'Shown in the run log and saved with each run. Renaming the workflow keeps its saved run, so "Resume last run" still finds it.'}
+                : 'Shown in the run log and saved with each run. Renaming the workflow keeps its saved run, so its saved progress is still found.'}
             </p>
             <div className="dialog-buttons">
               <button className="dialog-button cancel" onClick={() => setNameDialog(null)}>

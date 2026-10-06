@@ -8,8 +8,10 @@
 //! - [`model`]: Core data structures (Step, Workflow)
 //! - [`parser`]: YAML parsing and loading
 //! - [`validator`]: Validation rules and dependency checking
+//! - [`freshness`]: Up-to-date checks that decide which steps can be skipped
 //! - [`planner`]: Execution planning and scheduling
 
+pub mod freshness;
 pub mod model;
 pub mod parser;
 pub mod planner;
@@ -17,6 +19,7 @@ pub mod state;
 pub mod validator;
 pub mod wildcards;
 
+pub use freshness::{assess, definition_hash, StaleReason};
 pub use model::{CheckKind, OutputCheck, RetryBackoff, Step, Workflow, WorkflowMetadata};
 pub use parser::load_workflow;
 pub use planner::ExecutionPlanner;

@@ -99,7 +99,7 @@ function rowDetails(row: StatusRow): string {
     parts.push(`attempt ${row.attempt}/${row.maxAttempts}`);
   }
   if (row.state === 'skipped') {
-    parts.push(row.message || 'finished in an earlier run, or not reached');
+    parts.push(row.message || 'up to date, or not reached');
   }
   if (row.warnings && row.warnings.length > 0) {
     parts.push(`check warning: ${row.warnings.join('; ')}`);

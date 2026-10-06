@@ -170,10 +170,8 @@ fn a_resumed_run_reports_finished_steps_as_skipped() {
             "run_finished:succeeded",
         ]
     );
-    assert!(events[1]["reason"]
-        .as_str()
-        .unwrap()
-        .contains("earlier run"));
+    // Finished steps whose outputs are current are skipped as up to date.
+    assert_eq!(events[1]["reason"], "up_to_date");
     assert_eq!(events[6]["summary"]["skipped"], 1);
     assert_eq!(events[6]["summary"]["succeeded"], 2);
 }

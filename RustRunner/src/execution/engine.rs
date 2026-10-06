@@ -7,7 +7,7 @@
 //! - State persistence for crash recovery
 //! - Automatic conda environment setup for tools
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -19,7 +19,9 @@ use log::{error, info, warn};
 
 use crate::environment::conda::{create_env, ToolEnvMap};
 use crate::monitoring::{EventType, ExecutionTimeline, ResourceMonitor};
-use crate::workflow::{ExecutionPlanner, Workflow, WorkflowState};
+use crate::workflow::{
+    assess, definition_hash, ExecutionPlanner, StaleReason, Workflow, WorkflowState,
+};
 
 use super::checks::run_checks;
 use super::events::{new_run_id, Event, EventSink, RunStatus, RunSummary};
@@ -32,6 +34,21 @@ const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Interval for resource monitoring samples.
 const MONITOR_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Reason carried by `step_skipped` for a step whose outputs are current.
+const UP_TO_DATE: &str = "up_to_date";
+
+/// Remembers the definition a step succeeded with, so the next run can tell
+/// whether it changed.
+fn record_definition(
+    state: &mut WorkflowState,
+    definitions: &HashMap<String, String>,
+    step_id: &str,
+) {
+    if let Some(hash) = definitions.get(step_id) {
+        state.record_definition(step_id, hash.clone());
+    }
+}
 
 /// Message a worker thread sends when its step is done.
 struct StepCompletion {
@@ -375,25 +392,33 @@ impl Engine {
         };
         state.set_metadata(self.workflow.metadata.as_ref());
 
-        // Verify completed steps still have outputs
-        let steps_to_rerun: Vec<String> = self
+        // Decide which steps are up to date: they succeeded before with this
+        // very definition, their outputs exist and are newer than their
+        // inputs, and nothing upstream has to run. Every other step runs, and
+        // the state forgets that it ever succeeded.
+        let env_map = ToolEnvMap::load();
+        let env_of = |step: &crate::workflow::Step| env_map.get(&step.tool).cloned();
+        let definitions: HashMap<String, String> = self
             .workflow
             .steps
             .iter()
-            .filter(|step| state.completed_steps.contains(&step.id) && !step.outputs_exist())
-            .map(|step| {
-                info!("Step '{}' outputs missing - scheduling rerun", step.id);
-                step.id.clone()
-            })
+            .map(|s| (s.id.clone(), definition_hash(s, env_of(s).as_deref())))
             .collect();
-
-        for step_id in steps_to_rerun {
-            state.completed_steps.remove(&step_id);
+        let stale: HashMap<String, StaleReason> =
+            assess(&self.workflow, &state, self.working_dir.as_deref(), &env_of);
+        for step in &self.workflow.steps {
+            let Some(reason) = stale.get(&step.id) else {
+                continue;
+            };
+            if !self.fresh {
+                info!("Step '{}' will run: {}", step.id, reason);
+            }
+            state.invalidate(&step.id);
         }
 
         if state.is_resume() {
             info!(
-                "Resuming previous run: {} step(s) already completed",
+                "Resuming previous run: {} step(s) already completed and up to date",
                 state.completed_steps.len()
             );
             if let Some(failed) = &state.failed_step {
@@ -421,14 +446,19 @@ impl Engine {
             ExecutionPlanner::new(self.workflow.clone(), self.dry_run, self.max_parallel)?
         };
 
-        // Steps a resumed run does not repeat.
+        // Steps that are up to date and not repeated.
         let mut not_run: HashSet<String> = HashSet::new();
         if state.is_resume() {
             for step in &self.workflow.steps {
                 if state.completed_steps.contains(&step.id) {
+                    if self.dry_run {
+                        println!();
+                        println!("[DRY RUN] Step: {}", step.id);
+                        println!("  Up to date: would be skipped");
+                    }
                     self.events.emit(Event::StepSkipped {
                         step: step.id.clone(),
-                        reason: "completed in an earlier run".to_string(),
+                        reason: UP_TO_DATE.to_string(),
                     });
                     self.events.update_tally(|t| t.skipped += 1);
                     not_run.insert(step.id.clone());
@@ -437,9 +467,6 @@ impl Engine {
         }
         // Steps that were handed to a worker (or the dry run) in this run.
         let mut started: HashSet<String> = HashSet::new();
-
-        // Load environment mappings
-        let env_map = ToolEnvMap::load();
 
         // Create channel for step completion
         let (tx, rx): (Sender<StepCompletion>, Receiver<StepCompletion>) = channel();
@@ -505,6 +532,11 @@ impl Engine {
                         println!("  Input: {:?}", step.input);
                         println!("  Output: {:?}", step.output);
                         println!("  Threads: {}", step.threads);
+                        match (self.fresh, stale.get(&step.id)) {
+                            (true, _) => println!("  Would run: run from scratch"),
+                            (false, Some(reason)) => println!("  Would run: {}", reason),
+                            (false, None) => {}
+                        }
                         if step.retries > 0 {
                             println!(
                                 "  Retries: {} ({}, {}s delay)",
@@ -617,6 +649,7 @@ impl Engine {
                         planner.mark_step_completed(&step_id);
                         timeline.add_event(step_id.clone(), EventType::Completed);
                         state.mark_completed(&step_id);
+                        record_definition(&mut state, &definitions, &step_id);
                         // A success must not hide an earlier failure of this run.
                         if let Some(failed) = &first_failure {
                             state.mark_failed(failed);
@@ -684,6 +717,7 @@ impl Engine {
                         planner.mark_step_completed(&done.step_id);
                         timeline.add_event(done.step_id.clone(), EventType::Completed);
                         state.mark_completed(&done.step_id);
+                        record_definition(&mut state, &definitions, &done.step_id);
                     }
                     Err(e) => {
                         error!("Step '{}' failed: {}", done.step_id, e);
