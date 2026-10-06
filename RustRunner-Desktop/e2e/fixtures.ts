@@ -16,6 +16,15 @@ const ENGINE_BIN = path.resolve(DESKTOP_DIR, '../RustRunner/target/debug/rustrun
 /** Scratch space lives inside the repo (gitignored), never in the real home. */
 const TMP_ROOT = path.join(__dirname, '.tmp');
 
+/**
+ * Chromium's SUID sandbox is unavailable on CI runners and in containers, and
+ * there is no GPU under Xvfb. Only Linux needs these; macOS runs unchanged.
+ */
+function headlessLinuxArgs(): string[] {
+  if (process.platform !== 'linux') return [];
+  return ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'];
+}
+
 export interface Sandbox {
   /** Directory the workflow runs in (set through the mocked directory dialog). */
   workDir: string;
@@ -39,7 +48,7 @@ export const test = base.extend<Fixtures>({
     fs.rmSync(root, { recursive: true, force: true });
   },
 
-  app: async ({ sandbox }, use) => {
+  app: async ({ sandbox }, use, testInfo) => {
     expect(fs.existsSync(ENGINE_BIN), `engine binary missing: ${ENGINE_BIN} (run cargo build)`).toBe(true);
     const root = path.dirname(sandbox.workDir);
     // HOME, TMPDIR and the profile all point into the sandbox so a test run
@@ -50,7 +59,7 @@ export const test = base.extend<Fixtures>({
     fs.mkdirSync(tmp);
 
     const app = await _electron.launch({
-      args: [DESKTOP_DIR, `--user-data-dir=${path.join(root, 'profile')}`],
+      args: [DESKTOP_DIR, `--user-data-dir=${path.join(root, 'profile')}`, ...headlessLinuxArgs()],
       cwd: DESKTOP_DIR,
       env: {
         ...(process.env as Record<string, string>),
@@ -68,7 +77,16 @@ export const test = base.extend<Fixtures>({
       dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as any;
     }, sandbox.workDir);
 
+    // Trace every test, keep the trace only when it failed (CI uploads them).
+    const tracing = app.context().tracing;
+    await tracing.start({ screenshots: true, snapshots: true }).catch(() => undefined);
+
     await use(app);
+
+    const failed = testInfo.status !== testInfo.expectedStatus;
+    await tracing
+      .stop(failed ? { path: testInfo.outputPath('trace.zip') } : undefined)
+      .catch(() => undefined);
 
     // Never leave the engine or its steps behind, whatever the test did.
     try {
@@ -83,7 +101,7 @@ export const test = base.extend<Fixtures>({
     await use([]);
   },
 
-  page: async ({ app, consoleErrors }, use) => {
+  page: async ({ app, consoleErrors }, use, testInfo) => {
     const page = await app.firstWindow();
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
@@ -91,6 +109,12 @@ export const test = base.extend<Fixtures>({
     page.on('pageerror', (err) => consoleErrors.push(`pageerror: ${err.message}`));
     await page.waitForSelector('.workflow-editor');
     await use(page);
+
+    if (testInfo.status !== testInfo.expectedStatus) {
+      await page
+        .screenshot({ path: testInfo.outputPath('failure.png') })
+        .catch(() => undefined);
+    }
   },
 });
 

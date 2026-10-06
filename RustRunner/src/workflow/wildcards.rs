@@ -121,11 +121,10 @@ pub fn has_wildcards(text: &str) -> bool {
 /// ```
 pub fn extract_wildcard_names(pattern: &str) -> Vec<String> {
     let mut names = Vec::new();
-    let mut chars = pattern.chars().peekable();
     let mut in_wildcard = false;
     let mut current_name = String::new();
 
-    while let Some(ch) = chars.next() {
+    for ch in pattern.chars() {
         match ch {
             '{' => {
                 in_wildcard = true;

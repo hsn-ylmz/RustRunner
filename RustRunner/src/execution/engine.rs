@@ -1026,7 +1026,7 @@ impl Engine {
             // Environment name = tool name for simplicity
             let env_name = tool.clone();
 
-            match create_env(&env_name, &[tool.clone()]) {
+            match create_env(&env_name, std::slice::from_ref(tool)) {
                 Ok(()) => {
                     // Update env_map if not already present
                     if env_map.get(tool).is_none() {

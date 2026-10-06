@@ -706,7 +706,7 @@ mod tests {
         let nested_file = "subdir1/subdir2/output.txt";
 
         let result = ensure_output_directories(
-            &vec![nested_file.to_string()],
+            &[nested_file.to_string()],
             &Some(temp_dir.path().to_path_buf()),
         );
 
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn test_ensure_output_directories_empty() {
-        let result = ensure_output_directories(&vec!["".to_string()], &None);
+        let result = ensure_output_directories(&["".to_string()], &None);
 
         assert!(result.is_ok());
     }
@@ -728,7 +728,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let output = temp_dir.path().join("newdir/output.txt");
 
-        let result = ensure_output_directories(&vec![output.to_str().unwrap().to_string()], &None);
+        let result = ensure_output_directories(&[output.to_str().unwrap().to_string()], &None);
 
         assert!(result.is_ok());
         assert!(temp_dir.path().join("newdir").exists());
@@ -744,7 +744,7 @@ mod tests {
         let step = Step::new(
             "test_exec",
             "bash",
-            &format!("echo hello > {}", output_file.display()),
+            format!("echo hello > {}", output_file.display()),
         )
         .with_output(output_file.to_str().unwrap());
 

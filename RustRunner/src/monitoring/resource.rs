@@ -207,7 +207,7 @@ mod tests {
         // peak_memory_mb returns a value (u64, always >= 0)
         let _peak = monitor.peak_memory_mb();
         // Just verify it doesn't panic
-        assert!(monitor.get_samples().len() >= 1);
+        assert!(!monitor.get_samples().is_empty());
     }
 
     #[test]

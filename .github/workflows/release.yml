@@ -11,7 +11,14 @@ permissions:
   contents: write
 
 jobs:
+  # Gate: the whole CI workflow (tests, lint, e2e) must pass for the tagged
+  # commit before any platform builds or publishes.
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   build:
+    needs: ci
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:

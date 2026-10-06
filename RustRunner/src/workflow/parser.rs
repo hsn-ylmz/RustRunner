@@ -41,7 +41,7 @@ fn expand_wildcards_in_workflow(workflow: &mut Workflow) -> Result<(), String> {
         for (name, files) in &step.wildcard_files {
             wildcard_files
                 .entry(name.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .extend(files.clone());
         }
     }
