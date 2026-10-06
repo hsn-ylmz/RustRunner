@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import { test, expect, connect, nodes, selectNode } from './fixtures';
+import { test, expect, connect, nodes, openSection, selectNode } from './fixtures';
 
 /** Opens the palette, searches and adds the tool with `id`. */
 async function addFromPalette(page: Page, query: string, id: string): Promise<void> {
@@ -16,8 +16,11 @@ async function addFromPalette(page: Page, query: string, id: string): Promise<vo
 test('adding fastqc from the palette gives a prefilled node', async ({ page, consoleErrors }) => {
   await addFromPalette(page, 'fastq', 'fastqc');
 
-  // The new node is selected, so its properties are showing already.
+  // The new node is selected, so its properties are showing already. The
+  // command is a catalog step's advanced detail, folded until asked for.
   await expect(page.getByTestId('prop-label')).toHaveValue('FastQC');
+  await expect(page.getByTestId('prop-command')).toHaveCount(0);
+  await openSection(page, 'advanced');
   await expect(page.getByTestId('prop-tool')).toHaveValue('fastqc');
   await expect(page.getByTestId('prop-command')).toHaveValue(
     'mkdir -p qc && fastqc -t 2 --outdir qc {input}'
@@ -62,6 +65,7 @@ test('the palette searches by name and category, and closes with Escape', async 
 
 test('editing options re-renders the command until it is edited by hand', async ({ page }) => {
   await addFromPalette(page, 'sort', 'samtools-sort');
+  await openSection(page, 'advanced');
   const command = page.getByTestId('prop-command');
   await expect(command).toHaveValue('samtools sort -@ 4 -m 768M -o {output} {input}');
 
@@ -95,6 +99,7 @@ test('a required option is flagged until it is filled in, and a free-form node s
   page,
 }) => {
   await addFromPalette(page, 'bwa', 'bwa-mem');
+  await openSection(page, 'advanced');
   await expect(page.getByTestId('prop-command')).toHaveValue(
     'bwa mem -t 4 -M -k 19 {ref} {input} > {output}'
   );

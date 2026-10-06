@@ -11,7 +11,17 @@
 import fs from 'fs';
 import path from 'path';
 import type { Page } from '@playwright/test';
-import { test, expect, buildChain, connect, nodes, selectNode, openStepStatus, stepRow } from './fixtures';
+import {
+  test,
+  expect,
+  buildChain,
+  connect,
+  nodes,
+  openSection,
+  selectNode,
+  openStepStatus,
+  stepRow,
+} from './fixtures';
 
 const OUT = process.env.UX_OUT ? path.resolve(process.env.UX_OUT) : '';
 const SCHEMES = ['light', 'dark'] as const;
@@ -64,7 +74,10 @@ for (const scheme of SCHEMES) {
 
     await addFromPalette(page, 'bwa', 'bwa-mem');
     await shoot('node-selected-catalog-tool');
-    await page.getByTestId('prop-command').scrollIntoViewIfNeeded();
+    for (const section of ['reliability', 'checks', 'advanced'] as const) {
+      await openSection(page, section);
+    }
+    await shoot('node-selected-catalog-tool-sections-open');
     await page.getByTestId('prop-check-blocking').scrollIntoViewIfNeeded();
     await shoot('node-selected-catalog-tool-scrolled');
 
@@ -74,11 +87,18 @@ for (const scheme of SCHEMES) {
     await page.getByTestId('prop-check-blocking').scrollIntoViewIfNeeded();
     await shoot('node-selected-custom-scrolled');
 
+    await page.getByTestId('open-shortcuts').click();
+    await shoot('dialog-shortcuts');
+    await page.keyboard.press('Escape');
+
     await page.getByTestId('details').click();
     await shoot('dialog-details');
     await page.getByRole('button', { name: 'Cancel' }).click();
 
     await page.getByRole('button', { name: 'New', exact: true }).click();
+    await expect(page.getByTestId('confirm-dialog')).toBeVisible();
+    await shoot('dialog-confirm-discard');
+    await page.getByTestId('confirm-accept').click();
     await expect(page.getByTestId('dialog-name')).toBeVisible();
     await shoot('dialog-new');
   });
@@ -115,6 +135,7 @@ for (const scheme of SCHEMES) {
       { label: 'Copy', command: 'cp {input} {output}', input: 'b.txt', output: 'c.txt' },
     ]);
     await selectNode(page, 'Flaky');
+    await openSection(page, 'reliability');
     await page.getByTestId('prop-retries').fill('1');
     await page.getByTestId('prop-retry-delay').fill('6');
     await page.mouse.click(700, 800);
@@ -148,6 +169,7 @@ for (const scheme of SCHEMES) {
       { label: 'Next', command: 'cp {input} {output}', input: 'empty.txt', output: 'next.txt' },
     ]);
     await selectNode(page, 'Empty');
+    await openSection(page, 'checks');
     await page.getByTestId('prop-check-non-empty').check();
     await page.mouse.click(700, 800);
 
@@ -178,9 +200,17 @@ for (const scheme of SCHEMES) {
     await page.getByTestId('prop-label').fill('Same');
     await shoot('validation-duplicate-name');
 
-    await page.getByTestId('run').click();
-    await page.waitForTimeout(500);
-    await page.getByTestId('tab-logs').click();
-    await shoot('validation-run-refused');
+    await page.getByTestId('run').click({ force: true });
+    await expect(page.getByTestId('problems-panel')).toBeVisible();
+    await shoot('validation-problems-list');
+
+    // An incomplete step: empty tool and command, shown after a run attempt.
+    await page.getByTestId('add-node').click();
+    await selectNode(page, 'Node 3');
+    await shoot('validation-incomplete-step');
+
+    await page.getByTestId('problems-close').click();
+    await page.getByTestId('run').hover();
+    await shoot('validation-run-disabled-reason');
   });
 }

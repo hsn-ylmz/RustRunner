@@ -130,7 +130,6 @@ interface ElectronAPI {
       suggestedName: string
     ): Promise<string | null>;
     openWorkflow(): Promise<{ path: string; contents: string } | null>;
-    confirmDiscard(message: string): Promise<boolean>;
     setDirty(dirty: boolean): void;
 
     // Event listeners. All return an unsubscribe function so React effects

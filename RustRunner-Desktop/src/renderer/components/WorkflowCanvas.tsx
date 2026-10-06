@@ -59,7 +59,7 @@ export function nextNodePosition(
   // Insets clearing the floating overlays. Generous rather than exact — the
   // cost of being wrong is an unclickable node.
   const box = {
-    left: rect.x + 170,
+    left: rect.x + 210,
     top: rect.y + 90,
     right: rect.right - 230,
     bottom: rect.bottom - 60,
@@ -336,6 +336,7 @@ export function WorkflowCanvas({
   onEdgesChange,
   onConnect,
   onSelectionChange,
+  onDragStart,
 }: {
   nodes: any[];
   edges: any[];
@@ -343,6 +344,8 @@ export function WorkflowCanvas({
   onEdgesChange: (changes: any) => void;
   onConnect: (params: any) => void;
   onSelectionChange: (selection: any) => void;
+  /** A drag of one or several nodes is about to begin (one undo step). */
+  onDragStart?: () => void;
 }) {
   return (
     <ReactFlow
@@ -353,6 +356,11 @@ export function WorkflowCanvas({
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
       onSelectionChange={onSelectionChange}
+      onNodeDragStart={onDragStart}
+      onSelectionDragStart={onDragStart}
+      // The editor deletes on Delete/Backspace itself (never while typing),
+      // so the removal is one undo step and also covers selected connections.
+      deleteKeyCode={null}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       fitView

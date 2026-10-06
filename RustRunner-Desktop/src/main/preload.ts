@@ -154,10 +154,6 @@ const electronHandler = {
       return ipcRenderer.invoke('open-workflow');
     },
 
-    confirmDiscard(message: string): Promise<boolean> {
-      return ipcRenderer.invoke('confirm-discard', message);
-    },
-
     setDirty(dirty: boolean) {
       ipcRenderer.send('set-dirty', dirty);
     },

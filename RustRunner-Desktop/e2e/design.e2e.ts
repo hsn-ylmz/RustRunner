@@ -1,4 +1,4 @@
-import { test, expect, selectNode } from './fixtures';
+import { test, expect, buildChain, selectNode } from './fixtures';
 
 /** WCAG contrast of two computed `rgb(...)` colours. */
 async function contrastOf(page: any, selector: string): Promise<number> {
@@ -21,7 +21,8 @@ async function contrastOf(page: any, selector: string): Promise<number> {
 for (const scheme of ['light', 'dark'] as const) {
   test(`${scheme}: the rendered primary button and focus ring meet contrast`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme });
-    await page.getByTestId('add-node').click();
+    // Run is only available once the step is complete.
+    await buildChain(page, [{ label: 'Make', command: 'echo hi > {output}', output: 'a.txt' }]);
     await expect(page.getByTestId('run')).toBeEnabled();
     await page.waitForTimeout(400); // let the colour transition finish
     expect(await contrastOf(page, '[data-testid="run"]')).toBeGreaterThanOrEqual(4.5);

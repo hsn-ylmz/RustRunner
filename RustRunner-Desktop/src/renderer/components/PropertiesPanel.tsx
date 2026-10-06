@@ -33,14 +33,27 @@ import {
   Button,
   Callout,
   Checkbox,
+  CollapsibleSection,
   Icon,
   NumberField,
   Panel,
-  Section,
   Select,
   TextArea,
   TextField,
 } from '../ui';
+import { useEffect, useState } from 'react';
+import {
+  SECTION_TITLES,
+  isSectionOpen,
+  loadOpenState,
+  saveOpenState,
+  sectionForField,
+  sectionSummary,
+  testIdForField,
+  type OpenState,
+  type SectionId,
+} from '../panelSections';
+import type { IssueField } from '../validation';
 
 /** Checkbox state may be a boolean or, from loose data, the string 'true'. */
 const checksOn = (value: unknown) => value === true || value === 'true';
@@ -96,6 +109,12 @@ function CheckTargetSelect({
   );
 }
 
+/** Asks the panel to open the section holding `field` and put the cursor in it. */
+export interface FocusRequest {
+  nodeId: string;
+  field: IssueField;
+}
+
 export function PropertiesPanel({
   selectedNode,
   onNodeUpdate,
@@ -103,8 +122,63 @@ export function PropertiesPanel({
   nodeFiles,
   onNodeFilesUpdate,
   addLog,
-  invalidReason,
-}: any) {
+  fieldIssues = {},
+  revealErrors = false,
+  focusRequest = null,
+  onFocusHandled,
+  keepGoing = false,
+  onOpenDetails,
+}: {
+  selectedNode: any;
+  onNodeUpdate: (nodeId: string, field: string, value: string | boolean) => void;
+  onNodePatch: (nodeId: string, patch: Record<string, unknown>) => void;
+  nodeFiles: string[];
+  onNodeFilesUpdate: (nodeId: string, files: string[]) => void;
+  addLog: (message: string) => void;
+  /** Problems of this node by field (see validation.ts). */
+  fieldIssues?: Partial<Record<IssueField, string>>;
+  /** Show every problem now (the person tried to run), not only those on fields already visited. */
+  revealErrors?: boolean;
+  focusRequest?: FocusRequest | null;
+  onFocusHandled?: () => void;
+  /** The workflow-wide keep-going setting, shown in Reliability. */
+  keepGoing?: boolean;
+  onOpenDetails?: () => void;
+}) {
+  // Which sections the person opened or closed, remembered between sessions.
+  const [chosen, setChosen] = useState<OpenState>(loadOpenState);
+  // Fields the person has been in. A required field is not called wrong before they got to it.
+  const [visited, setVisited] = useState<Set<string>>(() => new Set());
+  const [pendingFocus, setPendingFocus] = useState<IssueField | null>(null);
+
+  const nodeId: string | undefined = selectedNode?.id;
+
+  const setSectionOpen = (section: SectionId, open: boolean) => {
+    setChosen((prev) => {
+      const next = { ...prev, [section]: open };
+      saveOpenState(next);
+      return next;
+    });
+  };
+
+  // A jump from the problem list: open the section, then focus the field once it exists.
+  useEffect(() => {
+    if (!focusRequest || !selectedNode || focusRequest.nodeId !== nodeId) return;
+    setSectionOpen(sectionForField(focusRequest.field), true);
+    setPendingFocus(focusRequest.field);
+    onFocusHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRequest]);
+
+  useEffect(() => {
+    if (!pendingFocus) return;
+    const el = document.querySelector<HTMLElement>(`[data-testid="${testIdForField(pendingFocus)}"]`);
+    if (!el) return;
+    el.scrollIntoView?.({ block: 'nearest' });
+    el.focus();
+    setPendingFocus(null);
+  }, [pendingFocus, chosen]);
+
   if (!selectedNode) {
     return (
       <Panel className="properties-panel" title="Properties">
@@ -112,6 +186,33 @@ export function PropertiesPanel({
       </Panel>
     );
   }
+
+  const data = selectedNode.data;
+  const visit = (field: string) =>
+    setVisited((prev) => (prev.has(`${nodeId}:${field}`) ? prev : new Set(prev).add(`${nodeId}:${field}`)));
+  /** The problem to show on a field: always for the name, otherwise once visited or after a run attempt. */
+  const errorFor = (field: IssueField): string | undefined => {
+    const message = fieldIssues[field];
+    if (!message) return undefined;
+    return field === 'label' || revealErrors || visited.has(`${nodeId}:${field}`) ? message : undefined;
+  };
+  const problemCount = (section: SectionId) =>
+    (Object.keys(fieldIssues) as IssueField[]).filter(
+      (f) => sectionForField(f) === section && errorFor(f)
+    ).length;
+  const sectionProps = (section: SectionId, extra: { fileCount?: number } = {}) => ({
+    title: SECTION_TITLES[section],
+    open: isSectionOpen(section, chosen, data),
+    onToggle: (open: boolean) => setSectionOpen(section, open),
+    summary: sectionSummary(section, data, extra),
+    attention:
+      problemCount(section) > 0
+        ? problemCount(section) === 1
+          ? '1 problem'
+          : `${problemCount(section)} problems`
+        : undefined,
+    'data-testid': `section-${section}`,
+  });
 
   const hasOutput = Boolean(selectedNode.data.output);
   const outputs = declaredOutputs(selectedNode.data.output);
@@ -248,15 +349,16 @@ export function PropertiesPanel({
       title="Node properties"
       aria-label="Node properties"
     >
-      <Section title="Step">
+      <CollapsibleSection {...sectionProps('basics')}>
         <TextField
           label="Node name"
           value={selectedNode.data.label || ''}
           data-testid="prop-label"
           onChange={(e) => handleInputChange('label', e.target.value)}
-          error={invalidReason || undefined}
+          onBlur={() => visit('label')}
+          error={errorFor('label')}
           hint={
-            selectedNode.data.label && !invalidReason
+            selectedNode.data.label && !errorFor('label')
               ? `Step ID: ${labelToId(selectedNode.data.label)}`
               : undefined
           }
@@ -267,6 +369,8 @@ export function PropertiesPanel({
           value={selectedNode.data.tool || ''}
           data-testid="prop-tool"
           onChange={(e) => handleToolChange(e.target.value)}
+          onBlur={() => visit('tool')}
+          error={errorFor('tool')}
           placeholder="e.g., bash, fastqc, bowtie2"
           hint={
             catalogTool
@@ -274,125 +378,20 @@ export function PropertiesPanel({
               : undefined
           }
         />
-      </Section>
 
-      {catalogTool && (
-        <Section card title={`${catalogTool.name} options`} data-testid="catalog-params">
-          <div className="field-hint" data-testid="catalog-types">
-            {catalogTool.description} Conda package: {catalogTool.conda.package}. File types:{' '}
-            {catalogTool.inputTypes.join(', ')} {'→'} {catalogTool.outputTypes.join(', ')}.
-          </div>
-
-          {catalogTool.params.map((param) => {
-            const testId = `catalog-param-${param.id}`;
-            const value = catalogParams[param.id];
-            if (param.type === 'boolean') {
-              return (
-                <Checkbox
-                  key={param.id}
-                  label={param.label}
-                  hint={param.description}
-                  checked={value === true || value === 'true'}
-                  data-testid={testId}
-                  onChange={(e) => handleParamChange(param, e.target.checked)}
-                />
-              );
-            }
-            if (param.type === 'select') {
-              return (
-                <Select
-                  key={param.id}
-                  label={param.label}
-                  required={param.required}
-                  hint={param.description}
-                  value={String(value)}
-                  data-testid={testId}
-                  onChange={(e) => handleParamChange(param, e.target.value)}
-                >
-                  {param.options?.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </Select>
-              );
-            }
-            if (param.type === 'number') {
-              return (
-                <NumberField
-                  key={param.id}
-                  label={param.label}
-                  required={param.required}
-                  hint={param.description}
-                  min={param.min}
-                  max={param.max}
-                  step={1}
-                  value={String(value ?? '')}
-                  data-testid={testId}
-                  onChange={(e) => handleParamChange(param, e.target.value)}
-                  onBlur={(e) => handleParamChange(param, coerceNumber(param, e.target.value))}
-                />
-              );
-            }
-            return (
-              <TextField
-                key={param.id}
-                label={param.label}
-                required={param.required}
-                hint={param.description}
-                value={String(value ?? '')}
-                data-testid={testId}
-                placeholder={param.required ? 'Required' : undefined}
-                onChange={(e) => handleParamChange(param, e.target.value)}
-              />
-            );
-          })}
-
-          {missingParams.length > 0 && !commandIsCustom && (
-            <Callout tone="warning" data-testid="catalog-missing">
-              Fill in:{' '}
-              {missingParams
-                .map((id) => catalogTool.params.find((p) => p.id === id)?.label ?? id)
-                .join(', ')}
-            </Callout>
-          )}
-
-          {commandIsCustom && (
-            <Callout tone="info" data-testid="catalog-custom-note">
-              The command was edited by hand, so these options no longer change it.
-              <div>
-                <Button
-                  size="sm"
-                  onClick={handleRegenerateCommand}
-                  data-testid="catalog-regenerate"
-                >
-                  Rebuild command from options
-                </Button>
-              </div>
-            </Callout>
-          )}
-        </Section>
-      )}
-
-      <Section title="Command">
-        <TextArea
-          label="Command"
-          hideLabel
-          mono
-          rows={4}
-          value={selectedNode.data.command || ''}
-          data-testid="prop-command"
-          onChange={(e) => handleCommandChange(e.target.value)}
-          placeholder="Enter command to execute"
-          hint={
-            <>
-              Use <code>{'{input}'}</code> and <code>{'{output}'}</code> as placeholders.
-            </>
-          }
+        <NumberField
+          label="Threads"
+          min={1}
+          step={1}
+          value={selectedNode.data.threads ?? 1}
+          data-testid="prop-threads"
+          onChange={(e) => handleThreadsChange(e.target.value)}
+          onBlur={(e) => handleThreadsChange(String(normalizeThreads(e.target.value)))}
+          hint="CPU threads this step requests from the scheduler."
         />
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Files">
+      <CollapsibleSection {...sectionProps('io', { fileCount: nodeFiles?.length })}>
         <div className="field" role="group" aria-labelledby="prop-input-files-label">
           <span className="field-label" id="prop-input-files-label">
             Input files
@@ -456,6 +455,8 @@ export function PropertiesPanel({
           value={selectedNode.data.input || ''}
           data-testid="prop-input"
           onChange={(e) => handleInputChange('input', e.target.value)}
+          onBlur={() => visit('input')}
+          error={errorFor('input')}
           placeholder="e.g., {sample}.fastq or data/{sample}.txt"
           hint={
             hasWildcards(selectedNode.data.input || '')
@@ -469,6 +470,8 @@ export function PropertiesPanel({
           value={selectedNode.data.output || ''}
           data-testid="prop-output"
           onChange={(e) => handleInputChange('output', e.target.value)}
+          onBlur={() => visit('output')}
+          error={errorFor('output')}
           placeholder="e.g., output/{sample}.txt"
           hint={
             hasWildcards(selectedNode.data.output || '')
@@ -476,20 +479,114 @@ export function PropertiesPanel({
               : undefined
           }
         />
-      </Section>
+      </CollapsibleSection>
 
-      <Section title="Run settings">
-        <NumberField
-          label="Threads"
-          min={1}
-          step={1}
-          value={selectedNode.data.threads ?? 1}
-          data-testid="prop-threads"
-          onChange={(e) => handleThreadsChange(e.target.value)}
-          onBlur={(e) => handleThreadsChange(String(normalizeThreads(e.target.value)))}
-          hint="CPU threads this step requests from the scheduler."
-        />
+      {catalogTool && (
+        <CollapsibleSection {...sectionProps('options')} data-testid="catalog-params">
+          <div className="field-hint" data-testid="catalog-types">
+            {catalogTool.description} Conda package: {catalogTool.conda.package}. File types:{' '}
+            {catalogTool.inputTypes.join(', ')} {'→'} {catalogTool.outputTypes.join(', ')}.
+          </div>
 
+          {catalogTool.params.map((param) => {
+            const testId = `catalog-param-${param.id}`;
+            const value = catalogParams[param.id];
+            const paramError = errorFor(`param:${param.id}`);
+            if (param.type === 'boolean') {
+              return (
+                <Checkbox
+                  key={param.id}
+                  label={param.label}
+                  hint={param.description}
+                  checked={value === true || value === 'true'}
+                  data-testid={testId}
+                  onChange={(e) => handleParamChange(param, e.target.checked)}
+                />
+              );
+            }
+            if (param.type === 'select') {
+              return (
+                <Select
+                  key={param.id}
+                  label={param.label}
+                  required={param.required}
+                  hint={param.description}
+                  value={String(value)}
+                  data-testid={testId}
+                  onChange={(e) => handleParamChange(param, e.target.value)}
+                >
+                  {param.options?.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </Select>
+              );
+            }
+            if (param.type === 'number') {
+              return (
+                <NumberField
+                  key={param.id}
+                  label={param.label}
+                  required={param.required}
+                  hint={param.description}
+                  min={param.min}
+                  max={param.max}
+                  step={1}
+                  value={String(value ?? '')}
+                  data-testid={testId}
+                  error={paramError}
+                  onChange={(e) => handleParamChange(param, e.target.value)}
+                  onBlur={(e) => {
+                    visit(`param:${param.id}`);
+                    handleParamChange(param, coerceNumber(param, e.target.value));
+                  }}
+                />
+              );
+            }
+            return (
+              <TextField
+                key={param.id}
+                label={param.label}
+                required={param.required}
+                hint={param.description}
+                value={String(value ?? '')}
+                data-testid={testId}
+                error={paramError}
+                placeholder={param.required ? 'Required' : undefined}
+                onChange={(e) => handleParamChange(param, e.target.value)}
+                onBlur={() => visit(`param:${param.id}`)}
+              />
+            );
+          })}
+
+          {missingParams.length > 0 && !commandIsCustom && (
+            <Callout tone="warning" data-testid="catalog-missing">
+              Fill in:{' '}
+              {missingParams
+                .map((id) => catalogTool.params.find((p) => p.id === id)?.label ?? id)
+                .join(', ')}
+            </Callout>
+          )}
+
+          {commandIsCustom && (
+            <Callout tone="info" data-testid="catalog-custom-note">
+              The command was edited by hand, so these options no longer change it.
+              <div>
+                <Button
+                  size="sm"
+                  onClick={handleRegenerateCommand}
+                  data-testid="catalog-regenerate"
+                >
+                  Rebuild command from options
+                </Button>
+              </div>
+            </Callout>
+          )}
+        </CollapsibleSection>
+      )}
+
+      <CollapsibleSection {...sectionProps('reliability')}>
         <NumberField
           label="Retries"
           min={0}
@@ -545,19 +642,24 @@ export function PropertiesPanel({
           placeholder="No limit"
           hint="Each attempt is killed if it runs longer than this. Leave empty for no limit."
         />
-      </Section>
 
-      <Section title="Testing">
-        <Checkbox
-          label="Mock (don't run the tool)"
-          checked={isMocked}
-          data-testid="prop-mock"
-          onChange={(e) => handleInputChange('mock', e.target.checked)}
-          hint="Creates the step's outputs instead of running it: empty files, and folders for paths ending in /. Use it to try the rest of the workflow without the real tool. Non-empty and line-count checks are skipped. A mocked step, and every step after it, never counts as up to date, so a real run executes them."
-        />
-      </Section>
+        <div className="field-hint" data-testid="keep-going-hint">
+          Keep going after a failure is a setting of the whole workflow, and is{' '}
+          <strong>{keepGoing ? 'on' : 'off'}</strong>.{' '}
+          {keepGoing
+            ? 'Steps that do not depend on a failed step still run.'
+            : 'When a step fails, the steps after it do not run.'}
+          {onOpenDetails && (
+            <div>
+              <Button size="sm" onClick={onOpenDetails} data-testid="open-keep-going">
+                Change in workflow details
+              </Button>
+            </div>
+          )}
+        </div>
+      </CollapsibleSection>
 
-      <Section title="Output checks">
+      <CollapsibleSection {...sectionProps('checks')}>
         <Checkbox
           label="Outputs must exist"
           checked={checksOn(selectedNode.data.checkExists)}
@@ -639,7 +741,35 @@ export function PropertiesPanel({
             ? 'Run after the step succeeds. Each check can cover all outputs or just one. A failed blocking check fails the step and skips everything after it; the tool is not re-run. Unchecked "Blocking" only logs a warning.'
             : "Set an output file first; checks look at the step's outputs."}
         </div>
-      </Section>
+      </CollapsibleSection>
+
+      <CollapsibleSection {...sectionProps('advanced')}>
+        <TextArea
+          label="Command"
+          mono
+          rows={4}
+          value={selectedNode.data.command || ''}
+          data-testid="prop-command"
+          onChange={(e) => handleCommandChange(e.target.value)}
+          onBlur={() => visit('command')}
+          error={errorFor('command')}
+          placeholder="Enter command to execute"
+          hint={
+            <>
+              The shell command this step runs. Use <code>{'{input}'}</code> and{' '}
+              <code>{'{output}'}</code> as placeholders.
+            </>
+          }
+        />
+
+        <Checkbox
+          label="Mock (don't run the tool)"
+          checked={isMocked}
+          data-testid="prop-mock"
+          onChange={(e) => handleInputChange('mock', e.target.checked)}
+          hint="Creates the step's outputs instead of running it: empty files, and folders for paths ending in /. Use it to try the rest of the workflow without the real tool. Non-empty and line-count checks are skipped. A mocked step, and every step after it, never counts as up to date, so a real run executes them."
+        />
+      </CollapsibleSection>
     </Panel>
   );
 }

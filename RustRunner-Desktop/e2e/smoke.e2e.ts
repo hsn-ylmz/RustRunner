@@ -8,6 +8,7 @@ import {
   connect,
   fillNode,
   nodes,
+  openSection,
   openStepStatus,
   pidsMatching,
   selectNode,
@@ -56,6 +57,8 @@ test('two nodes can be added, connected and filled in', async ({ page, consoleEr
 test('retries, timeout and output checks render and persist on reselect', async ({ page }) => {
   await buildChain(page, TWO_STEPS);
   await selectNode(page, 'Make');
+  await openSection(page, 'reliability');
+  await openSection(page, 'checks');
 
   // Retry options are hidden until retries > 0.
   await expect(page.getByTestId('prop-retry-backoff')).toHaveCount(0);
@@ -93,6 +96,7 @@ test('retries, timeout and output checks render and persist on reselect', async 
 test('output checks are disabled until the node has an output', async ({ page }) => {
   await addNode(page);
   await nodes(page).first().click();
+  await openSection(page, 'checks');
   await expect(page.getByTestId('prop-check-exists')).toBeDisabled();
   await page.getByTestId('prop-output').fill('x.txt');
   await expect(page.getByTestId('prop-check-exists')).toBeEnabled();
@@ -135,6 +139,7 @@ test('a failing step shows as retrying with its attempt, then succeeds', async (
     },
   ]);
   await selectNode(page, 'Flaky');
+  await openSection(page, 'reliability');
   await page.getByTestId('prop-retries').fill('1');
   await page.getByTestId('prop-retry-delay').fill('4');
 
@@ -167,6 +172,7 @@ test('a failed blocking output check fails the step and skips the one after it',
     { label: 'Next', command: 'cp {input} {output}', input: 'empty.txt', output: 'next.txt' },
   ]);
   await selectNode(page, 'Empty');
+  await openSection(page, 'checks');
   await page.getByTestId('prop-check-non-empty').check();
 
   await page.getByTestId('run-from-scratch').click();

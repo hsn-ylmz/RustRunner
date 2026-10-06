@@ -256,26 +256,6 @@ ipcMain.handle(
   }
 );
 
-/**
- * Asks the user whether to discard unsaved changes. Used both for in-app
- * destructive actions (New / Open / Clear) and the window close guard.
- */
-ipcMain.handle('confirm-discard', async (_event, message: string): Promise<boolean> => {
-  if (!mainWindow) return true;
-
-  const { response } = await dialog.showMessageBox(mainWindow, {
-    type: 'warning',
-    buttons: ['Discard', 'Cancel'],
-    defaultId: 1,
-    cancelId: 1,
-    title: 'Unsaved Changes',
-    message,
-    detail: 'Your changes will be lost.',
-  });
-
-  return response === 0;
-});
-
 /** Renderer keeps the main process informed so the close guard can act. */
 ipcMain.on('set-dirty', (_event, dirty: boolean) => {
   rendererIsDirty = dirty;

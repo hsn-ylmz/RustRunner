@@ -186,6 +186,20 @@ export async function buildChain(page: Page, specs: NodeSpec[]): Promise<void> {
   }
 }
 
+export type PanelSection = 'basics' | 'io' | 'reliability' | 'checks' | 'advanced';
+
+/**
+ * Opens a collapsible section of the properties panel (a no-op when it is open
+ * already). The open state is remembered by the app, so it stays open when
+ * another node is selected.
+ */
+export async function openSection(page: Page, section: PanelSection): Promise<void> {
+  const toggle = page.getByTestId(`section-${section}-toggle`);
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
 export async function openStepStatus(page: Page): Promise<void> {
   await page.getByTestId('tab-steps').click();
   await expect(page.getByTestId('tab-steps')).toHaveAttribute('aria-selected', 'true');

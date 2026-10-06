@@ -5,7 +5,10 @@ import {
   Button,
   Callout,
   Checkbox,
+  CollapsibleSection,
+  ConfirmDialog,
   Dialog,
+  Kbd,
   IconButton,
   NumberField,
   Panel,
@@ -277,5 +280,55 @@ describe('trapTarget', () => {
   it('keeps disabled controls out of the tab order', () => {
     expect(FOCUSABLE_SELECTOR).toContain('button:not([disabled])');
     expect(FOCUSABLE_SELECTOR).toContain('input:not([disabled])');
+  });
+});
+
+describe('CollapsibleSection', () => {
+  const section = (open: boolean, extra: object = {}) =>
+    html(
+      <CollapsibleSection title="Reliability" summary="2 retries" open={open} onToggle={() => {}} {...extra}>
+        <p>body</p>
+      </CollapsibleSection>
+    );
+
+  it('is a button with aria-expanded and aria-controls pointing at the body', () => {
+    const open = section(true);
+    expect(attr(open, 'button', 'aria-expanded')).toBe('true');
+    const controls = attr(open, 'button', 'aria-controls');
+    expect(controls).toBeTruthy();
+    expect(open).toContain(`id="${controls}"`);
+    expect(open).toContain('<p>body</p>');
+  });
+
+  it('shows the summary and no body while folded', () => {
+    const closed = section(false);
+    expect(attr(closed, 'button', 'aria-expanded')).toBe('false');
+    expect(closed).toContain('2 retries');
+    expect(closed).not.toContain('<p>body</p>');
+    expect(section(true)).not.toContain('2 retries');
+  });
+
+  it('shows a problem count in either state', () => {
+    expect(section(false, { attention: '1 problem' })).toContain('1 problem');
+    expect(section(true, { attention: '1 problem' })).toContain('1 problem');
+  });
+});
+
+describe('ConfirmDialog and Kbd', () => {
+  it('names the action on the danger button and offers Cancel', () => {
+    const markup = html(
+      <ConfirmDialog
+        request={{ title: 'Clear the canvas?', message: 'Steps go.', confirmLabel: 'Clear canvas' }}
+        onResolve={() => {}}
+      />
+    );
+    expect(markup).toContain('role="dialog"');
+    expect(markup).toContain('Clear the canvas?');
+    expect(markup).toContain('Cancel');
+    expect(markup).toMatch(/btn-danger[^>]*>.*Clear canvas/);
+  });
+
+  it('draws one key cap per key', () => {
+    expect((html(<Kbd keys="Shift+Cmd+Z" />).match(/<kbd/g) ?? []).length).toBe(3);
   });
 });
