@@ -20,6 +20,7 @@
     "package:linux-arm64": "npm run build && electron-builder build --linux --arm64 --publish never",
     "test": "vitest run",
     "test:tools": "cross-env RUSTRUNNER_REAL_TOOLS=1 vitest run --config vitest.tools.config.mts",
+    "ux:screens": "cargo build --manifest-path ../RustRunner/Cargo.toml && npm run build && cross-env UX_OUT=../ux-review/screens playwright test ux-screens",
     "test:e2e": "cargo build --manifest-path ../RustRunner/Cargo.toml && npm run build && playwright test"
   },
   "author": "Hasan Yilmaz",
