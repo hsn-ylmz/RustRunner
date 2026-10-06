@@ -60,3 +60,8 @@ examples/out/
 /graphify-out/cache/
 /graphify-out/.graphify_python
 /graphify-out/20*/
+
+# Electron e2e scratch space and reports
+/RustRunner-Desktop/e2e/.tmp/
+/RustRunner-Desktop/test-results/
+/RustRunner-Desktop/playwright-report/

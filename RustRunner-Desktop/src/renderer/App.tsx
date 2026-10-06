@@ -30,6 +30,7 @@ import {
   labelToId,
   validateWorkflow,
 } from './workflowConversion';
+import { occupiedRects } from './nodePlacement';
 import { describeResume, type ResumeInfo } from './resume';
 import { UpdateBanner, type UpdateStatus } from './components/UpdateBanner';
 import { PropertiesPanel } from './components/PropertiesPanel';
@@ -376,7 +377,8 @@ function WorkflowEditorInner() {
     const position = nextNodePosition(
       flowWrapperRef.current,
       nodes.length,
-      screenToFlowPosition
+      screenToFlowPosition,
+      occupiedRects(nodes)
     );
 
     const newNode = {
@@ -395,7 +397,7 @@ function WorkflowEditorInner() {
     };
     setNodes((nds) => [...nds, newNode]);
     markDirty();
-  }, [nodes.length, screenToFlowPosition, pushHistory, markDirty]);
+  }, [nodes, screenToFlowPosition, pushHistory, markDirty]);
 
   const deleteSelectedNodes = useCallback(() => {
     const selectedIds = nodes.filter((n: any) => n.selected).map((n: any) => n.id);
@@ -823,7 +825,7 @@ function WorkflowEditorInner() {
           {/* Top Toolbar */}
           <div className="top-toolbar">
             <div className="workflow-info">
-              <div className="workflow-title">
+              <div className="workflow-title" data-testid="workflow-title">
                 {workflowName}
                 {isDirty && <span className="dirty-marker" title="Unsaved changes">•</span>}
               </div>
@@ -843,14 +845,17 @@ function WorkflowEditorInner() {
               <button className="toolbar-button" onClick={handleEditDetails}>
                 Details
               </button>
-              <button className="toolbar-button" onClick={handleSelectDirectory}>
+              <button className="toolbar-button" onClick={handleSelectDirectory}
+              data-testid="set-directory">
                 Set Directory
               </button>
             </div>
 
             <div className="edit-buttons">
-              <button className="toolbar-button add-button" onClick={addNode}>+ Add Node</button>
-              <button className="toolbar-button delete-button" onClick={deleteSelectedNodes}>Delete</button>
+              <button className="toolbar-button add-button" onClick={addNode}
+              data-testid="add-node">+ Add Node</button>
+              <button className="toolbar-button delete-button" onClick={deleteSelectedNodes}
+              data-testid="delete-node">Delete</button>
             </div>
           </div>
 
@@ -859,6 +864,7 @@ function WorkflowEditorInner() {
             <button
               className={`execution-button run-button ${executionState === 'running' ? 'active' : ''}`}
               onClick={handleRun}
+              data-testid="run"
               disabled={nodes.length === 0 || executionState === 'running'}
             >
               {executionState === 'paused' ? 'Continue' : 'Run from scratch'}
@@ -867,6 +873,7 @@ function WorkflowEditorInner() {
             <button
               className="execution-button resume-button"
               onClick={handleResumeLast}
+              data-testid="resume"
               disabled={nodes.length === 0 || executionState !== 'idle' || !resumeInfo?.canResume}
               title={describeResume(resumeInfo, Boolean(workingDirectory))}
             >
@@ -876,6 +883,7 @@ function WorkflowEditorInner() {
             <button
               className="execution-button dry-run-button"
               onClick={handleDryRun}
+              data-testid="dry-run"
               disabled={nodes.length === 0 || executionState !== 'idle'}
             >
               Dry Run
@@ -884,6 +892,7 @@ function WorkflowEditorInner() {
             <button
               className={`execution-button pause-button ${executionState === 'paused' ? 'active' : ''}`}
               onClick={handlePause}
+              data-testid="pause"
               disabled={executionState !== 'running'}
             >
               Pause
@@ -892,12 +901,13 @@ function WorkflowEditorInner() {
             <button
               className="execution-button stop-button"
               onClick={handleStop}
+              data-testid="stop"
               disabled={executionState === 'idle'}
             >
               Stop
             </button>
 
-            {progress && <div className="execution-progress">{progress}</div>}
+            {progress && <div className="execution-progress" data-testid="progress">{progress}</div>}
           </div>
 
 

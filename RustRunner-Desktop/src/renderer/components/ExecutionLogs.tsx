@@ -68,6 +68,7 @@ export function ExecutionLogs({
             <button
               role="tab"
               aria-selected={tab === 'logs'}
+              data-testid="tab-logs"
               className={`execution-tab ${tab === 'logs' ? 'active' : ''}`}
               onClick={() => onTabChange('logs')}
             >
@@ -76,6 +77,7 @@ export function ExecutionLogs({
             <button
               role="tab"
               aria-selected={tab === 'steps'}
+              data-testid="tab-steps"
               className={`execution-tab ${tab === 'steps' ? 'active' : ''}`}
               onClick={() => onTabChange('steps')}
             >
@@ -104,7 +106,7 @@ export function ExecutionLogs({
           onScroll={handleLogScroll}
         >
           {logs.map((log, index) => (
-            <div key={index} className={`log-entry ${classifyLogLine(log)}`}>
+            <div key={index} className={`log-entry ${classifyLogLine(log)}`} data-testid="log-entry">
               {log}
             </div>
           ))}

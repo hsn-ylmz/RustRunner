@@ -46,7 +46,7 @@ export function StepStatusPanel({
   const counts = summarizeRows(rows);
 
   return (
-    <div className="step-status">
+    <div className="step-status" data-testid="step-status">
       <div className="step-status-summary">
         {SUMMARY_ORDER.filter((state) => counts[state] > 0).map((state) => (
           <span key={state} className={`step-chip step-state-${state}`}>
@@ -65,7 +65,13 @@ export function StepStatusPanel({
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.id} className={`step-row step-state-${row.state}`}>
+            <tr
+              key={row.id}
+              className={`step-row step-state-${row.state}`}
+              data-testid="step-row"
+              data-step-id={row.id}
+              data-state={row.state}
+            >
               <td className="step-row-state">
                 <span className="step-glyph">{STATE_TEXT[row.state].glyph}</span>{' '}
                 {STATE_TEXT[row.state].label}

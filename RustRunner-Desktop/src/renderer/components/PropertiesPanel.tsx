@@ -96,7 +96,7 @@ export function PropertiesPanel({
   };
 
   return (
-    <div className="properties-panel">
+    <div className="properties-panel" data-testid="properties-panel">
       <h3>Node Properties</h3>
 
       <div className="property-group">
@@ -105,6 +105,7 @@ export function PropertiesPanel({
           type="text"
           className="property-input"
           value={selectedNode.data.label || ''}
+          data-testid="prop-label"
           onChange={(e) => handleInputChange('label', e.target.value)}
         />
         {selectedNode.data.label && !invalidReason && (
@@ -123,6 +124,7 @@ export function PropertiesPanel({
           type="text"
           className="property-input"
           value={selectedNode.data.tool || ''}
+          data-testid="prop-tool"
           onChange={(e) => handleInputChange('tool', e.target.value)}
           placeholder="e.g., bash, fastqc, bowtie2"
         />
@@ -133,6 +135,7 @@ export function PropertiesPanel({
         <textarea
           className="property-textarea"
           value={selectedNode.data.command || ''}
+          data-testid="prop-command"
           onChange={(e) => handleInputChange('command', e.target.value)}
           placeholder="Enter command to execute"
           rows={4}
@@ -195,6 +198,7 @@ export function PropertiesPanel({
           type="text"
           className="property-input"
           value={selectedNode.data.wildcardName ?? ''}
+          data-testid="prop-wildcard-name"
           onChange={(e) => handleWildcardNameChange(e.target.value)}
           placeholder="sample"
           maxLength={MAX_WILDCARD_NAME_LENGTH}
@@ -215,6 +219,7 @@ export function PropertiesPanel({
           type="text"
           className="property-input"
           value={selectedNode.data.input || ''}
+          data-testid="prop-input"
           onChange={(e) => handleInputChange('input', e.target.value)}
           placeholder="e.g., {sample}.fastq or data/{sample}.txt"
         />
@@ -231,6 +236,7 @@ export function PropertiesPanel({
           type="text"
           className="property-input"
           value={selectedNode.data.output || ''}
+          data-testid="prop-output"
           onChange={(e) => handleInputChange('output', e.target.value)}
           placeholder="e.g., output/{sample}.txt"
         />
@@ -249,6 +255,7 @@ export function PropertiesPanel({
           step={1}
           className="property-input"
           value={selectedNode.data.threads ?? 1}
+          data-testid="prop-threads"
           onChange={(e) => handleInputChange('threads', e.target.value)}
           onBlur={(e) =>
             handleInputChange('threads', String(normalizeThreads(e.target.value)))
@@ -268,6 +275,7 @@ export function PropertiesPanel({
           step={1}
           className="property-input"
           value={selectedNode.data.retries ?? 0}
+          data-testid="prop-retries"
           onChange={(e) => handleInputChange('retries', e.target.value)}
           onBlur={(e) =>
             handleInputChange('retries', String(normalizeRetries(e.target.value)))
@@ -285,6 +293,7 @@ export function PropertiesPanel({
             <select
               className="property-input"
               value={normalizeBackoff(selectedNode.data.retryBackoff)}
+          data-testid="prop-retry-backoff"
               onChange={(e) => handleInputChange('retryBackoff', e.target.value)}
             >
               <option value="fixed">Fixed</option>
@@ -301,6 +310,7 @@ export function PropertiesPanel({
               step={1}
               className="property-input"
               value={selectedNode.data.retryDelaySecs ?? DEFAULT_RETRY_DELAY_SECS}
+          data-testid="prop-retry-delay"
               onChange={(e) => handleInputChange('retryDelaySecs', e.target.value)}
               onBlur={(e) =>
                 handleInputChange('retryDelaySecs', String(normalizeRetryDelay(e.target.value)))
@@ -321,6 +331,7 @@ export function PropertiesPanel({
           step={1}
           className="property-input"
           value={selectedNode.data.timeoutSecs ?? ''}
+          data-testid="prop-timeout"
           onChange={(e) => handleInputChange('timeoutSecs', e.target.value)}
           onBlur={(e) =>
             handleInputChange('timeoutSecs', String(normalizeTimeout(e.target.value) ?? ''))
@@ -337,6 +348,7 @@ export function PropertiesPanel({
           <input
             type="checkbox"
             checked={checksOn(selectedNode.data.checkExists)}
+          data-testid="prop-check-exists"
             disabled={!hasOutput}
             onChange={(e) => handleInputChange('checkExists', e.target.checked)}
           />{' '}
@@ -346,6 +358,7 @@ export function PropertiesPanel({
           <input
             type="checkbox"
             checked={checksOn(selectedNode.data.checkNonEmpty)}
+          data-testid="prop-check-non-empty"
             disabled={!hasOutput}
             onChange={(e) => handleInputChange('checkNonEmpty', e.target.checked)}
           />{' '}
@@ -355,6 +368,7 @@ export function PropertiesPanel({
           <input
             type="checkbox"
             checked={checksOn(selectedNode.data.checkMinLinesEnabled)}
+          data-testid="prop-check-min-lines-enabled"
             disabled={!hasOutput}
             onChange={(e) => handleInputChange('checkMinLinesEnabled', e.target.checked)}
           />{' '}
@@ -367,6 +381,7 @@ export function PropertiesPanel({
             step={1}
             className="property-input"
             value={selectedNode.data.checkMinLines ?? ''}
+          data-testid="prop-check-min-lines"
             disabled={!hasOutput}
             onChange={(e) => handleInputChange('checkMinLines', e.target.value)}
             onBlur={(e) =>
@@ -379,6 +394,7 @@ export function PropertiesPanel({
           <input
             type="checkbox"
             checked={isBlocking(selectedNode.data.checkBlocking)}
+          data-testid="prop-check-blocking"
             disabled={!hasOutput}
             onChange={(e) => handleInputChange('checkBlocking', e.target.checked)}
           />{' '}

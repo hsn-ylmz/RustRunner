@@ -18,7 +18,8 @@
     "package:win": "npm run build && electron-builder build --win --x64 --publish never",
     "package:linux": "npm run build && electron-builder build --linux --x64 --publish never",
     "package:linux-arm64": "npm run build && electron-builder build --linux --arm64 --publish never",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:e2e": "cargo build --manifest-path ../RustRunner/Cargo.toml && npm run build && playwright test"
   },
   "author": "Hasan Yilmaz",
   "license": "MIT",
@@ -31,6 +32,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.13.10",
     "@types/react": "^18.3.20",

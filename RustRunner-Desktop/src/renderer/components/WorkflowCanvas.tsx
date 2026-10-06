@@ -15,6 +15,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { NodeStatus } from '../stepEvents';
+import { firstFreePosition, type Rect } from '../nodePlacement';
 
 export const COLOR_OPTIONS = [
   '#a8e6cf', '#88c5f7', '#d4a5f7', '#f5efe9',
@@ -37,12 +38,17 @@ export const DEFAULT_COLOR = '#88c5f7';
  * its cells, so consecutive nodes never stack on each other either.
  *
  * Positions are computed in screen space and converted, so panning and zoom
- * are handled by React Flow rather than guessed at.
+ * are handled by React Flow rather than guessed at. The viewport can move
+ * between additions (the first node triggers fit-to-view, opening the
+ * properties panel resizes the canvas), so a grid cell that was empty when it
+ * was computed may not be where the earlier nodes ended up; `occupied` lets
+ * the choice skip cells that would cover an existing node.
  */
 export function nextNodePosition(
   wrapper: HTMLElement | null,
   nodeCount: number,
-  toFlow: (p: { x: number; y: number }) => { x: number; y: number }
+  toFlow: (p: { x: number; y: number }) => { x: number; y: number },
+  occupied: Rect[] = []
 ): { x: number; y: number } {
   if (!wrapper) {
     return toFlow({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
@@ -64,21 +70,31 @@ export function nextNodePosition(
   const COLS = 2;
   const ROWS = 2;
   const cells = COLS * ROWS;
-  const cell = nodeCount % cells;
-  const col = cell % COLS;
-  const row = Math.floor(cell / COLS);
-
-  // Once the grid wraps, nudge each new lap so nodes don't land exactly on top
-  // of the ones from the previous lap.
-  const lap = Math.floor(nodeCount / cells) * 26;
-
   const width = Math.max(box.right - box.left, 1);
   const height = Math.max(box.bottom - box.top, 1);
 
-  return toFlow({
-    x: box.left + (width * (col + 0.5)) / COLS + lap,
-    y: box.top + (height * (row + 0.5)) / ROWS + lap,
-  });
+  const slot = (index: number) => {
+    const cell = index % cells;
+    const col = cell % COLS;
+    const row = Math.floor(cell / COLS);
+
+    // Once the grid wraps, nudge each new lap so nodes don't land exactly on
+    // top of the ones from the previous lap.
+    const lap = Math.floor(index / cells) * 26;
+
+    return toFlow({
+      x: box.left + (width * (col + 0.5)) / COLS + lap,
+      y: box.top + (height * (row + 0.5)) / ROWS + lap,
+    });
+  };
+
+  // Walk the slots from the natural one until a slot is clear of every node
+  // already placed; fall back to the natural one if the canvas is full.
+  const MAX_TRIES = cells * 20;
+  const candidates = (function* () {
+    for (let i = 0; i < MAX_TRIES; i++) yield slot(nodeCount + i);
+  })();
+  return firstFreePosition(candidates, occupied) ?? slot(nodeCount);
 }
 
 /** Badge glyph shown in the corner of a node for each execution state. */
@@ -133,6 +149,8 @@ function CustomNode({ id, data, selected }: any) {
           .filter(Boolean)
           .join(' ')}
         style={{ background: nodeColor }}
+        data-testid="workflow-node"
+        data-state={state}
         title={status?.message || invalidReason || undefined}
       >
         <Handle type="target" position={Position.Top} />
@@ -193,6 +211,9 @@ export function WorkflowCanvas({
       onSelectionChange={onSelectionChange}
       nodeTypes={nodeTypes}
       fitView
+      // A lone first node would otherwise be fitted at React Flow's 2x maximum
+      // zoom, which makes it huge and throws off where later nodes land.
+      fitViewOptions={{ maxZoom: 1 }}
     >
       <Background
         variant={BackgroundVariant.Dots}
