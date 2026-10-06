@@ -25,7 +25,8 @@ export type IconName =
   | 'pencil'
   | 'play'
   | 'pause'
-  | 'stop';
+  | 'stop'
+  | 'link';
 
 /** 16x16 drawings, stroked with the current text colour. */
 const PATHS: Record<IconName, ReactNode> = {
@@ -69,6 +70,7 @@ const PATHS: Record<IconName, ReactNode> = {
   play: <path d="M5 3.5v9l7.5-4.5z" />,
   pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
   stop: <path d="M4.5 4.5h7v7h-7z" />,
+  link: <path d="M6.5 9.5l3-3M7.2 4.8l.9-.9a2.5 2.5 0 0 1 3.5 3.5l-.9.9M8.8 11.2l-.9.9a2.5 2.5 0 0 1-3.5-3.5l.9-.9" />,
 };
 
 export function Icon({

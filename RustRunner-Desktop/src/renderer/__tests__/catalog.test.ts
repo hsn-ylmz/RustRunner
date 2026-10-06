@@ -14,6 +14,7 @@ import {
   renderCommand,
   searchTools,
   shellQuote,
+  slotIds,
   templatePlaceholders,
   uniqueLabel,
   validateCatalogNodes,
@@ -79,11 +80,42 @@ describe('catalog structure', () => {
 
   it('defines every placeholder of every command template', () => {
     for (const t of CATALOG.tools) {
-      const defined = new Set([...ENGINE_PLACEHOLDERS, 'threads', ...t.params.map((p) => p.id)]);
+      const defined = new Set([...ENGINE_PLACEHOLDERS, 'threads', ...slotIds(t), ...t.params.map((p) => p.id)]);
       for (const name of templatePlaceholders(t.command)) {
         expect(defined.has(name), `${t.id}: {${name}} is not defined`).toBe(true);
       }
     }
+  });
+
+  it('declares file slots with known types, unique plain ids and a use in the command', () => {
+    for (const t of CATALOG.tools) {
+      const slots = [...(t.inputSlots ?? []), ...(t.outputSlots ?? [])];
+      const ids = slots.map((s) => s.id);
+      expect(new Set(ids).size, `${t.id} slot ids`).toBe(ids.length);
+      const used = templatePlaceholders(t.command);
+      for (const slot of slots) {
+        const where = `${t.id}.${slot.id}`;
+        expect(slot.id, where).toMatch(/^[a-z][a-z0-9_]*$/);
+        expect(slot.id.length, where).toBeLessThanOrEqual(40);
+        expect([...ENGINE_PLACEHOLDERS, 'threads', 'inputs', 'outputs'], `${where} is reserved`).not.toContain(slot.id);
+        expect(t.params.map((p) => p.id), `${where} is also a parameter`).not.toContain(slot.id);
+        expect(used, `${where} is never used in the command`).toContain(slot.id);
+        expect(slot.label.trim(), where).not.toBe('');
+        expect(slot.description.trim(), where).not.toBe('');
+        expect(slot.types.length, `${where} types`).toBeGreaterThan(0);
+        for (const type of slot.types) expect(CATALOG.fileTypes, `${where} uses unknown type ${type}`).toContain(type);
+      }
+    }
+  });
+
+  it('leaves the file slots of a tool in the command for the engine', () => {
+    const t = {
+      ...tool('samtools-sort'),
+      command: 'sort -@ {threads} {ref} {input} -o {bam}',
+      inputSlots: [{ id: 'ref', label: 'Reference', types: ['fasta'], description: 'The reference.' }],
+      outputSlots: [{ id: 'bam', label: 'BAM', types: ['bam'], description: 'The result.' }],
+    };
+    expect(renderCommand(t, {}, 2)).toBe('sort -@ 2 {ref} {input} -o {bam}');
   });
 
   it('uses every parameter in its template, with unique ids and no reserved names', () => {

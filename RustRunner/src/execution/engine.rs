@@ -29,6 +29,7 @@ use super::process::is_shutting_down;
 use super::report::{RunContext, StepInfo, RUNS_DIR};
 use super::step::execute_step_with_events;
 use super::tools::is_system_tool;
+use crate::workflow::slots::{display_command, sorted_slots};
 
 /// Interval for checking the pause flag file.
 const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
@@ -330,7 +331,7 @@ impl Engine {
                 .map(|s| StepInfo {
                     id: s.id.clone(),
                     tool: s.tool.clone(),
-                    command: s.command.clone(),
+                    command: display_command(s),
                     threads: s.threads,
                     depends_on: s.previous.clone(),
                     checks: s
@@ -663,8 +664,17 @@ impl Engine {
                         println!("[DRY RUN] Step: {}", step.id);
                         println!("  Tool: {}", step.tool);
                         println!("  Command: {}", step.command);
+                        if step.is_structured() {
+                            println!("  Resolved command: {}", display_command(&step));
+                        }
                         println!("  Input: {:?}", step.input);
                         println!("  Output: {:?}", step.output);
+                        for (name, files) in sorted_slots(&step.named_inputs) {
+                            println!("  Named input {}: {:?}", name, files);
+                        }
+                        for (name, files) in sorted_slots(&step.named_outputs) {
+                            println!("  Named output {}: {:?}", name, files);
+                        }
                         println!("  Threads: {}", step.threads);
                         if step.mock {
                             println!("  Mock: outputs would be created, the tool would not run");

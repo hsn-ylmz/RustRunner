@@ -12,7 +12,7 @@ use std::path::Path;
 use crate::workflow::Workflow;
 
 /// Names that denote command placeholders and so cannot name a wildcard.
-const RESERVED_WILDCARD_NAMES: [&str; 4] = ["input", "output", "inputs", "outputs"];
+const RESERVED_WILDCARD_NAMES: [&str; 5] = ["input", "output", "inputs", "outputs", "threads"];
 
 /// Extracts wildcard values from a list of file paths.
 ///
@@ -171,11 +171,10 @@ pub fn expand_workflow_wildcards(
     let mut expanded_steps = Vec::new();
 
     for step in &workflow.steps {
-        // Check if step has wildcards
-        let has_input_wildcards = step.input.iter().any(|i| has_wildcards(i));
-        let has_output_wildcards = step.output.iter().any(|o| has_wildcards(o));
-
-        if !has_input_wildcards && !has_output_wildcards {
+        // Wildcards live in the input and output patterns, including those of
+        // named slots (`reads1: data/{sample}_R1.fastq`).
+        let patterns = step.pattern_entries();
+        if !patterns.iter().any(|p| has_wildcards(p)) {
             // No wildcards, keep as-is
             expanded_steps.push(step.clone());
             continue;
@@ -183,11 +182,8 @@ pub fn expand_workflow_wildcards(
 
         // Extract wildcard names
         let mut wildcard_names = HashSet::new();
-        for input in &step.input {
-            wildcard_names.extend(extract_wildcard_names(input));
-        }
-        for output in &step.output {
-            wildcard_names.extend(extract_wildcard_names(output));
+        for pattern in &patterns {
+            wildcard_names.extend(extract_wildcard_names(pattern));
         }
 
         if wildcard_names.is_empty() {
@@ -227,8 +223,9 @@ pub fn expand_workflow_wildcards(
                 )
             })?;
 
-        // Extract wildcard values
-        let wildcard_values = extract_wildcard_values(files);
+        // Extract wildcard values. A pattern such as `{sample}_R1.fastq` says
+        // which part of each file name is the value.
+        let wildcard_values = extract_values_for_patterns(files, wildcard_name, &patterns);
 
         info!(
             "Expanding step '{}' with wildcard '{{{}}}' into {} instances",
@@ -257,6 +254,15 @@ pub fn expand_workflow_wildcards(
                 .iter()
                 .map(|output| substitute_wildcard(output, wildcard_name, value))
                 .collect();
+
+            // ... and in the files of every named input and output
+            for slots in [&mut new_step.named_inputs, &mut new_step.named_outputs] {
+                for files in slots.values_mut() {
+                    for file in files.iter_mut() {
+                        *file = substitute_wildcard(file, wildcard_name, value);
+                    }
+                }
+            }
 
             // Substitute wildcards in check targets so they keep matching
             // the expanded outputs
@@ -301,6 +307,61 @@ pub fn expand_workflow_wildcards(
     );
 
     Ok(())
+}
+
+/// The literal text around `{name}` in the file-name part of `pattern`, when
+/// the name occurs once and there is some literal text.
+fn literal_around<'a>(pattern: &'a str, name: &str) -> Option<(&'a str, &'a str)> {
+    let file_name = pattern.rsplit(['/', '\\']).next().unwrap_or(pattern);
+    let token = format!("{{{}}}", name);
+    if file_name.matches(&token).count() != 1 {
+        return None;
+    }
+    let (prefix, suffix) = file_name.split_once(&token)?;
+    (!prefix.is_empty() || !suffix.is_empty()).then_some((prefix, suffix))
+}
+
+/// The wildcard values of `files`, read off the step's patterns.
+///
+/// When a pattern's file name has literal text around `{name}` (for example
+/// `{sample}_R1.fastq`) and every file name fits it, the part in place of
+/// `{name}` is the value (`s1_R1.fastq` gives `s1`). If several patterns fit,
+/// the one with the most literal text wins, because it is the most specific.
+/// Otherwise the value is the file's stem, as in [`extract_wildcard_values`].
+fn extract_values_for_patterns(files: &[String], name: &str, patterns: &[&String]) -> Vec<String> {
+    let names: Vec<&str> = files
+        .iter()
+        .map(|f| {
+            Path::new(f)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(f.as_str())
+        })
+        .collect();
+
+    let mut best: Option<(usize, Vec<String>)> = None;
+    for pattern in patterns {
+        let Some((prefix, suffix)) = literal_around(pattern, name) else {
+            continue;
+        };
+        let values: Option<Vec<String>> = names
+            .iter()
+            .map(|n| {
+                let middle = n.strip_prefix(prefix)?.strip_suffix(suffix)?;
+                (!middle.is_empty()).then(|| middle.to_string())
+            })
+            .collect();
+        if let Some(values) = values {
+            let weight = prefix.len() + suffix.len();
+            if best.as_ref().is_none_or(|(w, _)| weight > *w) {
+                best = Some((weight, values));
+            }
+        }
+    }
+    match best {
+        Some((_, values)) if !values.is_empty() => values,
+        _ => extract_wildcard_values(files),
+    }
 }
 
 /// Substitutes a wildcard in a string with a concrete value.
@@ -431,5 +492,118 @@ mod tests {
     fn test_substitute_wildcard() {
         let result = substitute_wildcard("reads/{sample}.fastq", "sample", "sample1");
         assert_eq!(result, "reads/sample1.fastq");
+    }
+
+    // ---- named slots ----
+
+    fn paired_step() -> Step {
+        let mut step = Step::new("align", "bash", "run {r1} {r2} {ref} > {bam}")
+            .with_named_input("r1", &["data/{sample}_R1.fastq"])
+            .with_named_input("r2", &["data/{sample}_R2.fastq"])
+            .with_named_input("ref", &["genome.fa"])
+            .with_named_output("bam", &["out/{sample}.bam"]);
+        step.wildcard_files.insert(
+            "sample".to_string(),
+            vec![
+                "data/s1_R1.fastq".to_string(),
+                "data/s2_R1.fastq".to_string(),
+            ],
+        );
+        step
+    }
+
+    #[test]
+    fn test_per_slot_patterns_expand_with_values_taken_from_the_pattern() {
+        let mut wf = Workflow::from_steps(vec![paired_step()]);
+        expand_workflow_wildcards(&mut wf, &HashMap::new()).unwrap();
+        let ids: Vec<&str> = wf.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["align_s1", "align_s2"]);
+        let s1 = &wf.steps[0];
+        assert_eq!(s1.named_inputs["r1"], vec!["data/s1_R1.fastq"]);
+        assert_eq!(s1.named_inputs["r2"], vec!["data/s1_R2.fastq"]);
+        assert_eq!(s1.named_inputs["ref"], vec!["genome.fa"]);
+        assert_eq!(s1.named_outputs["bam"], vec!["out/s1.bam"]);
+        assert_eq!(wf.steps[1].named_outputs["bam"], vec!["out/s2.bam"]);
+    }
+
+    #[test]
+    fn test_a_wildcard_only_in_a_slot_still_expands() {
+        let mut step = Step::new("s", "bash", "cat {f}").with_named_input("f", &["{x}.txt"]);
+        step.wildcard_files.insert(
+            "x".to_string(),
+            vec!["a.txt".to_string(), "b.txt".to_string()],
+        );
+        let mut wf = Workflow::from_steps(vec![step]);
+        expand_workflow_wildcards(&mut wf, &HashMap::new()).unwrap();
+        assert_eq!(wf.steps.len(), 2);
+        assert_eq!(wf.steps[1].named_inputs["f"], vec!["b.txt"]);
+    }
+
+    #[test]
+    fn test_two_wildcard_names_across_slots_are_rejected() {
+        let mut step = Step::new("s", "bash", "cat {f} {g}")
+            .with_named_input("f", &["{x}.txt"])
+            .with_named_input("g", &["{y}.txt"]);
+        step.wildcard_files
+            .insert("x".to_string(), vec!["a.txt".to_string()]);
+        step.wildcard_files
+            .insert("y".to_string(), vec!["a.txt".to_string()]);
+        let mut wf = Workflow::from_steps(vec![step]);
+        let err = expand_workflow_wildcards(&mut wf, &HashMap::new()).unwrap_err();
+        assert!(err.contains("Multiple wildcards"), "{err}");
+    }
+
+    #[test]
+    fn test_most_specific_pattern_decides_the_values() {
+        let files = vec!["d/s1_R1.fq".to_string(), "d/s2_R1.fq".to_string()];
+        let broad = "d/{sample}.fq".to_string();
+        let narrow = "d/{sample}_R1.fq".to_string();
+        let values = extract_values_for_patterns(&files, "sample", &[&broad, &narrow]);
+        assert_eq!(values, vec!["s1", "s2"]);
+        // Order does not matter.
+        let values = extract_values_for_patterns(&files, "sample", &[&narrow, &broad]);
+        assert_eq!(values, vec!["s1", "s2"]);
+    }
+
+    #[test]
+    fn test_values_fall_back_to_the_file_stem() {
+        let files = vec!["d/a.fq".to_string(), "d/b.fq".to_string()];
+        // No literal text around the name, or files that do not fit.
+        for pattern in ["d/{sample}", "d/{sample}_R1.fq", "d/{other}.fq"] {
+            let p = pattern.to_string();
+            assert_eq!(
+                extract_values_for_patterns(&files, "sample", &[&p]),
+                vec!["a", "b"],
+                "{pattern}"
+            );
+        }
+        // One file that does not fit spoils the pattern for all of them.
+        let mixed = vec!["d/a_R1.fq".to_string(), "d/b.fq".to_string()];
+        let p = "d/{sample}_R1.fq".to_string();
+        assert_eq!(
+            extract_values_for_patterns(&mixed, "sample", &[&p]),
+            vec!["a_R1", "b"]
+        );
+    }
+
+    #[test]
+    fn test_plain_patterns_keep_their_original_values() {
+        // The same values as before per-slot patterns existed.
+        let mut wf = Workflow::from_steps(vec![wildcard_step(
+            "align",
+            "sample",
+            &["in/a.txt", "in/b.txt"],
+        )]);
+        expand_workflow_wildcards(&mut wf, &HashMap::new()).unwrap();
+        assert_eq!(wf.steps[0].input, vec!["in/a.txt"]);
+        assert_eq!(wf.steps[1].output, vec!["out/b.txt"]);
+    }
+
+    #[test]
+    fn test_slot_patterns_with_a_path_separator_in_the_value_part() {
+        // The pattern's directory is ignored when reading values.
+        let files = vec!["/abs/dir/x_R1.fq".to_string()];
+        let p = "other/{s}_R1.fq".to_string();
+        assert_eq!(extract_values_for_patterns(&files, "s", &[&p]), vec!["x"]);
     }
 }

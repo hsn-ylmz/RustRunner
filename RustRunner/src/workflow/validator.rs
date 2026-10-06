@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use log::{debug, info, warn};
 
 use super::model::{Step, Workflow, MAX_RETRY_DELAY_SECS};
+use super::slots::{slot_problems, unused_slots};
 
 /// Largest `retries` value accepted for a single step.
 pub const MAX_RETRIES: u32 = 100;
@@ -23,15 +24,36 @@ pub enum ValidationError {
     EmptyStepId,
     EmptyTool(String),
     EmptyCommand(String),
-    InvalidReference { step: String, reference: String },
+    InvalidReference {
+        step: String,
+        reference: String,
+    },
     CyclicDependency,
-    ContradictoryDependency { first: String, second: String },
-    UnusedPlaceholder { step: String, placeholder: String },
-    TooManyRetries { step: String, retries: u32 },
-    RetryDelayTooLong { step: String, secs: u64 },
+    ContradictoryDependency {
+        first: String,
+        second: String,
+    },
+    UnusedPlaceholder {
+        step: String,
+        placeholder: String,
+    },
+    TooManyRetries {
+        step: String,
+        retries: u32,
+    },
+    RetryDelayTooLong {
+        step: String,
+        secs: u64,
+    },
     ZeroTimeout(String),
-    InvalidCheck { step: String, reason: String },
+    InvalidCheck {
+        step: String,
+        reason: String,
+    },
     InvalidMetadata(String),
+    /// A problem with a step's named slots or the placeholders of its
+    /// command; the text already names the step and the slot.
+    InvalidSlot(String),
 }
 
 impl std::fmt::Display for ValidationError {
@@ -39,6 +61,7 @@ impl std::fmt::Display for ValidationError {
         match self {
             Self::EmptyWorkflow => write!(f, "Workflow has no steps"),
             Self::InvalidMetadata(reason) => write!(f, "{}", reason),
+            Self::InvalidSlot(reason) => write!(f, "{}", reason),
             Self::DuplicateStepId(id) => write!(f, "Duplicate step ID: '{}'", id),
             Self::EmptyStepId => write!(f, "Step has empty or whitespace-only ID"),
             Self::EmptyTool(step) => write!(f, "Step '{}' has no tool specified", step),
@@ -156,8 +179,19 @@ fn validate_step(step: &Step) -> Vec<ValidationError> {
 
     errors.extend(validate_retry_settings(step));
     errors.extend(validate_check_settings(step));
+    errors.extend(
+        slot_problems(step)
+            .into_iter()
+            .map(ValidationError::InvalidSlot),
+    );
+    for name in unused_slots(step) {
+        warn!(
+            "Step '{}': slot '{}' is declared but the command never uses {{{}}}",
+            step.id, name, name
+        );
+    }
 
-    if step.mock && step.output.is_empty() {
+    if step.mock && step.output_paths().is_empty() {
         warn!(
             "Step '{}' is mocked but declares no outputs, so mocking creates nothing",
             step.id
@@ -457,6 +491,7 @@ pub fn quick_validate(workflow: &Workflow) -> Vec<String> {
 
         errors.extend(validate_retry_settings(step).iter().map(|e| e.to_string()));
         errors.extend(validate_check_settings(step).iter().map(|e| e.to_string()));
+        errors.extend(slot_problems(step));
 
         for prev_id in &step.previous {
             if !step_ids.contains(prev_id.as_str()) {
@@ -894,5 +929,68 @@ mod tests {
 
         let err = ValidationError::CyclicDependency;
         assert!(err.to_string().contains("cyclic"));
+    }
+
+    // ---- named slots ----
+
+    fn slot_step() -> Step {
+        Step::new("align", "bash", "run {ref} > {sam}")
+            .with_named_input("ref", &["genome.fa"])
+            .with_named_output("sam", &["out.sam"])
+    }
+
+    #[test]
+    fn test_slot_step_is_valid() {
+        let mut wf = Workflow::from_steps(vec![slot_step()]);
+        validate_workflow(&mut wf).unwrap();
+        assert!(quick_validate(&wf).is_empty());
+    }
+
+    #[test]
+    fn test_unbound_slot_is_named_in_the_error() {
+        let mut step = slot_step();
+        step.named_inputs.insert("ref".into(), vec![]);
+        let mut wf = Workflow::from_steps(vec![step]);
+        let err = validate_workflow(&mut wf).unwrap_err();
+        assert!(err.contains("{ref}") && err.contains("align"), "{err}");
+        let quick = quick_validate(&wf);
+        assert!(quick.iter().any(|m| m.contains("{ref}")), "{quick:?}");
+    }
+
+    #[test]
+    fn test_unknown_placeholder_is_named_in_the_error() {
+        let mut step = slot_step();
+        step.command = "run {ref} {typo} > {sam}".into();
+        let mut wf = Workflow::from_steps(vec![step]);
+        let err = validate_workflow(&mut wf).unwrap_err();
+        assert!(err.contains("{typo}"), "{err}");
+    }
+
+    #[test]
+    fn test_bad_slot_names_are_rejected() {
+        for bad in ["input", "has space", "9lives"] {
+            let step = Step::new("a", "bash", "true").with_named_input(bad, &["f"]);
+            let mut wf = Workflow::from_steps(vec![step]);
+            let err = validate_workflow(&mut wf).unwrap_err();
+            assert!(err.contains(bad), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn test_plain_steps_are_not_second_guessed() {
+        // Braces that are not slots are fine in a step without named slots.
+        let mut wf = Workflow::from_steps(vec![Step::new(
+            "a",
+            "bash",
+            "awk '{print $1}' f.txt; echo {nothing_here}",
+        )]);
+        validate_workflow(&mut wf).unwrap();
+    }
+
+    #[test]
+    fn test_unused_slot_is_only_a_warning() {
+        let step = Step::new("a", "bash", "true").with_named_input("spare", &["f.txt"]);
+        let mut wf = Workflow::from_steps(vec![step]);
+        validate_workflow(&mut wf).unwrap();
     }
 }

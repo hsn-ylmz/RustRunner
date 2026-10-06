@@ -8,6 +8,7 @@
 //! - [`model`]: Core data structures (Step, Workflow)
 //! - [`parser`]: YAML parsing and loading
 //! - [`validator`]: Validation rules and dependency checking
+//! - [`slots`]: Command placeholders and named file slots
 //! - [`freshness`]: Up-to-date checks that decide which steps can be skipped
 //! - [`planner`]: Execution planning and scheduling
 
@@ -15,6 +16,7 @@ pub mod freshness;
 pub mod model;
 pub mod parser;
 pub mod planner;
+pub mod slots;
 pub mod state;
 pub mod validator;
 pub mod wildcards;

@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use log::{debug, error, info, warn};
 
 use crate::environment::conda::{MAMBA_ROOT_PREFIX, MICROMAMBA_PATH};
+use crate::workflow::slots::render_command;
 use crate::workflow::Step;
 
 use super::events::{Event, EventSink};
@@ -52,6 +53,9 @@ use super::tools::is_system_tool;
 /// The following placeholders are supported:
 /// - `{input}` / `{inputs}` - Space-separated input files
 /// - `{output}` / `{outputs}` - Space-separated output files
+/// - `{threads}` - The step's thread count
+/// - `{name}` - The files of a named input or output slot (see
+///   [`crate::workflow::slots`])
 pub fn execute_step(
     step: &Step,
     tool_env_map: &HashMap<String, String>,
@@ -119,9 +123,8 @@ pub fn execute_step_with_events(
 ) -> StepRun {
     let step_name = &step.id;
 
-    // Parse comma-separated file lists
-    let input_files = parse_file_list(&step.input);
-    let output_files = parse_file_list(&step.output);
+    // Every declared output, including the named ones.
+    let output_files = step.output_paths();
 
     // Create output directories
     if let Err(e) = ensure_output_directories(&output_files, working_dir) {
@@ -146,16 +149,17 @@ pub fn execute_step_with_events(
     // Resolve placeholders. Each file is shell-quoted individually so paths
     // containing spaces or shell metacharacters (e.g. a filename picked from
     // disk like `my sample; rm -rf ~.fastq`) are passed as literal arguments
-    // rather than being interpreted by bash.
-    let inputs_str = shell_join(&input_files);
-    let outputs_str = shell_join(&output_files);
-
-    let command_text = step
-        .command
-        .replace("{input}", &inputs_str)
-        .replace("{output}", &outputs_str)
-        .replace("{inputs}", &inputs_str)
-        .replace("{outputs}", &outputs_str);
+    // rather than being interpreted by bash. A step with named slots fails
+    // here, before anything runs, when a placeholder has no file.
+    let command_text = match render_command(step) {
+        Ok(text) => text,
+        Err(errors) => {
+            return StepRun {
+                attempts: 1,
+                result: Err(errors.join("\n").into()),
+            }
+        }
+    };
 
     let max_attempts = step.retries.saturating_add(1);
     let timeout = step.timeout_secs.map(Duration::from_secs);
@@ -366,33 +370,6 @@ fn run_attempt(
     }
 }
 
-/// Quotes a single string for safe use as one POSIX shell word.
-///
-/// Wraps the value in single quotes and escapes any embedded single quote as
-/// `'\''`, which is the standard way to make an arbitrary string a single
-/// shell argument.
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// Shell-quotes each file and joins them with spaces for command substitution.
-fn shell_join(files: &[String]) -> String {
-    files
-        .iter()
-        .map(|f| shell_quote(f))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Parses comma-separated file strings into a vector.
-fn parse_file_list(files: &[String]) -> Vec<String> {
-    files
-        .iter()
-        .flat_map(|s| s.split(',').map(|part| part.trim().to_string()))
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
 /// Creates parent directories for output files.
 fn ensure_output_directories(
     output_files: &[String],
@@ -553,6 +530,8 @@ fn execute_with_conda(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::model::split_list as parse_file_list;
+    use crate::workflow::slots::{shell_join, shell_quote};
 
     #[test]
     fn test_parse_file_list() {
@@ -873,5 +852,144 @@ mod tests {
         assert_eq!(run.attempts, 2);
         assert!(run.result.is_ok());
         assert!(started.elapsed() >= Duration::from_millis(500));
+    }
+
+    // ---- named slots through a real shell ----
+
+    /// File names that would hurt if the shell interpreted them. Each is
+    /// written to disk, so these are real, legal names.
+    #[cfg(unix)]
+    const NASTY_NAMES: [&str; 9] = [
+        "plain.txt",
+        "with space.txt",
+        "semi; touch PWNED_SEMI.txt",
+        "sub $(touch PWNED_SUB.txt) shell.txt",
+        "tick `touch PWNED_TICK.txt`.txt",
+        "it's quoted.txt",
+        "dq \"quoted\" and \\ back.txt",
+        "vars $HOME ${USER} $0.txt",
+        "-leading dash and * glob.txt",
+    ];
+
+    /// Runs `command` with slot `f` = every nasty name and `o` = out.txt, and
+    /// returns what the command wrote for each. Fails the test when any
+    /// PWNED marker file appears.
+    #[cfg(unix)]
+    fn run_with_nasty_names(id: &str, command: &str) -> Vec<String> {
+        let mut results = Vec::new();
+        for name in NASTY_NAMES {
+            let dir = tempdir().unwrap();
+            std::fs::write(dir.path().join(name), name).unwrap();
+            let step = Step::new(id, "bash", command)
+                .with_named_input("f", &[name])
+                .with_named_output("o", &["out.txt"]);
+            let run = execute_step_with_retries(
+                &step,
+                &HashMap::new(),
+                &Some(dir.path().to_path_buf()),
+                None,
+            );
+            assert!(run.result.is_ok(), "{name}: {:?}", run.result);
+            let leaked: Vec<_> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("PWNED"))
+                .collect();
+            assert!(leaked.is_empty(), "{name} injected {leaked:?}");
+            results.push(std::fs::read_to_string(dir.path().join("out.txt")).unwrap());
+        }
+        results
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_slot_paths_are_one_literal_argument_unquoted() {
+        // cat reads the file named by the slot; its content is the name.
+        let results = run_with_nasty_names("nasty_plain", "cat -- {f} > {o}");
+        assert_eq!(results, NASTY_NAMES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_slot_paths_are_literal_inside_double_quotes() {
+        let results = run_with_nasty_names("nasty_double", "printf '%s' \"{f}\" > {o}");
+        assert_eq!(results, NASTY_NAMES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_slot_paths_are_literal_inside_single_quotes() {
+        let results = run_with_nasty_names("nasty_single", "printf '%s' '{f}' > {o}");
+        assert_eq!(results, NASTY_NAMES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_slot_paths_are_literal_after_an_equals_sign() {
+        let results = run_with_nasty_names("nasty_equals", "printf '%s' --file={f} > {o}");
+        let expected: Vec<String> = NASTY_NAMES
+            .iter()
+            .map(|n| format!("--file={}", n))
+            .collect();
+        assert_eq!(results, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_several_files_in_one_slot_are_separate_arguments() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a b.txt"), "A").unwrap();
+        std::fs::write(dir.path().join("c'd.txt"), "C").unwrap();
+        let step = Step::new("slot_many", "bash", "cat {both} > {o}")
+            .with_named_input("both", &["a b.txt", "c'd.txt"])
+            .with_named_output("o", &["merged.txt"]);
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            None,
+        );
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("merged.txt")).unwrap(),
+            "AC"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unbound_slot_fails_before_anything_runs() {
+        let dir = tempdir().unwrap();
+        let step =
+            Step::new("slot_unbound", "bash", "touch ran.txt {ref}").with_named_input("ref", &[]);
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            None,
+        );
+        let err = run.result.unwrap_err().to_string();
+        assert!(err.contains("{ref}"), "{err}");
+        assert!(!dir.path().join("ran.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_named_output_directories_are_created_and_mock_makes_them() {
+        let dir = tempdir().unwrap();
+        let mut step = Step::new("slot_mocked", "bash", "false")
+            .with_named_output("bam", &["out/deep/a.bam"])
+            .with_output("plain.txt");
+        step.mock = true;
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            None,
+        );
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert!(dir.path().join("out/deep/a.bam").exists());
+        assert!(dir.path().join("plain.txt").exists());
     }
 }

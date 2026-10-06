@@ -45,6 +45,8 @@ import {
 } from '../ui';
 import { NODE_COLORS, nodeColorVar, normalizeNodeColor } from '../nodeColors';
 import type { UpstreamChoice } from '../connections';
+import type { BindingOption, LinkChoice, Preview, SlotKind, SlotState } from '../slots';
+import { CommandPreview, SlotFields, type BindingPromptData } from './SlotFields';
 import { useEffect, useState } from 'react';
 import {
   SECTION_TITLES,
@@ -137,6 +139,16 @@ export function PropertiesPanel({
   onOpenDetails,
   upstream = [],
   onConnectionChange,
+  slots = [],
+  slotChoices = [],
+  commandPreview = null,
+  onSlotFile,
+  onSlotKind,
+  onSlotLink,
+  onSlotUnlink,
+  bindingPrompt = null,
+  onChooseBinding,
+  onDismissBinding,
 }: {
   selectedNode: any;
   onNodeUpdate: (nodeId: string, field: string, value: string | boolean) => void;
@@ -157,6 +169,20 @@ export function PropertiesPanel({
   upstream?: UpstreamChoice[];
   /** Connects (or disconnects) `sourceId` into the selected step. */
   onConnectionChange?: (sourceId: string, connected: boolean) => void;
+  /** The files the command names with `{placeholders}` (see slots.ts). */
+  slots?: SlotState[];
+  /** Outputs of the steps before this one that a slot can be linked to by hand. */
+  slotChoices?: LinkChoice[];
+  /** The command with its files filled in. */
+  commandPreview?: Preview | null;
+  onSlotFile?: (slotId: string, value: string) => void;
+  onSlotKind?: (slotId: string, kind: SlotKind) => void;
+  onSlotLink?: (slotId: string, nodeId: string, outputKey: string) => void;
+  onSlotUnlink?: (slotId: string) => void;
+  /** A connection that fits several slots: the person picks one. */
+  bindingPrompt?: BindingPromptData | null;
+  onChooseBinding?: (option: BindingOption) => void;
+  onDismissBinding?: () => void;
 }) {
   // Which sections the person opened or closed, remembered between sessions.
   const [chosen, setChosen] = useState<OpenState>(loadOpenState);
@@ -227,7 +253,10 @@ export function PropertiesPanel({
     (Object.keys(fieldIssues) as IssueField[]).filter(
       (f) => sectionForField(f) === section && errorFor(f)
     ).length;
-  const sectionProps = (section: SectionId, extra: { fileCount?: number; upstreamCount?: number } = {}) => ({
+  const sectionProps = (
+    section: SectionId,
+    extra: { fileCount?: number; upstreamCount?: number; slotCount?: number; slotsToFill?: number } = {}
+  ) => ({
     title: SECTION_TITLES[section],
     open: isSectionOpen(section, chosen, data),
     onToggle: (open: boolean) => setSectionOpen(section, open),
@@ -241,8 +270,10 @@ export function PropertiesPanel({
     'data-testid': `section-${section}`,
   });
 
-  const hasOutput = Boolean(selectedNode.data.output);
-  const outputs = declaredOutputs(selectedNode.data.output);
+  // Checks look at the main output and at the files of named outputs.
+  const namedOutputs = slots.filter((s) => s.def.kind === 'output').flatMap((s) => s.files);
+  const outputs = [...declaredOutputs(selectedNode.data.output), ...namedOutputs];
+  const hasOutput = Boolean(selectedNode.data.output) || namedOutputs.length > 0;
   const isMocked = checksOn(selectedNode.data.mock);
   /** The name used inside {braces} for this node's batch files. */
   const wildcardName = normalizeWildcardName(selectedNode.data.wildcardName);
@@ -435,6 +466,8 @@ export function PropertiesPanel({
         {...sectionProps('io', {
           fileCount: nodeFiles?.length,
           upstreamCount: upstream.filter((u) => u.connected).length,
+          slotCount: slots.length,
+          slotsToFill: slots.filter((s) => s.files.length === 0).length,
         })}
       >
         {upstream.length > 0 && (
@@ -547,6 +580,20 @@ export function PropertiesPanel({
               ? 'One output is made for each input file.'
               : 'What the command writes, written as {output} in it. Later steps can read it.'
           }
+        />
+
+        <SlotFields
+          slots={slots}
+          choices={slotChoices}
+          prompt={bindingPrompt}
+          errorFor={(slot) => errorFor(`slot:${slot}`)}
+          onVisit={(slot) => visit(`slot:${slot}`)}
+          onFile={(slot, value) => onSlotFile?.(slot, value)}
+          onKind={(slot, kind) => onSlotKind?.(slot, kind)}
+          onLink={(slot, choice) => onSlotLink?.(slot, choice.nodeId, choice.outputKey)}
+          onUnlink={(slot) => onSlotUnlink?.(slot)}
+          onChoose={(option) => onChooseBinding?.(option)}
+          onDismiss={() => onDismissBinding?.()}
         />
       </CollapsibleSection>
 
@@ -831,10 +878,13 @@ export function PropertiesPanel({
           hint={
             <>
               The shell command this step runs. Use <code>{'{input}'}</code> and{' '}
-              <code>{'{output}'}</code> as placeholders.
+              <code>{'{output}'}</code> as placeholders, or name other files in braces, such as{' '}
+              <code>{'{ref}'}</code>: each one gets a file field under Inputs and outputs.
             </>
           }
         />
+
+        {commandPreview && <CommandPreview preview={commandPreview} />}
 
         <Checkbox
           label="Test run: skip the tool, make empty outputs"

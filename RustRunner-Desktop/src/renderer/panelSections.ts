@@ -51,7 +51,7 @@ export function defaultOpen(section: SectionId, data: Record<string, any>): bool
 /** The section a field belongs to, so a problem on it can open the right one. */
 export function sectionForField(field: IssueField): SectionId {
   if (field === 'label' || field === 'tool') return 'basics';
-  if (field === 'input' || field === 'output') return 'io';
+  if (field === 'input' || field === 'output' || field.startsWith('slot:')) return 'io';
   if (field === 'command') return 'advanced';
   if (field.startsWith('param:')) return 'options';
   return 'checks';
@@ -60,6 +60,7 @@ export function sectionForField(field: IssueField): SectionId {
 /** The data-testid of the control for a field. */
 export function testIdForField(field: IssueField): string {
   if (field.startsWith('param:')) return `catalog-param-${field.slice('param:'.length)}`;
+  if (field.startsWith('slot:')) return `prop-slot-${field.slice('slot:'.length)}`;
   switch (field) {
     case 'label':
       return 'prop-label';
@@ -102,7 +103,7 @@ function clip(text: string, max = 28): string {
 export function sectionSummary(
   section: SectionId,
   data: Record<string, any>,
-  extra: { fileCount?: number; upstreamCount?: number } = {}
+  extra: { fileCount?: number; upstreamCount?: number; slotCount?: number; slotsToFill?: number } = {}
 ): string {
   switch (section) {
     case 'basics': {
@@ -119,6 +120,10 @@ export function sectionSummary(
       else if (data.input) parts.push(`in: ${clip(String(data.input))}`);
       else parts.push('no input');
       parts.push(data.output ? `out: ${clip(String(data.output))}` : 'no output');
+      if (extra.slotCount) {
+        parts.push(`${extra.slotCount} named file${extra.slotCount === 1 ? '' : 's'}`);
+        if (extra.slotsToFill) parts.push(`${extra.slotsToFill} to choose`);
+      }
       return parts.join(', ');
     }
     case 'options': {

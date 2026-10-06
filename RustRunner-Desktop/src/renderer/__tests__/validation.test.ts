@@ -93,7 +93,7 @@ describe('collectIssues', () => {
   });
 
   it('agrees with the run-time validators on what is a problem', () => {
-    const cases: Array<[any[], Record<string, string[]>]> = [
+    const cases: Array<[any[], Record<string, string[]>, any[]?]> = [
       [[node('a', 'A'), node('b', 'B', { input: 'a.txt' })], {}],
       [[node('a', 'A', { tool: '' })], {}],
       [[node('a', 'A', { command: '' })], {}],
@@ -101,12 +101,72 @@ describe('collectIssues', () => {
       [[node('a', 'A', { input: '{x}.txt' })], {}],
       [[node('a', 'A', { input: '{x}.txt' })], { a: ['1.txt'] }],
       [[node('a', 'A', { output: 'o', checkNonEmpty: true, checkNonEmptyTarget: 'p' })], {}],
+      // Named file slots
+      [[node('a', 'A', { command: 'bwa {ref}' })], {}],
+      [[node('a', 'A', { command: 'bwa {ref}', slotFiles: { ref: 'g.fa' } })], {}],
+      [[node('a', 'A', { command: 'bwa {ref}', slotFiles: { ref: '{x}.fa' } })], {}],
+      [[node('a', 'A', { command: 'bwa {ref}', slotFiles: { ref: '{x}.fa' } })], { a: ['1.fa'] }],
+      [[node('a', 'A', { command: 'x > {out}', slotKinds: { out: 'output' } })], {}],
+      [[node('a', 'A', { command: 'x > {out}', slotKinds: { out: 'output' }, slotFiles: { out: 'o.txt' }, checkExists: true, checkExistsTarget: 'o.txt' })], {}],
+      [[node('a', 'A', { command: 'x > {out}', slotKinds: { out: 'output' }, slotFiles: { out: 'o.txt' }, checkExists: true, checkExistsTarget: 'p.txt' })], {}],
+      [
+        [node('a', 'A', { output: 'a.fq' }), node('b', 'B', { command: 'bwa {reads}', slotLinks: { reads: { from: 'a', output: '' } } })],
+        {},
+        [{ id: 'e', source: 'a', target: 'b' }],
+      ],
+      [
+        [node('a', 'A', { output: '' }), node('b', 'B', { command: 'bwa {reads}', slotLinks: { reads: { from: 'a', output: '' } } })],
+        {},
+        [{ id: 'e', source: 'a', target: 'b' }],
+      ],
     ];
-    for (const [nodes, files] of cases) {
-      const workflow = convertNodesToWorkflow(nodes, [], files);
+    for (const [nodes, files, edges = []] of cases) {
+      const workflow = convertNodesToWorkflow(nodes, edges, files);
       const backstop = [...validateWorkflow(workflow), ...validateCatalogNodes(nodes)];
-      expect(collectIssues(nodes, files).length > 0, JSON.stringify(nodes)).toBe(backstop.length > 0);
+      expect(collectIssues(nodes, files, edges).length > 0, JSON.stringify(nodes)).toBe(backstop.length > 0);
     }
+  });
+});
+
+describe('named file slots', () => {
+  it('flags a slot with no file on its own field, naming the label and the placeholder', () => {
+    const issues = collectIssues([node('a', 'Align', { command: 'bwa mem {ref} {reads}', slotFiles: { reads: 'r.fq' } })]);
+    expect(fields(issues)).toEqual(['Align:slot:ref']);
+    expect(issues[0].message).toBe('Choose a file for "Reference genome" (written {ref} in the command).');
+  });
+
+  it('is happy once every slot has a typed or linked file', () => {
+    const a = node('a', 'A', { output: 'x.fq' });
+    const b = node('b', 'B', {
+      command: 'bwa {ref} {reads}',
+      slotFiles: { ref: 'g.fa' },
+      slotLinks: { reads: { from: 'a', output: '' } },
+    });
+    expect(collectIssues([a, b], {}, [{ source: 'a', target: 'b' }])).toEqual([]);
+    // Remove the connection and the linked slot is open again.
+    expect(fields(collectIssues([a, b], {}, []))).toEqual(['B:slot:reads']);
+  });
+
+  it('asks for batch files when a slot has a {name} pattern', () => {
+    const n = node('a', 'A', { command: 'x {f}', slotFiles: { f: 'd/{sample}.fq' } });
+    expect(fields(collectIssues([n]))).toEqual(['A:slot:f']);
+    expect(collectIssues([n], { a: ['d/1.fq'] })).toEqual([]);
+  });
+
+  it('lets a check point at a named output', () => {
+    const n = node('a', 'A', {
+      command: 'x > {out}',
+      slotKinds: { out: 'output' },
+      slotFiles: { out: 'o.txt' },
+      checkNonEmpty: true,
+      checkNonEmptyTarget: 'o.txt',
+    });
+    expect(collectIssues([n])).toEqual([]);
+  });
+
+  it('opens the Inputs and outputs section for a slot problem', () => {
+    const issues = collectIssues([node('a', 'A', { command: 'x {f}' })]);
+    expect(issues[0].field).toBe('slot:f');
   });
 });
 

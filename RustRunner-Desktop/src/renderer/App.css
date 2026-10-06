@@ -1428,3 +1428,76 @@
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
+
+/* =============================================================================
+   Named file slots and the command preview
+   ============================================================================= */
+
+.slot-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.slot-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--border);
+}
+
+.slot-linked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.slot-file {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
+.slot-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.command-preview {
+  margin: 0;
+  padding: var(--space-2);
+  max-height: 160px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+
+.preview-filled {
+  background-color: var(--success-subtle);
+  border-radius: var(--radius-control);
+}
+
+.preview-missing {
+  padding: 0 var(--space-half);
+  color: var(--danger);
+  background-color: var(--danger-subtle);
+  border: 1px dashed var(--danger);
+  border-radius: var(--radius-control);
+}
+
+.preview-flag {
+  font-family: var(--font-sans);
+  font-weight: var(--weight-semibold);
+}

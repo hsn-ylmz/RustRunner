@@ -17,6 +17,7 @@ import {
   normalizeWildcardName,
 } from './workflowConversion';
 import { findTool, missingRequiredParams } from './tools/catalog';
+import { namedOutputFiles, slotIssues, slotStates, type GraphEdgeLike } from './slots';
 
 /**
  * The control a problem belongs to. Plain node fields use the field's own name;
@@ -32,7 +33,8 @@ export type IssueField =
   | 'checkExistsTarget'
   | 'checkNonEmptyTarget'
   | 'checkMinLinesTarget'
-  | `param:${string}`;
+  | `param:${string}`
+  | `slot:${string}`;
 
 export interface ValidationIssue {
   /** Stable for a given problem: node, field and kind. */
@@ -62,7 +64,8 @@ const CHECKS: { flag: string; target: IssueField; name: string }[] = [
 /** Every problem that would stop a run, in canvas order. Empty when the workflow can run. */
 export function collectIssues(
   nodes: any[],
-  wildcardFiles: Record<string, string[]> = {}
+  wildcardFiles: Record<string, string[]> = {},
+  edges: ReadonlyArray<GraphEdgeLike> = []
 ): ValidationIssue[] {
   if (nodes.length === 0) {
     return [{ id: 'workflow:empty', message: 'The workflow has no steps. Add a step to begin.' }];
@@ -111,9 +114,15 @@ export function collectIssues(
       add('command', 'missing', 'Enter the command this step runs.');
     }
 
-    // A check aimed at one output must name an output the step still has.
-    const outputs = declaredOutputs(data.output);
-    if (data.output) {
+    // A slot with no file, or whose file comes from a step that has none yet.
+    for (const issue of slotIssues(node, nodes, edges)) {
+      add(`slot:${issue.slot}`, `slot-${issue.kind}`, issue.message);
+    }
+
+    // A check aimed at one output must name an output the step still has
+    // (the main output or a named one).
+    const outputs = [...declaredOutputs(data.output), ...namedOutputFiles(node)];
+    if (data.output || outputs.length > 0) {
       for (const check of CHECKS) {
         const target = normalizeCheckTarget(data[check.target]);
         if (isOn(data[check.flag]) && target !== undefined && !outputs.includes(target)) {
@@ -129,8 +138,17 @@ export function collectIssues(
     // Every {name} in a path pattern needs files to fill it in.
     const mapped =
       (wildcardFiles[node.id] ?? []).length > 0 ? [normalizeWildcardName(data.wildcardName)] : [];
-    for (const field of ['input', 'output'] as const) {
-      for (const name of extractWildcardNames(String(data[field] ?? ''))) {
+    const patternFields: { field: IssueField; text: string }[] = [
+      { field: 'input', text: String(data.input ?? '') },
+      { field: 'output', text: String(data.output ?? '') },
+      // A slot linked to another step's output carries that output's pattern.
+      ...slotStates(node, nodes, edges).map((st) => ({
+        field: `slot:${st.def.id}` as IssueField,
+        text: st.files.join(' '),
+      })),
+    ];
+    for (const { field, text } of patternFields) {
+      for (const name of extractWildcardNames(text)) {
         if (mapped.includes(name)) continue;
         add(
           field,

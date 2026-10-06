@@ -88,6 +88,20 @@ import {
   nextNodePosition,
 } from './components/WorkflowCanvas';
 import { setConnection, upstreamChoices } from './connections';
+import {
+  applyBinding,
+  connectWithBinding,
+  kindPatch,
+  linkChoices,
+  linkPatch,
+  planBinding,
+  previewForNode,
+  slotStates,
+  typedPatch,
+  unlinkPatch,
+  type BindingOption,
+  type SlotKind,
+} from './slots';
 import { DEFAULT_NODE_COLOR } from './nodeColors';
 import {
   Badge,
@@ -169,6 +183,8 @@ function WorkflowEditorInner() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** A connection that could fill several file slots: the person picks one in the later step's properties. */
+  const [pendingBinding, setPendingBinding] = useState<{ sourceId: string; targetId: string } | null>(null);
   /** The canvas viewport, for placing new nodes where they're actually visible. */
   const flowWrapperRef = useRef<HTMLDivElement>(null);
   /** The catalog button, so closing the palette hands focus back to it. */
@@ -199,7 +215,10 @@ function WorkflowEditorInner() {
   const invalidNodeIds = findInvalidNodeIds(nodes);
 
   /** Everything that stops a run, for the problem list, the fields and the Run buttons. */
-  const issues = useMemo(() => collectIssues(nodes, nodeWildcardFiles), [nodes, nodeWildcardFiles]);
+  const issues = useMemo(
+    () => collectIssues(nodes, nodeWildcardFiles, edges),
+    [nodes, nodeWildcardFiles, edges]
+  );
   const hasProblems = nodes.length > 0 && issues.length > 0;
 
   /**
@@ -493,13 +512,45 @@ function WorkflowEditorInner() {
     [markDirty]
   );
 
+  /**
+   * A new connection fills a free file slot of the later step with a matching
+   * output of the earlier one (see slots.ts). When several fit, the person is
+   * asked in the later step's properties, which open for that.
+   */
+  const bindAfterConnect = useCallback(
+    (sourceId: string, targetId: string, edgesBefore: any[], edgesAfter: any[]) => {
+      const current = graphRef.current.nodes;
+      const { nodes: bound, plan } = connectWithBinding(
+        current,
+        edgesBefore,
+        edgesAfter,
+        sourceId,
+        targetId
+      );
+      if (plan.kind === 'ask') {
+        setNodes(bound.map((n: any) => (n.selected === (n.id === targetId) ? n : { ...n, selected: n.id === targetId })));
+        setSelectedNodeId(targetId);
+        setPendingBinding({ sourceId, targetId });
+        return;
+      }
+      setPendingBinding(null);
+      if (bound.some((n: any, i: number) => n !== current[i])) setNodes(bound);
+    },
+    []
+  );
+
   const onConnect = useCallback(
     (params: any) => {
       recordEdit();
-      setEdges((eds) => addEdge(params, eds) as any[]);
+      const before = graphRef.current.edges;
+      const after = addEdge(params, before) as any[];
+      setEdges(after);
+      if (after.length > before.length) {
+        bindAfterConnect(params.source, params.target, before, after);
+      }
       markDirty();
     },
-    [markDirty, recordEdit]
+    [markDirty, recordEdit, bindAfterConnect]
   );
 
   /**
@@ -509,10 +560,15 @@ function WorkflowEditorInner() {
   const onConnectionChange = useCallback(
     (sourceId: string, targetId: string, connected: boolean) => {
       recordEdit();
-      setEdges((eds) => setConnection(eds, sourceId, targetId, connected, DEFAULT_EDGE_OPTIONS));
+      const before = graphRef.current.edges;
+      const after = setConnection(before, sourceId, targetId, connected, DEFAULT_EDGE_OPTIONS);
+      setEdges(after);
+      if (connected && after.length > before.length) {
+        bindAfterConnect(sourceId, targetId, before, after);
+      }
       markDirty();
     },
-    [markDirty, recordEdit]
+    [markDirty, recordEdit, bindAfterConnect]
   );
 
   /** A drag is one undo step: the state from before it started. */
@@ -1363,6 +1419,36 @@ function WorkflowEditorInner() {
   const selectedEdgeCount = edges.filter((e: any) => e.selected).length;
   const fieldIssues = selectedNode ? fieldErrors(issues, selectedNode.id) : {};
 
+  // Named file slots of the selected step (see slots.ts).
+  const slotView = useMemo(() => {
+    if (!selectedNode) return null;
+    return {
+      states: slotStates(selectedNode, nodes, edges),
+      choices: linkChoices(selectedNode, nodes, edges),
+      preview: previewForNode(selectedNode, nodes, edges),
+    };
+  }, [selectedNode, nodes, edges]);
+
+  /** The question shown in the later step's properties after a connection that fits several slots. */
+  const bindingPrompt = useMemo(() => {
+    if (!pendingBinding || selectedNodeId !== pendingBinding.targetId) return null;
+    const plan = planBinding(nodes, edges, pendingBinding.sourceId, pendingBinding.targetId);
+    if (plan.kind !== 'ask') return null;
+    const source = nodes.find((n: any) => n.id === pendingBinding.sourceId);
+    return { sourceLabel: (source?.data?.label || '').trim() || 'the earlier step', options: plan.options };
+  }, [pendingBinding, selectedNodeId, nodes, edges]);
+
+  const chooseBinding = useCallback(
+    (option: BindingOption) => {
+      if (!pendingBinding) return;
+      recordEdit();
+      setNodes((nds) => applyBinding(nds, pendingBinding.targetId, pendingBinding.sourceId, option));
+      setPendingBinding(null);
+      markDirty();
+    },
+    [pendingBinding, recordEdit, markDirty]
+  );
+
   const finishedSteps = Object.values(stepStatus).filter(
     (st) => st.state === 'succeeded' || st.state === 'failed' || st.state === 'skipped'
   ).length;
@@ -1712,6 +1798,24 @@ function WorkflowEditorInner() {
             onConnectionChange={(sourceId, connected) =>
               onConnectionChange(sourceId, selectedNode.id, connected)
             }
+            slots={slotView?.states ?? []}
+            slotChoices={slotView?.choices ?? []}
+            commandPreview={slotView?.preview ?? null}
+            onSlotFile={(slotId: string, value: string) =>
+              onNodePatch(selectedNode.id, typedPatch(selectedNode.data, slotId, value))
+            }
+            onSlotKind={(slotId: string, kind: SlotKind) =>
+              onNodePatch(selectedNode.id, kindPatch(selectedNode.data, slotId, kind))
+            }
+            onSlotLink={(slotId: string, nodeId: string, outputKey: string) =>
+              onNodePatch(selectedNode.id, linkPatch(selectedNode.data, slotId, nodeId, outputKey))
+            }
+            onSlotUnlink={(slotId: string) =>
+              onNodePatch(selectedNode.id, unlinkPatch(selectedNode, nodes, edges, slotId))
+            }
+            bindingPrompt={bindingPrompt}
+            onChooseBinding={chooseBinding}
+            onDismissBinding={() => setPendingBinding(null)}
           />
         )}
       </div>

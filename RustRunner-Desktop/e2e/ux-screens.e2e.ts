@@ -284,4 +284,43 @@ for (const scheme of SCHEMES) {
     await shoot('dialog-details');
     await page.getByRole('button', { name: 'Cancel' }).click();
   });
+
+  test(`${scheme}: named file slots and the command preview`, async ({ page, app }) => {
+    await prepare(page, app, scheme);
+    const shoot = shooter(page, scheme, 'slots');
+
+    await buildChain(page, [
+      { label: 'Trim reads', command: 'cp {input} {output}', input: 'raw.fastq', output: 'trimmed.fastq' },
+      { label: 'Align', command: 'bwa mem {ref} {reads} > {output}', output: 'aligned.sam' },
+      { label: 'Pair', command: 'merge {reads1} {reads2} > {output}', output: 'pair.txt' },
+    ]);
+    // buildChain connected Trim reads -> Align -> Pair; start from open slots.
+    await selectNode(page, 'Align');
+    await page.getByTestId('prop-slots').scrollIntoViewIfNeeded();
+    await shoot('slots-bound-by-connection');
+    await page.getByTestId('prop-slot-reads-unlink').click();
+    await shoot('slots-unlinked-preview-marks-open-files');
+
+    await selectNode(page, 'Pair');
+    await shoot('slots-pair-from-align');
+    await page.getByTestId('prop-upstream').getByRole('checkbox', { name: 'Trim reads' }).check();
+    await expect(page.getByTestId('binding-prompt')).toBeVisible();
+    await page.getByTestId('binding-prompt').scrollIntoViewIfNeeded();
+    await shoot('slots-binding-question');
+  });
+
+  test(`${scheme}: named file slots in the compact window (1024x700)`, async ({ page, app }) => {
+    await prepare(page, app, scheme, { width: 1024, height: 700 });
+    const shoot = shooter(page, scheme, 'slots-compact');
+    await buildChain(page, [
+      { label: 'Trim reads', command: 'cp {input} {output}', input: 'raw.fastq', output: 'trimmed.fastq' },
+      { label: 'Align', command: 'bwa mem {ref} {reads} > {output}', output: 'aligned.sam' },
+    ]);
+    await selectNode(page, 'Align');
+    await shoot('slots');
+    await openSection(page, 'advanced');
+    await page.getByTestId('command-preview').scrollIntoViewIfNeeded();
+    await shoot('preview');
+  });
 }
+

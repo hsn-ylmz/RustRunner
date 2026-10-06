@@ -15,7 +15,7 @@
 //! downstream of it. [`assess`] returns the stale steps with the first reason
 //! found, which the engine logs and the dry run prints.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -79,6 +79,13 @@ struct Definition<'a> {
     input: &'a [String],
     output: &'a [String],
     checks: &'a [OutputCheck],
+    /// Named slots are ordered by name (a `HashMap` would hash differently on
+    /// every run) and left out when empty, so the hash of a step without
+    /// slots is the one recorded before slots existed.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    named_inputs: BTreeMap<&'a str, &'a [String]>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    named_outputs: BTreeMap<&'a str, &'a [String]>,
 }
 
 /// Hash of a step's effective definition, as recorded in the run state.
@@ -98,6 +105,8 @@ pub fn definition_hash(step: &Step, env: Option<&str>) -> String {
         input: &step.input,
         output: &step.output,
         checks: &step.checks,
+        named_inputs: ordered(&step.named_inputs),
+        named_outputs: ordered(&step.named_outputs),
     };
     // Serializing plain strings and numbers cannot fail.
     let canonical = serde_json::to_string(&definition).unwrap_or_default();
@@ -108,6 +117,52 @@ pub fn definition_hash(step: &Step, env: Option<&str>) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{:016x}", hash)
+}
+
+fn ordered(slots: &HashMap<String, Vec<String>>) -> BTreeMap<&str, &[String]> {
+    slots
+        .iter()
+        .map(|(name, files)| (name.as_str(), files.as_slice()))
+        .collect()
+}
+
+/// Resolves exact paths (named slot files, which are never split at commas)
+/// against `base`.
+fn resolve_exact(entries: &[String], base: Option<&Path>) -> Vec<(String, PathBuf)> {
+    entries
+        .iter()
+        .filter(|f| !f.trim().is_empty())
+        .map(|f| {
+            let path = match base {
+                Some(base) => base.join(f),
+                None => PathBuf::from(f),
+            };
+            (f.clone(), path)
+        })
+        .collect()
+}
+
+/// Every output of the step with its resolved path: `output` (split at
+/// commas) and then the named outputs.
+fn output_files(step: &Step, base: Option<&Path>) -> Vec<(String, PathBuf)> {
+    let mut files = resolve_paths(&step.output, base);
+    files.extend(resolve_exact(&named_files(&step.named_outputs), base));
+    files
+}
+
+/// Every input of the step with its resolved path.
+fn input_files(step: &Step, base: Option<&Path>) -> Vec<(String, PathBuf)> {
+    let mut files = resolve_paths(&step.input, base);
+    files.extend(resolve_exact(&named_files(&step.named_inputs), base));
+    files
+}
+
+/// The files of all slots, ordered by slot name.
+fn named_files(slots: &HashMap<String, Vec<String>>) -> Vec<String> {
+    ordered(slots)
+        .into_values()
+        .flat_map(|files| files.iter().cloned())
+        .collect()
 }
 
 /// Splits a comma-separated list of paths and resolves relative ones against
@@ -134,7 +189,7 @@ fn modified(path: &Path) -> Option<SystemTime> {
 
 /// Checks the step's own files: outputs exist and none is older than an input.
 fn file_staleness(step: &Step, base: Option<&Path>) -> Option<StaleReason> {
-    let outputs = resolve_paths(&step.output, base);
+    let outputs = output_files(step, base);
     if outputs.is_empty() {
         return Some(StaleReason::NoOutputs);
     }
@@ -153,7 +208,7 @@ fn file_staleness(step: &Step, base: Option<&Path>) -> Option<StaleReason> {
     // An input that does not exist cannot be compared. If it is produced by
     // an upstream step, that step's own checks cover it; if the step really
     // needs it, running the step reports the problem.
-    resolve_paths(&step.input, base)
+    input_files(step, base)
         .into_iter()
         .find(|(_, path)| modified(path).is_some_and(|time| time > oldest_output))
         .map(|(name, _)| StaleReason::InputNewer(name))
@@ -412,6 +467,17 @@ mod tests {
     }
 
     #[test]
+    fn test_legacy_hash_is_pinned() {
+        // Recorded before named slots existed: steps without slots must keep
+        // hashing to this value so saved runs stay up to date.
+        let step = Step::new("s", "bash", "echo {input} > {output}")
+            .with_input("i")
+            .with_output("o")
+            .with_threads(2);
+        assert_eq!(definition_hash(&step, Some("env")), "4203e63d81b45c6b");
+    }
+
+    #[test]
     fn test_each_defining_field_changes_the_hash() {
         let base = Step::new("s", "bash", "echo hi")
             .with_input("i")
@@ -616,5 +682,119 @@ mod tests {
         ]);
         let state = WorkflowState::new("wf.yaml");
         assert_eq!(reasons(&workflow, &state, &dir).len(), 2);
+    }
+
+    // ---- named slots ----
+
+    #[test]
+    fn test_slot_files_are_part_of_the_hash() {
+        let base = Step::new("s", "bash", "cat {a} > {b}")
+            .with_named_input("a", &["x.txt"])
+            .with_named_output("b", &["y.txt"]);
+        let reference = definition_hash(&base, None);
+        assert_eq!(reference, definition_hash(&base.clone(), None));
+        let changed = [
+            base.clone().with_named_input("a", &["z.txt"]),
+            base.clone().with_named_input("c", &["w.txt"]),
+            base.clone().with_named_output("b", &["y2.txt"]),
+            base.clone().with_named_output("d", &["v.txt"]),
+        ];
+        for step in &changed {
+            assert_ne!(definition_hash(step, None), reference);
+        }
+    }
+
+    #[test]
+    fn test_slot_hash_does_not_depend_on_insertion_order() {
+        let names: Vec<String> = (0..12).map(|i| format!("slot{i}")).collect();
+        let build = |order: Vec<&String>| {
+            let mut step = Step::new("s", "bash", "true");
+            for name in order {
+                step.named_inputs
+                    .insert(name.clone(), vec![format!("{name}.txt")]);
+            }
+            definition_hash(&step, None)
+        };
+        let forward = build(names.iter().collect());
+        let backward = build(names.iter().rev().collect());
+        assert_eq!(forward, backward);
+        // HashMap iteration order differs between maps; many rebuilds agree.
+        for _ in 0..20 {
+            assert_eq!(build(names.iter().collect()), forward);
+        }
+    }
+
+    #[test]
+    fn test_a_step_without_slots_hashes_as_before() {
+        // The same value as test_legacy_hash_is_pinned, reached through a
+        // step that has empty slot maps.
+        let mut step = Step::new("s", "bash", "echo {input} > {output}")
+            .with_input("i")
+            .with_output("o")
+            .with_threads(2);
+        step.named_inputs.clear();
+        step.named_outputs.clear();
+        assert_eq!(definition_hash(&step, Some("env")), "4203e63d81b45c6b");
+    }
+
+    #[test]
+    fn test_named_output_missing_makes_the_step_stale() {
+        let dir = tempdir().unwrap();
+        touch(dir.path(), "a.bam", 5);
+        let workflow = Workflow::from_steps(vec![Step::new("s", "bash", "true")
+            .with_named_output("bam", &["a.bam"])
+            .with_named_output("bai", &["a.bai"])]);
+        let state = recorded_state(&workflow, &["s"]);
+        assert_eq!(
+            reasons(&workflow, &state, &dir)["s"],
+            StaleReason::OutputsMissing("a.bai".into())
+        );
+        touch(dir.path(), "a.bai", 5);
+        assert!(reasons(&workflow, &state, &dir).is_empty());
+    }
+
+    #[test]
+    fn test_named_input_newer_than_a_named_output_makes_the_step_stale() {
+        let dir = tempdir().unwrap();
+        touch(dir.path(), "ref.fa", 0);
+        touch(dir.path(), "out.sam", 10);
+        let workflow = Workflow::from_steps(vec![Step::new("s", "bash", "true")
+            .with_named_input("ref", &["ref.fa"])
+            .with_named_output("sam", &["out.sam"])]);
+        let state = recorded_state(&workflow, &["s"]);
+        assert!(reasons(&workflow, &state, &dir).is_empty());
+        set_mtime(&dir.path().join("ref.fa"), 99);
+        assert_eq!(
+            reasons(&workflow, &state, &dir)["s"],
+            StaleReason::InputNewer("ref.fa".into())
+        );
+    }
+
+    #[test]
+    fn test_slot_paths_with_commas_are_not_split() {
+        let dir = tempdir().unwrap();
+        touch(dir.path(), "a,b.txt", 0);
+        touch(dir.path(), "o,p.txt", 10);
+        let workflow = Workflow::from_steps(vec![Step::new("s", "bash", "true")
+            .with_named_input("i", &["a,b.txt"])
+            .with_named_output("o", &["o,p.txt"])]);
+        let state = recorded_state(&workflow, &["s"]);
+        assert!(reasons(&workflow, &state, &dir).is_empty());
+        set_mtime(&dir.path().join("a,b.txt"), 50);
+        assert_eq!(
+            reasons(&workflow, &state, &dir)["s"],
+            StaleReason::InputNewer("a,b.txt".into())
+        );
+    }
+
+    #[test]
+    fn test_a_step_with_only_named_outputs_counts_as_having_outputs() {
+        let dir = tempdir().unwrap();
+        touch(dir.path(), "x.out", 1);
+        let workflow = Workflow::from_steps(vec![
+            Step::new("s", "bash", "true").with_named_output("x", &["x.out"])
+        ]);
+        let state = recorded_state(&workflow, &["s"]);
+        assert!(reasons(&workflow, &state, &dir).is_empty());
     }
 }

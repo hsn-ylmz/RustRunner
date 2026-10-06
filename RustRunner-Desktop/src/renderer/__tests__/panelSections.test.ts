@@ -33,6 +33,11 @@ describe('defaults', () => {
 });
 
 describe('fields', () => {
+  it('puts a slot in Inputs and outputs and finds its control', () => {
+    expect(sectionForField('slot:ref')).toBe('io');
+    expect(testIdForField('slot:ref')).toBe('prop-slot-ref');
+  });
+
   it('maps a field to its section and control', () => {
     expect(sectionForField('label')).toBe('basics');
     expect(sectionForField('tool')).toBe('basics');
@@ -76,6 +81,15 @@ describe('summaries', () => {
     expect(sectionSummary('io', { input: 'a', output: 'b' }, { upstreamCount: 1 })).toBe('after 1 step, in: a, out: b');
     expect(sectionSummary('io', { output: 'b' }, { upstreamCount: 2 })).toMatch(/^after 2 steps, /);
     expect(sectionSummary('io', { input: 'x'.repeat(60), output: '' })).toMatch(/…/);
+  });
+
+  it('inputs and outputs counts named files and those still to choose', () => {
+    expect(sectionSummary('io', { input: 'a', output: 'b' }, { slotCount: 2, slotsToFill: 0 })).toBe(
+      'in: a, out: b, 2 named files'
+    );
+    expect(sectionSummary('io', { input: 'a', output: 'b' }, { slotCount: 1, slotsToFill: 1 })).toBe(
+      'in: a, out: b, 1 named file, 1 to choose'
+    );
   });
 
   it('checks lists what is on, and says when there is nothing to check', () => {

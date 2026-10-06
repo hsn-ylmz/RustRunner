@@ -9,7 +9,7 @@
  */
 
 import catalogJson from './catalog.json';
-import { labelToId, normalizeThreads } from '../workflowConversion';
+import { labelToId, normalizeThreads } from '../stepNames';
 
 export type ParamType = 'number' | 'string' | 'boolean' | 'select';
 
@@ -32,6 +32,23 @@ export interface ToolParam {
   required?: boolean;
 }
 
+/**
+ * A named file a tool reads or writes besides its main input and output, such
+ * as the reference genome of an aligner. The command refers to it as `{id}`;
+ * the editor shows it as a labelled file field and connections fill it by
+ * file type.
+ */
+export interface CatalogSlot {
+  /** The placeholder name used in the command: letters, digits, underscores. */
+  id: string;
+  /** What the person sees above the field, in plain words. */
+  label: string;
+  /** File types it takes (input) or makes (output); from `Catalog.fileTypes`. */
+  types: string[];
+  /** One or two short lines: what the file is and where to get it. */
+  description: string;
+}
+
 export interface CatalogTool {
   id: string;
   name: string;
@@ -50,6 +67,10 @@ export interface CatalogTool {
   defaultInput: string;
   defaultOutput: string;
   params: ToolParam[];
+  /** Extra named input files. Their placeholders stay in the command for the engine. */
+  inputSlots?: CatalogSlot[];
+  /** Extra named output files, usable as the source of a connection. */
+  outputSlots?: CatalogSlot[];
 }
 
 export interface Catalog {
@@ -67,6 +88,11 @@ export const PARAM_TYPES: ParamType[] = ['number', 'string', 'boolean', 'select'
 
 /** Placeholders the engine fills in at run time; the editor leaves them alone. */
 export const ENGINE_PLACEHOLDERS = ['input', 'output'];
+
+/** The ids of a tool's named file slots; their placeholders also stay for the engine. */
+export function slotIds(tool: CatalogTool): string[] {
+  return [...(tool.inputSlots ?? []), ...(tool.outputSlots ?? [])].map((s) => s.id);
+}
 
 /** Matches `{name}` placeholders, with the one space before it (see `renderCommand`). */
 const PLACEHOLDER = / ?\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
@@ -164,7 +190,8 @@ function renderParam(param: ToolParam, raw: unknown): string | null {
 
 /**
  * Fills a catalog command template. `{threads}` and the tool's parameters are
- * replaced; `{input}`, `{output}` and any unknown placeholder stay as they are.
+ * replaced; `{input}`, `{output}`, the tool's file slots and any unknown
+ * placeholder stay as they are.
  * A parameter that renders empty (an unticked flag, an empty optional string)
  * also removes the space before it, so no double spaces are left behind.
  */
@@ -174,7 +201,7 @@ export function renderCommand(
   threads: unknown = tool.defaultThreads
 ): string {
   return tool.command.replace(PLACEHOLDER, (match: string, name: string) => {
-    if (ENGINE_PLACEHOLDERS.includes(name)) return match;
+    if (ENGINE_PLACEHOLDERS.includes(name) || slotIds(tool).includes(name)) return match;
     const lead = match.startsWith(' ') ? ' ' : '';
     if (name === 'threads') return lead + String(normalizeThreads(threads));
     const param = tool.params.find((p) => p.id === name);

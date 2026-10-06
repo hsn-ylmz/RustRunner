@@ -45,20 +45,15 @@ pub fn skipped_for_mock(kind: CheckKind) -> bool {
 /// On a mocked step the content checks are not evaluated (see
 /// [`skipped_for_mock`]).
 pub fn run_checks(step: &Step, working_dir: &Option<PathBuf>) -> Vec<CheckFailure> {
-    let outputs = step.output_paths();
     let mut failures = Vec::new();
 
     for check in &step.checks {
         if step.mock && skipped_for_mock(check.kind) {
             continue;
         }
-        let targets: Vec<&String> = match &check.target {
-            Some(target) => outputs
-                .iter()
-                .filter(|o| o.as_str() == target.trim())
-                .collect(),
-            None => outputs.iter().collect(),
-        };
+        // A target is a path or the name of a named output; no target means
+        // every output, named ones included.
+        let targets = check.target_files(step);
         if targets.is_empty() {
             // Normally caught by the validator; report rather than pass silently.
             failures.push(CheckFailure {
@@ -69,7 +64,7 @@ pub fn run_checks(step: &Step, working_dir: &Option<PathBuf>) -> Vec<CheckFailur
             });
             continue;
         }
-        for target in targets {
+        for target in &targets {
             let path = match working_dir {
                 Some(dir) => dir.join(target),
                 None => PathBuf::from(target),
@@ -270,5 +265,42 @@ mod tests {
         let failures = run(&step, dir.path());
         assert_eq!(failures.len(), 1);
         assert!(failures[0].message.starts_with("b.txt"));
+    }
+
+    // ---- named slots ----
+
+    #[test]
+    fn test_checks_cover_named_outputs() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.bam"), "data").unwrap();
+        fs::write(dir.path().join("empty.tsv"), "").unwrap();
+        let step = Step::new("s", "bash", "true")
+            .with_named_output("bam", &["a.bam"])
+            .with_named_output("counts", &["empty.tsv"])
+            .with_check(OutputCheck::new(CheckKind::NonEmpty));
+        // No target: every output, named ones included.
+        let failures = run(&step, dir.path());
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].message.contains("empty.tsv"), "{:?}", failures);
+    }
+
+    #[test]
+    fn test_check_target_by_slot_name_and_by_path() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.bam"), "data").unwrap();
+        fs::write(dir.path().join("empty.tsv"), "").unwrap();
+        let base = Step::new("s", "bash", "true")
+            .with_named_output("bam", &["a.bam"])
+            .with_named_output("counts", &["empty.tsv"]);
+        let by_slot = base
+            .clone()
+            .with_check(OutputCheck::new(CheckKind::NonEmpty).with_target("counts"));
+        assert_eq!(run(&by_slot, dir.path()).len(), 1);
+        let by_path = base
+            .clone()
+            .with_check(OutputCheck::new(CheckKind::NonEmpty).with_target("a.bam"));
+        assert!(run(&by_path, dir.path()).is_empty());
+        let missing_slot = base.with_check(OutputCheck::new(CheckKind::Exists).with_target("nope"));
+        assert_eq!(run(&missing_slot, dir.path()).len(), 1);
     }
 }
