@@ -193,7 +193,7 @@ describe('renderCommand', () => {
   it('keeps no double space when a flag at the end of a template is off', () => {
     const t = tool('featurecounts');
     const text = renderCommand(t, { ...defaultParams(t), annotation: 'genes.gtf', paired: true }, 4);
-    expect(text).toContain('-g gene_id -p -o {output}');
+    expect(text).toContain('-g gene_id -p --countReadPairs -o {output}');
     expect(renderCommand(t, { ...defaultParams(t), annotation: 'genes.gtf', paired: false }, 4)).toContain(
       '-g gene_id -o {output}'
     );
@@ -319,7 +319,7 @@ describe('new catalog nodes', () => {
     expect(data).toMatchObject({
       label: 'FastQC',
       tool: 'fastqc',
-      command: 'mkdir -p qc && fastqc -t 2 -o qc {input}',
+      command: 'mkdir -p qc && fastqc -t 2 --outdir qc {input}',
       input: 'reads.fastq.gz',
       output: 'qc/reads_fastqc.html',
       threads: 2,
@@ -454,5 +454,27 @@ describe('file type matching', () => {
     };
     expect(findTool('x', extra)).toBeDefined();
     expect(findTool('x')).toBeUndefined();
+  });
+});
+
+// Regressions found by running every entry against the real tool (`npm run test:tools`).
+describe('flags verified against the real tools', () => {
+  it('fastqc uses --outdir (FastQC 0.13 dropped -o)', () => {
+    const cmd = renderCommand(tool('fastqc'), {}, 2);
+    expect(cmd).toContain('--outdir qc');
+    expect(cmd).not.toMatch(/ -o /);
+  });
+
+  it('star unpacks reads with gzip -cdf, never zcat (macOS zcat wants .Z files)', () => {
+    const cmd = renderCommand(tool('star'), { genome_dir: 'idx' }, 4);
+    expect(cmd).toContain('--readFilesCommand gzip -cdf');
+    expect(cmd).not.toContain('zcat');
+  });
+
+  it('featurecounts counts read pairs when paired-end is ticked (-p alone counts reads)', () => {
+    const on = renderCommand(tool('featurecounts'), { annotation: 'g.gtf', paired: true }, 1);
+    expect(on).toContain('-p --countReadPairs');
+    const off = renderCommand(tool('featurecounts'), { annotation: 'g.gtf', paired: false }, 1);
+    expect(off).not.toContain('-p');
   });
 });

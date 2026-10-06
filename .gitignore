@@ -65,3 +65,6 @@ examples/out/
 /RustRunner-Desktop/e2e/.tmp/
 /RustRunner-Desktop/test-results/
 /RustRunner-Desktop/playwright-report/
+
+# Real-tool validation sandbox (micromamba, conda envs, synthetic data)
+/.sandbox/

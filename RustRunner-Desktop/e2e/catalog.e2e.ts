@@ -20,7 +20,7 @@ test('adding fastqc from the palette gives a prefilled node', async ({ page, con
   await expect(page.getByTestId('prop-label')).toHaveValue('FastQC');
   await expect(page.getByTestId('prop-tool')).toHaveValue('fastqc');
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'mkdir -p qc && fastqc -t 2 -o qc {input}'
+    'mkdir -p qc && fastqc -t 2 --outdir qc {input}'
   );
   await expect(page.getByTestId('prop-threads')).toHaveValue('2');
   await expect(page.getByTestId('prop-input')).toHaveValue('reads.fastq.gz');

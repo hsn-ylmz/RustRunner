@@ -17,7 +17,7 @@
       "description": "Quality report for raw sequencing reads.",
       "category": "qc",
       "conda": { "package": "fastqc" },
-      "command": "mkdir -p {outdir} && fastqc -t {threads} -o {outdir} {input}",
+      "command": "mkdir -p {outdir} && fastqc -t {threads} --outdir {outdir} {input}",
       "defaultThreads": 2,
       "inputTypes": ["fastq"],
       "outputTypes": ["html", "zip"],
@@ -224,7 +224,7 @@
       "description": "Splice-aware RNA-seq aligner. Writes a coordinate-sorted BAM.",
       "category": "alignment",
       "conda": { "package": "star" },
-      "command": "STAR --runThreadN {threads} --genomeDir {genome_dir} --readFilesIn {input} --readFilesCommand {read_command} --outSAMtype BAM SortedByCoordinate --outFileNamePrefix {prefix}",
+      "command": "STAR --runThreadN {threads} --genomeDir {genome_dir} --readFilesIn {input} --readFilesCommand gzip -cdf --outSAMtype BAM SortedByCoordinate --outFileNamePrefix {prefix}",
       "defaultThreads": 8,
       "inputTypes": ["fastq"],
       "outputTypes": ["bam"],
@@ -238,14 +238,6 @@
           "default": "",
           "required": true,
           "description": "Folder made with `STAR --runMode genomeGenerate`."
-        },
-        {
-          "id": "read_command",
-          "label": "Read decompression",
-          "type": "select",
-          "default": "zcat",
-          "options": ["zcat", "cat"],
-          "description": "zcat for .gz files, cat for plain FASTQ."
         },
         {
           "id": "prefix",
@@ -456,8 +448,8 @@
           "label": "Paired-end reads",
           "type": "boolean",
           "default": false,
-          "flag": "-p",
-          "description": "Count fragments instead of reads."
+          "flag": "-p --countReadPairs",
+          "description": "Count read pairs (fragments) instead of single reads."
         }
       ]
     }
