@@ -6,8 +6,6 @@
 //! - Thread/resource allocation
 //! - Step status tracking
 
-use super::wildcards::expand_workflow_wildcards;
-
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -80,8 +78,6 @@ pub struct ExecutionPlanner {
     current_threads_used: usize,
     /// Maximum system threads available
     max_system_threads: usize,
-    /// Wildcard files to expand before planning
-    wildcard_files: Option<HashMap<String, Vec<String>>>,
 }
 
 impl ExecutionPlanner {
@@ -96,15 +92,8 @@ impl ExecutionPlanner {
         workflow: Workflow,
         dry_run: bool,
         max_parallel_jobs: usize,
-        wildcard_files: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Self, String> {
         let max_system_threads = num_cpus::get();
-
-        // Expand wildcards before planning
-        let mut workflow = workflow;
-        if let Some(files) = &wildcard_files {
-            expand_workflow_wildcards(&mut workflow, &files)?;
-        }
 
         info!(
             "Creating planner: {} max jobs, {} system threads",
@@ -125,7 +114,6 @@ impl ExecutionPlanner {
             step_metrics,
             current_threads_used: 0,
             max_system_threads,
-            wildcard_files,
         })
     }
 
@@ -135,9 +123,8 @@ impl ExecutionPlanner {
         state: WorkflowState,
         dry_run: bool,
         max_parallel_jobs: usize,
-        wildcard_files: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Self, String> {
-        let mut planner = Self::new(workflow, dry_run, max_parallel_jobs, wildcard_files)?;
+        let mut planner = Self::new(workflow, dry_run, max_parallel_jobs)?;
 
         // Mark previously completed steps
         for step_id in &state.completed_steps {
@@ -335,7 +322,7 @@ mod tests {
     #[test]
     fn test_planner_creation() {
         let workflow = create_test_workflow();
-        let planner = ExecutionPlanner::new(workflow, false, 4, None);
+        let planner = ExecutionPlanner::new(workflow, false, 4);
         assert!(planner.is_ok());
 
         let planner = planner.unwrap();
@@ -346,14 +333,14 @@ mod tests {
     #[test]
     fn test_planner_dry_run() {
         let workflow = create_test_workflow();
-        let planner = ExecutionPlanner::new(workflow, true, 4, None).unwrap();
+        let planner = ExecutionPlanner::new(workflow, true, 4).unwrap();
         assert!(planner.is_dry_run());
     }
 
     #[test]
     fn test_planner_get_ready_steps() {
         let workflow = create_test_workflow();
-        let planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         let ready = planner.get_ready_steps();
         // Only step1 should be ready (step2 depends on step1)
@@ -371,7 +358,7 @@ mod tests {
         big.threads = 999;
         workflow.add_step(big).unwrap();
 
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
         planner.set_max_system_threads(4);
 
         let ready = planner.get_ready_steps();
@@ -391,7 +378,7 @@ mod tests {
         big.threads = 999;
         workflow.add_step(big).unwrap();
 
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
         planner.set_max_system_threads(4);
 
         planner.mark_step_running("small");
@@ -405,7 +392,7 @@ mod tests {
     #[test]
     fn test_planner_mark_running_and_completed() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         planner.mark_step_running("step1");
 
@@ -422,7 +409,7 @@ mod tests {
     #[test]
     fn test_planner_step2_ready_after_step1_complete() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         // step2 should NOT be ready yet
         let ready = planner.get_ready_steps();
@@ -441,7 +428,7 @@ mod tests {
     #[test]
     fn test_planner_failed_step() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         planner.mark_step_running("step1");
         planner.mark_step_failed("step1", "Test error".to_string());
@@ -456,7 +443,7 @@ mod tests {
     #[test]
     fn test_planner_has_work_remaining() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         assert!(planner.has_work_remaining());
 
@@ -472,7 +459,7 @@ mod tests {
     #[test]
     fn test_planner_progress() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         assert_eq!(planner.progress(), (0, 2));
 
@@ -488,7 +475,7 @@ mod tests {
     #[test]
     fn test_planner_metrics_duration() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         planner.mark_step_running("step1");
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -508,7 +495,7 @@ mod tests {
         let mut state = WorkflowState::new("test.yaml");
         state.mark_completed("step1");
 
-        let planner = ExecutionPlanner::from_state(workflow, state, false, 4, None).unwrap();
+        let planner = ExecutionPlanner::from_state(workflow, state, false, 4).unwrap();
 
         assert_eq!(planner.progress(), (1, 2));
 
@@ -525,7 +512,7 @@ mod tests {
         workflow.add_step(Step::new("b", "bash", "echo b")).unwrap();
         workflow.add_step(Step::new("c", "bash", "echo c")).unwrap();
 
-        let planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         // All steps are independent, so all should be ready
         let ready = planner.get_ready_steps();
@@ -540,7 +527,7 @@ mod tests {
         workflow.add_step(Step::new("c", "bash", "echo c")).unwrap();
 
         // max_parallel=2, so only 2 should be ready at once
-        let planner = ExecutionPlanner::new(workflow, false, 2, None).unwrap();
+        let planner = ExecutionPlanner::new(workflow, false, 2).unwrap();
 
         let ready = planner.get_ready_steps();
         assert_eq!(ready.len(), 2);

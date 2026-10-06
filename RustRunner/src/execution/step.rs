@@ -18,13 +18,8 @@ use log::{debug, error, warn};
 use crate::environment::conda::{MAMBA_ROOT_PREFIX, MICROMAMBA_PATH};
 use crate::workflow::Step;
 
-/// Tools available in standard system PATH that don't require conda.
-const SYSTEM_TOOLS: &[&str] = &[
-    "bash", "sh", "echo", "cat", "cp", "mv", "rm", "mkdir", "sleep", "touch", "ls", "grep", "sed",
-    "awk", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "tee", "curl", "wget", "gzip",
-    "gunzip", "tar", "zip", "unzip", "bc", "date", "find", "xargs", "diff", "comm", "paste", "rev",
-    "fold", "printf", "test", "true", "false",
-];
+use super::process::run_tracked;
+use super::tools::is_system_tool;
 
 /// Executes a single workflow step.
 ///
@@ -177,6 +172,16 @@ fn ensure_output_directories(
     Ok(())
 }
 
+/// Directory holding this process's temporary step scripts.
+pub fn script_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("rustrunner_scripts_{}", std::process::id()))
+}
+
+/// Removes this process's temporary step scripts (best effort).
+pub fn cleanup_scripts() {
+    let _ = fs::remove_dir_all(script_dir());
+}
+
 /// Creates a temporary bash script for step execution.
 fn create_execution_script(
     step_id: &str,
@@ -185,8 +190,7 @@ fn create_execution_script(
     // Scope the script directory to this process so two concurrent runs (e.g.
     // two app windows) can't collide on a fixed path and delete or overwrite
     // each other's scripts mid-execution.
-    let script_dir =
-        std::env::temp_dir().join(format!("rustrunner_scripts_{}", std::process::id()));
+    let script_dir = script_dir();
     fs::create_dir_all(&script_dir)?;
 
     // Sanitize the step id so it can't escape the script directory via `/` or
@@ -218,11 +222,6 @@ fn create_execution_script(
     Ok(script_path)
 }
 
-/// Checks if a tool is a system tool (doesn't require conda).
-fn is_system_tool(tool: &str) -> bool {
-    SYSTEM_TOOLS.contains(&tool)
-}
-
 /// Executes a script directly with bash.
 fn execute_with_bash(
     script_path: &PathBuf,
@@ -236,7 +235,7 @@ fn execute_with_bash(
         debug!("Executing in directory: {}", dir.display());
     }
 
-    Ok(cmd.output()?)
+    Ok(run_tracked(cmd)?)
 }
 
 /// Executes a script within a conda environment.
@@ -271,7 +270,7 @@ fn execute_with_conda(
         );
     }
 
-    Ok(cmd.output()?)
+    Ok(run_tracked(cmd)?)
 }
 
 #[cfg(test)]

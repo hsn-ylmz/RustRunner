@@ -25,7 +25,7 @@ jobs:
             rust_target: aarch64-apple-darwin
             builder_args: --mac --arm64
           - name: macOS x64
-            os: macos-13
+            os: macos-15-intel
             rust_target: x86_64-apple-darwin
             builder_args: --mac --x64
           - name: Windows x64
@@ -93,4 +93,25 @@ jobs:
           # Quoted: Actions requires env values to be strings, and an unquoted
           # false parses as a YAML boolean.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder ${{ matrix.builder_args }} --publish always
+        # bash on every OS (Git Bash on Windows) so `pipefail` applies and
+        # electron-builder's exit code isn't masked by `tee`.
+        shell: bash
+        run: |
+          set -o pipefail
+          npx electron-builder ${{ matrix.builder_args }} --publish always 2>&1 \
+            | tee "$RUNNER_TEMP/electron-builder.log"
+
+      # electron-builder exits 0 when it decides not to publish (for example
+      # when it doesn't consider the build a release), which would leave a
+      # green job and an empty release. Fail loudly instead.
+      - name: Verify electron-builder published
+        if: success()
+        shell: bash
+        run: |
+          if grep -Eiq 'skipped publishing|publishing (is )?skipped' "$RUNNER_TEMP/electron-builder.log"; then
+            echo "::error::electron-builder skipped publishing - no release assets were uploaded"
+            grep -Ei 'skipped publishing|publishing (is )?skipped' "$RUNNER_TEMP/electron-builder.log"
+            exit 1
+          fi
+          echo "electron-builder did not report skipping publishing"
+

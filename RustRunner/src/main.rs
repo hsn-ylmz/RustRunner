@@ -25,8 +25,10 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use log::{error, info, warn};
+use log::{error, info};
 
+use rustrunner::execution::process::install_signal_handlers;
+use rustrunner::execution::step::cleanup_scripts;
 use rustrunner::execution::Engine;
 use rustrunner::workflow::parser::load_workflow;
 use rustrunner::{APP_NAME, VERSION};
@@ -242,6 +244,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         workflow.steps.len(),
         workflow.tools.len()
     );
+
+    // Make SIGINT/SIGTERM (e.g. the GUI's Stop button) terminate the running
+    // steps' process groups instead of leaving them orphaned.
+    install_signal_handlers(cleanup_scripts)
+        .map_err(|e| format!("Failed to install signal handlers: {}", e))?;
 
     // Create and configure engine
     let mut engine = Engine::new(workflow);

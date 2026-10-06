@@ -7,7 +7,7 @@
 
 import path from 'path';
 import fs from 'fs';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, spawnSync, ChildProcess } from 'child_process';
 import {
   app,
   BrowserWindow,
@@ -61,6 +61,47 @@ let pauseFlagPath: string = '';
  * handler can report "stopped" rather than surfacing the kill as a failure.
  */
 let stoppedByUser = false;
+
+/**
+ * How long the engine gets to stop its steps after SIGTERM before we force it.
+ * The engine itself escalates to SIGKILL for stubborn steps after ~3s.
+ */
+const STOP_GRACE_MS = 8_000;
+
+/**
+ * Stops the engine and, through it, every step process it started.
+ *
+ * On unix the engine traps SIGTERM and terminates each step's process group
+ * before exiting, so a plain SIGTERM is enough and avoids orphaned
+ * bash/micromamba children. If it has not exited after STOP_GRACE_MS (hung or
+ * wedged) we SIGKILL it. Windows has no signals: `taskkill /T` kills the whole
+ * process tree instead.
+ */
+function stopRustProcess(proc: ChildProcess): void {
+  if (proc.exitCode !== null || proc.signalCode !== null || proc.pid === undefined) {
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    const result = spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F']);
+    if (result.error || result.status !== 0) {
+      log.warn('taskkill failed, falling back to kill()', result.error ?? result.status);
+      proc.kill();
+    }
+    return;
+  }
+
+  proc.kill('SIGTERM');
+  const forceTimer = setTimeout(() => {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      log.warn('Engine ignored SIGTERM; sending SIGKILL');
+      proc.kill('SIGKILL');
+    }
+  }, STOP_GRACE_MS);
+  // Don't keep the app alive just for this timer.
+  forceTimer.unref();
+  proc.once('close', () => clearTimeout(forceTimer));
+}
 
 /** Renderer-reported unsaved-changes state, consulted by the close guard. */
 let rendererIsDirty = false;
@@ -383,7 +424,7 @@ ipcMain.on('stop-workflow', (event: IpcMainEvent) => {
       fs.unlinkSync(pauseFlagPath);
     }
     stoppedByUser = true;
-    currentRustProcess.kill();
+    stopRustProcess(currentRustProcess);
     log.info('Sent stop signal to workflow process');
     event.reply('workflow-output', '\n[STOPPED] Workflow stopped by user\n');
   } catch (error) {
@@ -516,6 +557,14 @@ const createWindow = async (): Promise<void> => {
 // =============================================================================
 // App Lifecycle
 // =============================================================================
+
+// Quitting while a workflow runs must not leave its steps running unattended.
+app.on('before-quit', () => {
+  if (currentRustProcess) {
+    stoppedByUser = true;
+    stopRustProcess(currentRustProcess);
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

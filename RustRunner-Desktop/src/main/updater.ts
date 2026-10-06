@@ -143,6 +143,38 @@ function releaseUrl(version?: string): string {
   return version ? `${base}/tag/v${version}` : `${base}/latest`;
 }
 
+/**
+ * True when the update check failed only because no release feed exists yet:
+ * a 404 from GitHub, or electron-updater's "Cannot find latest*.yml" error.
+ * That is the normal state before the first release assets are published (or
+ * while a release is still a draft), so it means "no update available", not
+ * a failure worth showing the user.
+ */
+export function isMissingReleaseFeedError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; statusCode?: unknown; message?: unknown };
+
+  if (e.statusCode === 404) return true;
+  if (e.code === 'ERR_UPDATER_CHANNEL_FILE_NOT_FOUND') return true;
+
+  const message = typeof e.message === 'string' ? e.message : '';
+  return (
+    /Cannot find (channel )?"?latest[\w.-]*\.yml/i.test(message) ||
+    /\b404\b.*(latest[\w.-]*\.yml|releases)/is.test(message)
+  );
+}
+
+/**
+ * Reports "no update available" to the renderer and ends a manual check.
+ * Used when the release feed is missing rather than surfacing an error.
+ */
+function reportUpToDate(): void {
+  const version = app.getVersion();
+  log.info(`[updater] no release feed published yet — treating ${version} as up to date`);
+  send({ status: 'up-to-date', manual: manualCheckInFlight, version });
+  manualCheckInFlight = false;
+}
+
 // =============================================================================
 // Public API
 // =============================================================================
@@ -225,6 +257,10 @@ export function setupAutoUpdater(mainWindow: BrowserWindow): void {
   });
 
   autoUpdater.on('error', (err) => {
+    if (isMissingReleaseFeedError(err)) {
+      reportUpToDate();
+      return;
+    }
     log.error('[updater] error:', err);
     send({
       status: 'error',
@@ -256,6 +292,7 @@ export function setupAutoUpdater(mainWindow: BrowserWindow): void {
   // will also fire and surface the message to the renderer.
   setTimeout(() => {
     autoUpdater.checkForUpdates().catch((err) => {
+      if (isMissingReleaseFeedError(err)) return; // handled by the 'error' event
       log.error('[updater] startup checkForUpdates failed:', err);
     });
   }, STARTUP_CHECK_DELAY_MS);
@@ -285,6 +322,7 @@ export function checkForUpdatesManually(): void {
   manualCheckInFlight = true;
 
   autoUpdater.checkForUpdates().catch((err) => {
+    if (isMissingReleaseFeedError(err)) return; // handled by the 'error' event
     log.error('[updater] manual checkForUpdates failed:', err);
     // The 'error' event handler will also fire and forward to the renderer,
     // so we don't double-send here.

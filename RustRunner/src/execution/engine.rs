@@ -7,7 +7,7 @@
 //! - State persistence for crash recovery
 //! - Automatic conda environment setup for tools
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -22,19 +22,13 @@ use crate::monitoring::{EventType, ExecutionTimeline, ResourceMonitor};
 use crate::workflow::{ExecutionPlanner, Workflow, WorkflowState};
 
 use super::step::execute_step;
+use super::tools::is_system_tool;
 
 /// Interval for checking the pause flag file.
 const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Interval for resource monitoring samples.
 const MONITOR_SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
-
-/// System tools that don't require conda environments
-const SYSTEM_TOOLS: &[&str] = &[
-    "bash", "sh", "echo", "cat", "cp", "mv", "rm", "mkdir", "sleep", "curl", "wget", "grep", "awk",
-    "sed", "sort", "uniq", "head", "tail", "wc", "tr", "cut", "bc", "gzip", "gunzip", "tar", "zip",
-    "unzip",
-];
 
 /// Workflow execution engine.
 ///
@@ -64,7 +58,6 @@ pub struct Engine {
     dry_run: bool,
     pause_flag_path: Option<String>,
     working_dir: Option<PathBuf>,
-    wildcard_files: Option<HashMap<String, Vec<String>>>,
 }
 
 impl Engine {
@@ -77,12 +70,7 @@ impl Engine {
             dry_run: false,
             pause_flag_path: None,
             working_dir: None,
-            wildcard_files: None,
         }
-    }
-
-    pub fn set_wildcard_files(&mut self, files: HashMap<String, Vec<String>>) {
-        self.wildcard_files = Some(files);
     }
 
     /// Sets the workflow file path (used for state persistence).
@@ -187,15 +175,9 @@ impl Engine {
                 state.clone(),
                 self.dry_run,
                 self.max_parallel,
-                self.wildcard_files.clone(), // Pass wildcards
             )?
         } else {
-            ExecutionPlanner::new(
-                self.workflow.clone(),
-                self.dry_run,
-                self.max_parallel,
-                self.wildcard_files.clone(), // Pass wildcards
-            )?
+            ExecutionPlanner::new(self.workflow.clone(), self.dry_run, self.max_parallel)?
         };
 
         // Load environment mappings
@@ -394,20 +376,23 @@ impl Engine {
     /// 2. Checks if tool is already in env_map
     /// 3. Creates a new conda environment if needed
     /// 4. Updates env_map with the new mapping
-    fn setup_environments(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Collect unique tools from workflow
-        let tools: HashSet<String> = self
+    /// Returns the unique, sorted tools in the workflow that are not system
+    /// tools and therefore need a conda environment.
+    pub(crate) fn tools_requiring_environments(&self) -> Vec<String> {
+        let tools: HashSet<&str> = self
             .workflow
             .steps
             .iter()
-            .map(|step| step.tool.clone())
+            .map(|step| step.tool.as_str())
+            .filter(|tool| !is_system_tool(tool))
             .collect();
+        let mut tools: Vec<String> = tools.into_iter().map(String::from).collect();
+        tools.sort();
+        tools
+    }
 
-        // Filter out system tools
-        let conda_tools: Vec<&String> = tools
-            .iter()
-            .filter(|tool| !SYSTEM_TOOLS.contains(&tool.as_str()))
-            .collect();
+    fn setup_environments(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let conda_tools = self.tools_requiring_environments();
 
         if conda_tools.is_empty() {
             info!("No conda tools required - using system tools only");
@@ -423,7 +408,7 @@ impl Engine {
         // Load existing env_map
         let mut env_map = ToolEnvMap::load();
 
-        for tool in conda_tools {
+        for tool in &conda_tools {
             // Check if we already have a mapping for this tool
             if env_map.get(tool).is_some() {
                 info!("Tool '{}' already has environment mapping", tool);
@@ -536,23 +521,6 @@ mod tests {
 
         engine.set_pause_flag_path("/tmp/pause.flag");
         assert_eq!(engine.pause_flag_path, Some("/tmp/pause.flag".to_string()));
-    }
-
-    #[test]
-    fn test_engine_wildcard_files() {
-        let workflow = create_test_workflow();
-        let mut engine = Engine::new(workflow);
-
-        let mut wf = HashMap::new();
-        wf.insert(
-            "sample".to_string(),
-            vec!["s1.txt".to_string(), "s2.txt".to_string()],
-        );
-        engine.set_wildcard_files(wf.clone());
-
-        assert!(engine.wildcard_files.is_some());
-        let stored = engine.wildcard_files.unwrap();
-        assert_eq!(stored.get("sample").unwrap().len(), 2);
     }
 
     #[test]
