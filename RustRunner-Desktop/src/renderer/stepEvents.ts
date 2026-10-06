@@ -33,7 +33,7 @@ export type StepEvent =
       /** Seconds the engine waits before the next attempt. */
       delaySecs?: number;
     }
-  | { kind: 'done'; stepId: string }
+  | { kind: 'done'; stepId: string; mocked?: boolean }
   | { kind: 'skipped'; stepId: string; reason?: string }
   | { kind: 'failed'; stepId: string; message: string }
   | { kind: 'check'; stepId: string; blocking: boolean; message: string };
@@ -81,7 +81,9 @@ export function toStepEvent(event: EngineEvent): StepEvent | null {
         delaySecs: event.delay_secs,
       };
     case 'step_succeeded':
-      return { kind: 'done', stepId: event.step };
+      return event.mocked === true
+        ? { kind: 'done', stepId: event.step, mocked: true }
+        : { kind: 'done', stepId: event.step };
     case 'step_failed':
       return { kind: 'failed', stepId: event.step, message: event.reason };
     case 'step_skipped':
@@ -140,6 +142,8 @@ export interface StepRun {
   message?: string;
   /** Non-blocking output checks that failed. */
   warnings?: string[];
+  /** The step succeeded without running its tool (outputs are placeholders). */
+  mocked?: boolean;
 }
 
 /** Engine step id -> what is known about it, in the order first seen. */
@@ -177,7 +181,13 @@ export function applyRunEvent(runs: StepRuns, event: StepEvent): StepRuns {
       };
       break;
     case 'done':
-      next = { ...prev, state: 'succeeded', message: undefined, delaySecs: undefined };
+      next = {
+        ...prev,
+        state: 'succeeded',
+        message: undefined,
+        delaySecs: undefined,
+        mocked: event.mocked === true ? true : undefined,
+      };
       break;
     case 'skipped':
       next = { state: 'skipped', message: describeSkipReason(event.reason) };
@@ -209,6 +219,8 @@ export interface NodeStatus {
   total: number;
   /** First failure message, when state is 'failed'. */
   message?: string;
+  /** At least one instance succeeded without running its tool. */
+  mocked?: boolean;
   /** The failed attempt of the first retrying instance, when 'retrying'. */
   attempt?: number;
   maxAttempts?: number;
@@ -253,6 +265,7 @@ export function rollupNodeStatuses(
       finished,
       total: instances.length,
       message: failed?.message,
+      mocked: instances.some((r) => r.mocked === true) ? true : undefined,
       attempt: state === 'retrying' ? retrying?.attempt : undefined,
       maxAttempts: state === 'retrying' ? retrying?.maxAttempts : undefined,
     };
@@ -272,6 +285,7 @@ export interface StatusRow {
   delaySecs?: number;
   message?: string;
   warnings?: string[];
+  mocked?: boolean;
 }
 
 /** Where a run is: before any run, running, or finished. */

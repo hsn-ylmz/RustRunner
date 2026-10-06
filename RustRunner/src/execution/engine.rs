@@ -111,6 +111,28 @@ fn format_check_warnings(warnings: &[String]) -> Option<String> {
     Some(out)
 }
 
+/// Formats the "mocked steps" section of the run summary, or `None` when no
+/// step is mocked (or nothing really ran, as in a dry run).
+fn format_mock_summary(workflow: &Workflow, dry_run: bool) -> Option<String> {
+    if dry_run {
+        return None;
+    }
+    let mocked: Vec<&str> = workflow
+        .steps
+        .iter()
+        .filter(|s| s.mock)
+        .map(|s| s.id.as_str())
+        .collect();
+    if mocked.is_empty() {
+        return None;
+    }
+    let mut out = String::from("MOCKED steps (the tool did not run, outputs are placeholders):");
+    for id in mocked {
+        out.push_str(&format!("\n  {}", id));
+    }
+    Some(out)
+}
+
 /// Formats the "retried steps" section of the run summary, or `None` when no
 /// step needed more than one attempt.
 fn format_retry_summary(retried: &[(String, u32)]) -> Option<String> {
@@ -321,12 +343,22 @@ impl Engine {
         }
     }
 
+    /// Whether the step is mocked (its tool is not run).
+    fn is_mocked(&self, step_id: &str) -> bool {
+        self.workflow
+            .steps
+            .iter()
+            .any(|s| s.id == step_id && s.mock)
+    }
+
     /// Reports a finished step: its event and the run totals.
     fn report_completion(&self, step_id: &str, attempts: u32, result: &Result<(), String>) {
+        let mocked = self.is_mocked(step_id);
         match result {
             Ok(()) => self.events.emit(Event::StepSucceeded {
                 step: step_id.to_string(),
                 attempts,
+                mocked,
             }),
             Err(reason) => self.events.emit(Event::StepFailed {
                 step: step_id.to_string(),
@@ -337,6 +369,9 @@ impl Engine {
         self.events.update_tally(|t| {
             if result.is_ok() {
                 t.succeeded += 1;
+                if mocked {
+                    t.mocked += 1;
+                }
             } else {
                 t.failed += 1;
             }
@@ -602,6 +637,9 @@ impl Engine {
                         println!("  Input: {:?}", step.input);
                         println!("  Output: {:?}", step.output);
                         println!("  Threads: {}", step.threads);
+                        if step.mock {
+                            println!("  Mock: outputs would be created, the tool would not run");
+                        }
                         match (self.fresh, stale.get(&step.id)) {
                             (true, _) => println!("  Would run: run from scratch"),
                             (false, Some(reason)) => println!("  Would run: {}", reason),
@@ -718,8 +756,12 @@ impl Engine {
                         info!("Step '{}' completed successfully", step_id);
                         planner.mark_step_completed(&step_id);
                         timeline.add_event(step_id.clone(), EventType::Completed);
-                        state.mark_completed(&step_id);
-                        record_definition(&mut state, &definitions, &step_id);
+                        // A mocked step made placeholders: it must not be
+                        // remembered as done, or a later real run would skip it.
+                        if !self.is_mocked(&step_id) {
+                            state.mark_completed(&step_id);
+                            record_definition(&mut state, &definitions, &step_id);
+                        }
                         // A success must not hide an earlier failure of this run.
                         if let Some(failed) = &first_failure {
                             state.mark_failed(failed);
@@ -786,8 +828,10 @@ impl Engine {
                         info!("Step '{}' completed successfully", done.step_id);
                         planner.mark_step_completed(&done.step_id);
                         timeline.add_event(done.step_id.clone(), EventType::Completed);
-                        state.mark_completed(&done.step_id);
-                        record_definition(&mut state, &definitions, &done.step_id);
+                        if !self.is_mocked(&done.step_id) {
+                            state.mark_completed(&done.step_id);
+                            record_definition(&mut state, &definitions, &done.step_id);
+                        }
                     }
                     Err(e) => {
                         error!("Step '{}' failed: {}", done.step_id, e);
@@ -881,6 +925,10 @@ impl Engine {
             println!("{}", summary);
             println!();
         }
+        if let Some(summary) = format_mock_summary(&self.workflow, self.dry_run) {
+            println!("{}", summary);
+            println!();
+        }
         println!("{}", final_monitor.get_summary());
 
         Ok(())
@@ -931,6 +979,8 @@ impl Engine {
             .workflow
             .steps
             .iter()
+            // A mocked step never starts its tool, so it needs no environment.
+            .filter(|step| !step.mock)
             .map(|step| step.tool.as_str())
             .filter(|tool| !is_system_tool(tool))
             .collect();
@@ -1940,5 +1990,215 @@ mod tests {
         assert_eq!(index.len(), 2);
         assert!(index[0].started_at >= index[1].started_at);
         assert_ne!(index[0].run_id, index[1].run_id);
+    }
+
+    // ---- mocked steps -----------------------------------------------------
+
+    /// `up` (optionally mocked) writes `mock_<tag>/up.txt` and a `<tag>.ran`
+    /// marker when its tool really runs; `down` always runs for real.
+    fn mock_workflow(tag: &str, mocked: bool) -> Workflow {
+        let up = format!("mk_{tag}_up");
+        let down = format!("mk_{tag}_down");
+        let mut wf = Workflow::from_steps(vec![
+            Step::new(
+                up.as_str(),
+                "bash",
+                format!("touch {tag}.ran; echo real > up.txt; mkdir -p {tag}_dir"),
+            )
+            .with_outputs(vec!["up.txt".to_string(), format!("{tag}_dir/")])
+            .with_mock(mocked),
+            Step::new(
+                down.as_str(),
+                "bash",
+                format!("touch {tag}.down.ran; echo d > down.txt"),
+            )
+            .with_output("down.txt")
+            .depends_on(up.as_str()),
+        ]);
+        wf.steps[0].next.push(down);
+        wf
+    }
+
+    fn state_in(dir: &Path) -> WorkflowState {
+        WorkflowState::load_in(dir.join("wf.yaml").to_str().unwrap(), Some(dir)).unwrap()
+    }
+
+    #[test]
+    fn test_mocked_step_creates_outputs_and_does_not_run_the_tool() {
+        let dir = tempdir().unwrap();
+        let (result, events) = run_with_events_in(mock_workflow("m1", true), dir.path(), false);
+        result.unwrap();
+
+        // The tool did not run, the declared outputs exist: a file and a directory.
+        assert!(!dir.path().join("m1.ran").exists());
+        assert_eq!(fs::metadata(dir.path().join("up.txt")).unwrap().len(), 0);
+        assert!(dir.path().join("m1_dir").is_dir());
+        // The step after it ran for real.
+        assert!(dir.path().join("m1.down.ran").exists());
+
+        let up = events
+            .iter()
+            .find(|e| e["event"] == "step_succeeded" && e["step"] == "mk_m1_up")
+            .unwrap();
+        assert_eq!(up["mocked"], true);
+        let down = events
+            .iter()
+            .find(|e| e["event"] == "step_succeeded" && e["step"] == "mk_m1_down")
+            .unwrap();
+        assert!(down.get("mocked").is_none(), "{down}");
+        let finished = events.last().unwrap();
+        assert_eq!(finished["summary"]["mocked"], 1);
+        assert_eq!(finished["summary"]["succeeded"], 2);
+    }
+
+    #[test]
+    fn test_mocked_step_keeps_the_content_of_an_existing_output() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("up.txt"), "precious\n").unwrap();
+        let (result, _) = run_with_events_in(mock_workflow("m2", true), dir.path(), false);
+        result.unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.path().join("up.txt")).unwrap(),
+            "precious\n"
+        );
+    }
+
+    #[test]
+    fn test_mocked_step_never_records_freshness_so_a_real_run_reruns_it() {
+        let dir = tempdir().unwrap();
+        let (result, _) = run_with_events_in(mock_workflow("m3", true), dir.path(), false);
+        result.unwrap();
+
+        // Nothing about the mocked step is remembered.
+        let state = state_in(dir.path());
+        assert!(!state.completed_steps.contains("mk_m3_up"));
+        assert!(!state.step_hashes.contains_key("mk_m3_up"));
+        // The real step after it is remembered as usual.
+        assert!(state.completed_steps.contains("mk_m3_down"));
+
+        // The same workflow, no longer mocked: the tool runs now even though
+        // the placeholder outputs exist, and so does everything downstream.
+        fs::remove_file(dir.path().join("m3.down.ran")).unwrap();
+        let (result, events) = run_with_events_in(mock_workflow("m3", false), dir.path(), false);
+        result.unwrap();
+        assert!(dir.path().join("m3.ran").exists(), "tool must really run");
+        assert_eq!(
+            fs::read_to_string(dir.path().join("up.txt"))
+                .unwrap()
+                .trim(),
+            "real"
+        );
+        assert!(dir.path().join("m3.down.ran").exists());
+        assert!(events.iter().all(|e| e["event"] != "step_skipped"));
+        let state = state_in(dir.path());
+        assert!(state.completed_steps.contains("mk_m3_up"));
+        assert!(state.step_hashes.contains_key("mk_m3_up"));
+    }
+
+    #[test]
+    fn test_mocking_a_step_that_ran_for_real_forgets_its_freshness() {
+        let dir = tempdir().unwrap();
+        let (result, _) = run_with_events_in(mock_workflow("m4", false), dir.path(), false);
+        result.unwrap();
+        assert!(state_in(dir.path()).step_hashes.contains_key("mk_m4_up"));
+
+        let (result, _) = run_with_events_in(mock_workflow("m4", true), dir.path(), false);
+        result.unwrap();
+        let state = state_in(dir.path());
+        assert!(!state.completed_steps.contains("mk_m4_up"));
+        assert!(!state.step_hashes.contains_key("mk_m4_up"));
+
+        // Back to real: it runs again, it is not skipped as up to date.
+        fs::remove_file(dir.path().join("m4.ran")).unwrap();
+        let (result, _) = run_with_events_in(mock_workflow("m4", false), dir.path(), false);
+        result.unwrap();
+        assert!(dir.path().join("m4.ran").exists());
+    }
+
+    #[test]
+    fn test_mocked_step_is_never_skipped_as_up_to_date() {
+        let dir = tempdir().unwrap();
+        for _ in 0..2 {
+            let (result, events) = run_with_events_in(mock_workflow("m5", true), dir.path(), false);
+            result.unwrap();
+            assert!(events
+                .iter()
+                .all(|e| !(e["event"] == "step_skipped" && e["step"] == "mk_m5_up")));
+            std::thread::sleep(Duration::from_millis(1100));
+        }
+    }
+
+    #[test]
+    fn test_mocked_step_skips_content_checks_but_runs_exists() {
+        let dir = tempdir().unwrap();
+        let mut wf = mock_workflow("m6", true);
+        wf.steps[0].checks = vec![
+            OutputCheck::new(CheckKind::Exists),
+            OutputCheck::new(CheckKind::NonEmpty),
+            OutputCheck::min_lines(5),
+        ];
+        let (result, events) = run_with_events_in(wf, dir.path(), false);
+        result.unwrap();
+        assert!(events.iter().all(|e| e["event"] != "check_failed"));
+
+        let (run_dir, json) = only_run(dir.path());
+        let up = json["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == "mk_m6_up")
+            .unwrap();
+        assert_eq!(up["mocked"], true);
+        let checks = up["checks"].as_array().unwrap();
+        assert_eq!(checks.len(), 3);
+        assert!(checks[0].get("skipped").is_none());
+        assert_eq!(checks[1]["skipped"], true);
+        assert_eq!(checks[2]["skipped"], true);
+        let html = fs::read_to_string(run_dir.join("report.html")).unwrap();
+        assert!(html.contains("MOCKED"));
+        assert!(html.contains("skipped"));
+    }
+
+    #[test]
+    fn test_mocked_step_fails_when_an_output_cannot_be_created() {
+        // The check names an output the mock cannot create: its parent is a file.
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("blocker"), "x").unwrap();
+        let wf = Workflow::from_steps(vec![Step::new("mk_m7_up", "bash", "true")
+            .with_output("blocker/out.txt")
+            .with_mock(true)]);
+        let (result, _) = run_with_events_in(wf, dir.path(), false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dry_run_of_a_mocked_step_creates_nothing() {
+        let dir = tempdir().unwrap();
+        let (result, events) = run_with_events_in(mock_workflow("m8", true), dir.path(), true);
+        result.unwrap();
+        assert!(!dir.path().join("up.txt").exists());
+        assert!(!dir.path().join("m8_dir").exists());
+        assert!(events.last().unwrap()["summary"]["succeeded"] == 2);
+    }
+
+    #[test]
+    fn test_a_mocked_step_needs_no_conda_environment() {
+        let wf = Workflow::from_steps(vec![
+            Step::new("mk_env_a", "samtools", "samtools view x").with_mock(true),
+            Step::new("mk_env_b", "bowtie2", "bowtie2 x"),
+        ]);
+        let engine = Engine::new(wf);
+        assert_eq!(engine.tools_requiring_environments(), ["bowtie2"]);
+    }
+
+    #[test]
+    fn test_old_yaml_without_mock_loads_as_not_mocked() {
+        let step: Step = serde_yaml::from_str("id: a\ntool: bash\ncommand: echo hi\n").unwrap();
+        assert!(!step.mock);
+        let text = serde_yaml::to_string(&step).unwrap();
+        assert!(!text.contains("mock"), "{text}");
+        let step: Step =
+            serde_yaml::from_str("id: a\ntool: bash\ncommand: echo hi\nmock: true\n").unwrap();
+        assert!(step.mock);
     }
 }

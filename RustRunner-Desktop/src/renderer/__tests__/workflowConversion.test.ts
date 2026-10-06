@@ -12,6 +12,9 @@ import {
   renameWildcardInPattern,
   wildcardNameError,
   convertNodesToWorkflow,
+  countMockedNodes,
+  declaredOutputs,
+  normalizeCheckTarget,
   isBlocking,
   normalizeMinLines,
   findInvalidNodeIds,
@@ -428,5 +431,116 @@ describe('output checks', () => {
     );
     const parsed: any = yaml.load(yaml.dump({ steps }));
     expect(parsed.steps[0].checks).toEqual([{ kind: 'min_lines', lines: 3, blocking: false }]);
+  });
+});
+
+describe('per-output check targets', () => {
+  const two = (data: Record<string, unknown>) => ({ output: 'out/a.bam, out/a.bai', ...data });
+  const twoNode = (data: Record<string, unknown>) => node('a', 'A', two(data));
+
+  it('splits the output field like the engine does', () => {
+    expect(declaredOutputs('out/a.bam, out/a.bai ,')).toEqual(['out/a.bam', 'out/a.bai']);
+    expect(declaredOutputs('')).toEqual([]);
+    expect(declaredOutputs(undefined)).toEqual([]);
+  });
+
+  it('keeps "all outputs" (no target key) by default and for blank targets', () => {
+    expect(buildChecks(two({ checkExists: true }))).toEqual([{ kind: 'exists' }]);
+    expect(buildChecks(two({ checkExists: true, checkExistsTarget: '' }))).toEqual([{ kind: 'exists' }]);
+    expect(buildChecks(two({ checkExists: true, checkExistsTarget: '   ' }))).toEqual([{ kind: 'exists' }]);
+    expect(normalizeCheckTarget(undefined)).toBeUndefined();
+  });
+
+  it('gives every preset its own target', () => {
+    const checks = buildChecks(
+      two({
+        checkExists: true,
+        checkNonEmpty: true,
+        checkNonEmptyTarget: 'out/a.bam',
+        checkMinLinesEnabled: true,
+        checkMinLines: '4',
+        checkMinLinesTarget: ' out/a.bai ',
+        checkBlocking: false,
+      })
+    );
+    expect(checks).toEqual([
+      { kind: 'exists', blocking: false },
+      { kind: 'non_empty', target: 'out/a.bam', blocking: false },
+      { kind: 'min_lines', lines: 4, target: 'out/a.bai', blocking: false },
+    ]);
+  });
+
+  it('ignores the target of a preset that is switched off', () => {
+    expect(buildChecks(two({ checkNonEmptyTarget: 'out/a.bam' }))).toEqual([]);
+  });
+
+  it('writes the target into YAML the engine reads', () => {
+    const { steps } = convertNodesToWorkflow(
+      [twoNode({ checkNonEmpty: true, checkNonEmptyTarget: 'out/a.bai' })],
+      []
+    );
+    const parsed: any = yaml.load(yaml.dump({ steps }));
+    expect(parsed.steps[0].checks).toEqual([{ kind: 'non_empty', target: 'out/a.bai' }]);
+    expect(validateWorkflow({ steps })).toEqual([]);
+  });
+
+  it('reports a target that is no longer one of the outputs', () => {
+    const { steps } = convertNodesToWorkflow(
+      [twoNode({ checkExists: true, checkExistsTarget: 'gone.txt' })],
+      []
+    );
+    const errors = validateWorkflow({ steps });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('gone.txt');
+    expect(errors[0]).toContain('not one of the step');
+  });
+
+  it('accepts targets spelled as wildcard patterns', () => {
+    const { steps } = convertNodesToWorkflow(
+      [
+        node('a', 'A', {
+          tool: 'bash',
+          command: 'x',
+          output: 'out/{sample}.bam',
+          checkExists: true,
+          checkExistsTarget: 'out/{sample}.bam',
+        }),
+      ],
+      [],
+      { a: ['x/s1.fastq'] }
+    );
+    expect(validateWorkflow({ steps })).toEqual([]);
+  });
+});
+
+describe('mocked steps', () => {
+  it('emits mock: true only when switched on, keeping old YAML unchanged', () => {
+    const { steps } = convertNodesToWorkflow(
+      [
+        node('a', 'A', { mock: true }),
+        node('b', 'B', { mock: false }),
+        node('c', 'C', {}),
+        node('d', 'D', { mock: 'true' }),
+      ],
+      []
+    );
+    expect(steps[0].mock).toBe(true);
+    expect(steps[1]).not.toHaveProperty('mock');
+    expect(steps[2]).not.toHaveProperty('mock');
+    expect(steps[3].mock).toBe(true);
+    const parsed: any = yaml.load(yaml.dump({ steps }));
+    expect(parsed.steps[0].mock).toBe(true);
+  });
+
+  it('counts mocked nodes for the run toolbar warning', () => {
+    expect(countMockedNodes([])).toBe(0);
+    expect(
+      countMockedNodes([
+        node('a', 'A', { mock: true }),
+        node('b', 'B', {}),
+        node('c', 'C', { mock: 'true' }),
+        node('d', 'D', { mock: false }),
+      ])
+    ).toBe(2);
   });
 });

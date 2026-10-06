@@ -81,12 +81,23 @@ pub struct RunSummary {
     pub skipped: usize,
     /// Steps that needed more than one attempt.
     pub retried: usize,
+    /// Steps that were mocked (counted in `succeeded` too). Absent when none.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub mocked: usize,
     /// Non-blocking output checks that failed.
     pub check_warnings: usize,
     pub duration_secs: f64,
     /// Why the run did not succeed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// One event of a run.
@@ -114,6 +125,10 @@ pub enum Event {
     StepSucceeded {
         step: String,
         attempts: u32,
+        /// The step was mocked: its outputs are placeholders and the tool did
+        /// not run. Absent for a real run.
+        #[serde(skip_serializing_if = "is_false")]
+        mocked: bool,
     },
     StepFailed {
         step: String,
@@ -455,6 +470,7 @@ mod tests {
         sink.emit(Event::StepSucceeded {
             step: "a".into(),
             attempts: 1,
+            mocked: false,
         });
         sink.update_tally(|t| t.succeeded += 1);
         assert_eq!(sink.tally().succeeded, 1);

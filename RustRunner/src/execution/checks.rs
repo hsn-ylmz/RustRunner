@@ -32,13 +32,26 @@ impl CheckFailure {
     }
 }
 
+/// Whether a check says nothing about a mocked step. A mock creates empty
+/// placeholders, so `non_empty` and `min_lines` would always fail; they are
+/// reported as skipped instead. `exists` still runs.
+pub fn skipped_for_mock(kind: CheckKind) -> bool {
+    matches!(kind, CheckKind::NonEmpty | CheckKind::MinLines)
+}
+
 /// Runs all of `step`'s checks and returns the failures (empty when every
 /// check passed). Relative output paths resolve against `working_dir`.
+///
+/// On a mocked step the content checks are not evaluated (see
+/// [`skipped_for_mock`]).
 pub fn run_checks(step: &Step, working_dir: &Option<PathBuf>) -> Vec<CheckFailure> {
     let outputs = step.output_paths();
     let mut failures = Vec::new();
 
     for check in &step.checks {
+        if step.mock && skipped_for_mock(check.kind) {
+            continue;
+        }
         let targets: Vec<&String> = match &check.target {
             Some(target) => outputs
                 .iter()
@@ -144,6 +157,27 @@ mod tests {
 
     fn run(step: &Step, dir: &Path) -> Vec<CheckFailure> {
         run_checks(step, &Some(dir.to_path_buf()))
+    }
+
+    #[test]
+    fn test_mocked_step_skips_only_content_checks() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("empty.txt"), "").unwrap();
+        let mut step = Step::new("s", "bash", "true")
+            .with_output("empty.txt")
+            .with_check(OutputCheck::new(CheckKind::NonEmpty))
+            .with_check(OutputCheck::min_lines(3));
+        assert_eq!(run(&step, dir.path()).len(), 2);
+        step.mock = true;
+        assert!(run(&step, dir.path()).is_empty());
+
+        // exists still runs on a mocked step
+        let step = Step::new("s", "bash", "true")
+            .with_output("missing.txt")
+            .with_check(OutputCheck::new(CheckKind::Exists))
+            .with_mock(true);
+        assert_eq!(run(&step, dir.path()).len(), 1);
+        assert!(skipped_for_mock(CheckKind::MinLines) && !skipped_for_mock(CheckKind::Exists));
     }
 
     #[test]

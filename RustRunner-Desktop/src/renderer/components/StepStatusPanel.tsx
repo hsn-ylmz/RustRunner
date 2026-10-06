@@ -75,6 +75,11 @@ export function StepStatusPanel({
               <td className="step-row-state">
                 <span className="step-glyph">{STATE_TEXT[row.state].glyph}</span>{' '}
                 {STATE_TEXT[row.state].label}
+                {row.mocked && row.state === 'succeeded' && (
+                  <span className="mock-tag" data-testid="step-mocked">
+                    MOCKED
+                  </span>
+                )}
               </td>
               <td title={row.label}>{row.id}</td>
               <td className="step-row-details">{rowDetails(row)}</td>
@@ -97,6 +102,9 @@ function rowDetails(row: StatusRow): string {
     parts.push(`attempt ${row.attempt}/${row.maxAttempts} failed, ${wait}`);
   } else if (row.attempt && row.maxAttempts && row.maxAttempts > 1) {
     parts.push(`attempt ${row.attempt}/${row.maxAttempts}`);
+  }
+  if (row.mocked && row.state === 'succeeded') {
+    parts.push('tool not run, outputs are placeholders');
   }
   if (row.state === 'skipped') {
     parts.push(row.message || 'up to date, or not reached');

@@ -29,6 +29,9 @@ use super::state::WorkflowState;
 /// Why a step has to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaleReason {
+    /// The step is mocked: it only creates placeholder outputs, so it runs
+    /// every time and is never recorded as done.
+    Mocked,
     /// The state has no successful earlier run of the step.
     NotCompleted,
     /// The step succeeded before, but the state holds no definition hash for
@@ -50,6 +53,7 @@ pub enum StaleReason {
 impl fmt::Display for StaleReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            StaleReason::Mocked => write!(f, "mocked (placeholder outputs, never up to date)"),
             StaleReason::NotCompleted => write!(f, "not completed in an earlier run"),
             StaleReason::DefinitionUnknown => {
                 write!(f, "definition unknown (saved by an older version)")
@@ -162,6 +166,9 @@ fn own_staleness(
     base: Option<&Path>,
     env_of: &dyn Fn(&Step) -> Option<String>,
 ) -> Option<StaleReason> {
+    if step.mock {
+        return Some(StaleReason::Mocked);
+    }
     if !state.completed_steps.contains(&step.id) {
         return Some(StaleReason::NotCompleted);
     }
@@ -304,6 +311,15 @@ mod tests {
         dir: &TempDir,
     ) -> HashMap<String, StaleReason> {
         assess(workflow, state, Some(dir.path()), &no_env)
+    }
+
+    #[test]
+    fn test_mocked_step_is_always_stale_even_with_a_clean_record() {
+        let (mut workflow, state, dir) = chain();
+        workflow.steps[0].mock = true;
+        let stale = reasons(&workflow, &state, &dir);
+        assert_eq!(stale["a"], StaleReason::Mocked);
+        assert_eq!(stale["b"], StaleReason::Upstream("a".into()));
     }
 
     #[test]

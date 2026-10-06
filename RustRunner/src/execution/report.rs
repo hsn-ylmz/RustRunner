@@ -41,6 +41,7 @@ use log::warn;
 use serde::{Deserialize, Serialize};
 
 use super::events::{Event, RunStatus, RunSummary};
+use crate::workflow::CheckKind;
 
 /// Directory (below the working directory) that holds every run.
 pub const RUNS_DIR: &str = ".rustrunner/runs";
@@ -143,6 +144,13 @@ pub struct CheckRecord {
     pub blocking: bool,
     /// Why it failed, or what was checked when it passed.
     pub message: String,
+    /// Not evaluated because the step was mocked (`passed` is true then).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub skipped: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// One step of a finished run.
@@ -156,6 +164,9 @@ pub struct StepRecord {
     pub status: StepStatus,
     /// Attempts used (0 for a step that never ran).
     pub attempts: u32,
+    /// The tool did not run: the outputs are placeholders (MOCKED).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mocked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -217,6 +228,7 @@ struct StepLog {
     /// Set by `step_started`, cleared when the step ends.
     running: bool,
     attempts: u32,
+    mocked: bool,
     started: Option<DateTime<Utc>>,
     ended: Option<DateTime<Utc>>,
     reason: Option<String>,
@@ -252,9 +264,14 @@ impl RunLog {
                 let log = self.steps.entry(step.clone()).or_default();
                 log.attempts = log.attempts.max(*attempt);
             }
-            Event::StepSucceeded { step, attempts } => {
+            Event::StepSucceeded {
+                step,
+                attempts,
+                mocked,
+            } => {
                 let log = self.steps.entry(step.clone()).or_default();
                 log.status = StepStatus::Succeeded;
+                log.mocked = *mocked;
                 log.running = false;
                 log.attempts = *attempts;
                 log.ended = Some(now);
@@ -366,6 +383,16 @@ impl RunLog {
             // event accounts for one configured check of its kind.
             let mut failed: Vec<&(String, bool, String)> = log.failed_checks.iter().collect();
             for (kind, description) in &info.checks {
+                if log.mocked && kind_skipped_for_mock(kind) {
+                    checks.push(CheckRecord {
+                        kind: kind.clone(),
+                        passed: true,
+                        blocking: !description.contains("(non-blocking)"),
+                        message: format!("skipped, the step is mocked ({})", description),
+                        skipped: true,
+                    });
+                    continue;
+                }
                 match failed.iter().position(|(k, _, _)| k == kind) {
                     Some(i) => {
                         let (kind, blocking, message) = failed.remove(i);
@@ -374,6 +401,7 @@ impl RunLog {
                             passed: false,
                             blocking: *blocking,
                             message: message.clone(),
+                            skipped: false,
                         });
                     }
                     None => checks.push(CheckRecord {
@@ -381,6 +409,7 @@ impl RunLog {
                         passed: true,
                         blocking: !description.contains("(non-blocking)"),
                         message: description.clone(),
+                        skipped: false,
                     }),
                 }
             }
@@ -390,6 +419,7 @@ impl RunLog {
                     passed: false,
                     blocking: *blocking,
                     message: message.clone(),
+                    skipped: false,
                 });
             }
         } else {
@@ -400,6 +430,7 @@ impl RunLog {
                     passed: false,
                     blocking: *blocking,
                     message: message.clone(),
+                    skipped: false,
                 });
             }
         }
@@ -412,6 +443,7 @@ impl RunLog {
             depends_on: info.depends_on.clone(),
             status,
             attempts: log.attempts,
+            mocked: log.mocked && status == StepStatus::Succeeded,
             started_at: log
                 .started
                 .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true)),
@@ -425,6 +457,12 @@ impl RunLog {
             },
         }
     }
+}
+
+/// Whether the check of this kind (its YAML spelling) is not evaluated on a
+/// mocked step; see `checks::skipped_for_mock`.
+fn kind_skipped_for_mock(kind: &str) -> bool {
+    kind == CheckKind::NonEmpty.as_str() || kind == CheckKind::MinLines.as_str()
 }
 
 /// The last `max_lines` lines of `text`, at most `max_bytes` long, with ANSI
@@ -553,7 +591,11 @@ pre{margin:6px 0 0;padding:8px 10px;background:var(--idle-bg);border:1px solid v
 border-radius:6px;overflow-x:auto;white-space:pre-wrap;overflow-wrap:anywhere}
 details summary{cursor:pointer;color:var(--accent);font-size:12px}
 ul.checks{margin:0;padding-left:16px}
-.pass{color:var(--ok)}.fail{color:var(--bad)}
+.pass{color:var(--ok)}.fail{color:var(--bad)}.skip{color:var(--idle)}
+.mock{display:inline-block;padding:0 6px;border:1px solid var(--warn);border-radius:4px;
+color:var(--warn);background:var(--warn-bg);font-size:11px;font-weight:700}
+.mockbanner{background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn);
+border-radius:8px;padding:8px 12px;margin:12px 0}
 .failure{background:var(--card);border:1px solid var(--bad);border-radius:8px;padding:10px 14px;margin:0 0 10px}
 .failure h3{margin:0 0 4px;font-size:14px}
 svg{display:block;max-width:100%;height:auto}
@@ -565,7 +607,7 @@ svg .node rect{fill:var(--idle-bg);stroke:var(--idle);stroke-width:1.5}
 svg .node.succeeded rect{fill:var(--ok-bg);stroke:var(--ok)}
 svg .node.failed rect{fill:var(--bad-bg);stroke:var(--bad)}
 svg .node.interrupted rect{fill:var(--warn-bg);stroke:var(--warn)}
-svg .node.skipped rect,svg .node.notrun rect{stroke-dasharray:4 3}
+svg .node.skipped rect,svg .node.notrun rect,svg .node.mocked rect{stroke-dasharray:4 3}
 svg .axis{stroke:var(--line);stroke-width:1}
 svg .cpu{fill:none;stroke:var(--accent);stroke-width:1.5}
 svg .mem{fill:none;stroke:var(--warn);stroke-width:1.5}
@@ -598,6 +640,14 @@ pub fn render_html(run: &RunRecord) -> String {
         h.push_str(&format!("<div class=\"err\">{}</div>\n", esc(error)));
     }
 
+    if run.summary.mocked > 0 {
+        h.push_str(&format!(
+            "<div class=\"mockbanner\"><b>MOCKED:</b> {} step(s) did not run their tool. Their \
+             outputs are empty placeholders, so downstream results are not real.</div>\n",
+            run.summary.mocked
+        ));
+    }
+
     // Totals.
     let s = &run.summary;
     h.push_str("<div class=\"cards\">\n");
@@ -608,7 +658,11 @@ pub fn render_html(run: &RunRecord) -> String {
         (s.skipped, "skipped"),
         (s.retried, "retried"),
         (s.check_warnings, "check warnings"),
+        (s.mocked, "mocked"),
     ] {
+        if label == "mocked" && value == 0 {
+            continue;
+        }
         h.push_str(&format!(
             "<div class=\"card\"><b>{}</b><span>{}</span></div>\n",
             value, label
@@ -684,9 +738,14 @@ pub fn render_html(run: &RunRecord) -> String {
             esc(&st.command)
         ));
         h.push_str(&format!(
-            "<td class=\"st {}\">{}</td>",
+            "<td class=\"st {}\">{}{}</td>",
             st.status.class(),
-            st.status.label()
+            st.status.label(),
+            if st.mocked {
+                " <span class=\"mock\">MOCKED</span>"
+            } else {
+                ""
+            }
         ));
         h.push_str(&format!("<td class=\"num\">{}</td>", st.attempts));
         h.push_str(&format!(
@@ -703,7 +762,9 @@ pub fn render_html(run: &RunRecord) -> String {
         if !st.checks.is_empty() {
             h.push_str("<ul class=\"checks\">");
             for c in &st.checks {
-                let (class, mark) = if c.passed {
+                let (class, mark) = if c.skipped {
+                    ("skip", "skipped")
+                } else if c.passed {
                     ("pass", "passed")
                 } else if c.blocking {
                     ("fail", "FAILED")
@@ -855,13 +916,18 @@ pub fn render_dag(steps: &[StepRecord]) -> String {
     for (i, step) in steps.iter().enumerate() {
         let (x, y) = pos[i];
         svg.push_str(&format!(
-            "<g class=\"node {class}\"><title>{full}: {status}</title>\
+            "<g class=\"node {class}{mock}\"><title>{full}: {status}</title>\
              <rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" rx=\"7\"/>\
              <text x=\"{tx}\" y=\"{ty1}\">{name}</text>\
              <text class=\"sub2\" x=\"{tx}\" y=\"{ty2}\">{status}</text></g>\n",
             class = step.status.class(),
+            mock = if step.mocked { " mocked" } else { "" },
             full = esc(&step.id),
-            status = step.status.label(),
+            status = if step.mocked {
+                "succeeded (MOCKED)"
+            } else {
+                step.status.label()
+            },
             x = x,
             y = y,
             w = NODE_W,
@@ -1198,6 +1264,7 @@ mod tests {
             &Event::StepSucceeded {
                 step: "a".into(),
                 attempts: 2,
+                mocked: false,
             },
             t0 + chrono::Duration::milliseconds(2500),
         );
@@ -1241,6 +1308,7 @@ mod tests {
             &Event::StepSucceeded {
                 step: "flaky".into(),
                 attempts: 2,
+                mocked: false,
             },
             now,
         );
@@ -1280,6 +1348,7 @@ mod tests {
             &Event::StepSucceeded {
                 step: "s".into(),
                 attempts: 1,
+                mocked: false,
             },
             now,
         );
@@ -1315,6 +1384,7 @@ mod tests {
             depends_on: deps.iter().map(|d| d.to_string()).collect(),
             status: StepStatus::Succeeded,
             attempts: 1,
+            mocked: false,
             started_at: None,
             duration_secs: None,
             reason: None,
@@ -1349,6 +1419,7 @@ mod tests {
             &Event::StepSucceeded {
                 step: "first".into(),
                 attempts: 1,
+                mocked: false,
             },
             now,
         );

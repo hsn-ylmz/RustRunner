@@ -117,6 +117,12 @@ export function convertNodesToWorkflow(
       step.timeout_secs = timeoutSecs;
     }
 
+    // A mocked step makes placeholder outputs instead of running its tool.
+    // Written only when on, because false is the engine default.
+    if (isOn(node.data.mock)) {
+      step.mock = true;
+    }
+
     // Output checks mirror the Rust `checks` list; omitted when none apply.
     const checks = buildChecks(node.data);
     if (checks.length > 0) {
@@ -247,7 +253,30 @@ export function normalizeRetryDelay(value: unknown): number {
 export interface OutputCheckYaml {
   kind: 'exists' | 'non_empty' | 'min_lines';
   lines?: number;
+  /** One declared output, spelled as in the step's `output`; absent = all outputs. */
+  target?: string;
   blocking?: false;
+}
+
+/** The individual outputs of an output field (comma-separated, like the engine reads it). */
+export function declaredOutputs(output: unknown): string[] {
+  if (typeof output !== 'string') return [];
+  return output
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+}
+
+/** A check target from the UI: a non-blank string, or undefined for "all outputs". */
+export function normalizeCheckTarget(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const target = value.trim();
+  return target === '' ? undefined : target;
+}
+
+/** How many canvas nodes are mocked (for the run toolbar's warning). */
+export function countMockedNodes(nodes: any[]): number {
+  return nodes.filter((node: any) => isOn(node?.data?.mock)).length;
 }
 
 /** A positive whole number of lines, or undefined when not usable. */
@@ -276,13 +305,24 @@ export function isBlocking(value: unknown): boolean {
 export function buildChecks(data: any): OutputCheckYaml[] {
   if (!data?.output) return [];
   const checks: OutputCheckYaml[] = [];
-  if (isOn(data.checkExists)) checks.push({ kind: 'exists' });
-  if (isOn(data.checkNonEmpty)) checks.push({ kind: 'non_empty' });
+  const withTarget = (check: OutputCheckYaml, target: unknown): OutputCheckYaml => {
+    const t = normalizeCheckTarget(target);
+    if (t !== undefined) check.target = t;
+    return check;
+  };
+  if (isOn(data.checkExists)) {
+    checks.push(withTarget({ kind: 'exists' }, data.checkExistsTarget));
+  }
+  if (isOn(data.checkNonEmpty)) {
+    checks.push(withTarget({ kind: 'non_empty' }, data.checkNonEmptyTarget));
+  }
   if (isOn(data.checkMinLinesEnabled)) {
     // An enabled preset with an unusable N would be rejected by the engine
     // (min_lines 0 can never fail), so it is dropped instead.
     const lines = normalizeMinLines(data.checkMinLines);
-    if (lines !== undefined) checks.push({ kind: 'min_lines', lines });
+    if (lines !== undefined) {
+      checks.push(withTarget({ kind: 'min_lines', lines }, data.checkMinLinesTarget));
+    }
   }
   if (!isBlocking(data.checkBlocking)) {
     checks.forEach((c) => {
@@ -347,6 +387,17 @@ export function validateWorkflow(workflow: any): string[] {
     }
     if (!step.command || step.command.trim() === '') {
       errors.push(`Step ${step.id}: missing command`);
+    }
+
+    // A check aimed at one output must name an output the step still has (the
+    // engine rejects it otherwise); say so before the run starts.
+    const outputs = (step.output ?? []).flatMap((o: string) => declaredOutputs(o));
+    for (const check of step.checks ?? []) {
+      if (check.target !== undefined && !outputs.includes(check.target)) {
+        errors.push(
+          `Step ${step.id}: the ${check.kind} check targets "${check.target}", which is not one of the step's outputs`
+        );
+      }
     }
 
     // Every {name} in a path pattern needs files; the engine would reject the

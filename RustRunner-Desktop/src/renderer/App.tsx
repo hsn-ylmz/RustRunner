@@ -26,6 +26,7 @@ import {
 } from './stepEvents';
 import {
   convertNodesToWorkflow,
+  countMockedNodes,
   findInvalidNodeIds,
   generateWorkflowId,
   isValidWorkflowId,
@@ -950,6 +951,8 @@ function WorkflowEditorInner() {
     [edges, nodes]
   );
 
+  const mockedCount = countMockedNodes(nodes);
+
   const decoratedNodes = nodes.map((node: any) => {
     const status = stepStatus[nodeIdToStepId(node.id)];
     const invalidReason = invalidNodeIds[node.id];
@@ -1080,6 +1083,16 @@ function WorkflowEditorInner() {
             >
               Stop
             </button>
+
+            {mockedCount > 0 && (
+              <div
+                className="mock-warning"
+                data-testid="mock-warning"
+                title="Mocked steps do not run their tool; they only create placeholder outputs. Results downstream are not real."
+              >
+                ⚠ {mockedCount} mocked step{mockedCount === 1 ? '' : 's'}
+              </div>
+            )}
 
             {progress && <div className="execution-progress" data-testid="progress">{progress}</div>}
           </div>

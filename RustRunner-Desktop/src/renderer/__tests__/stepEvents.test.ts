@@ -257,3 +257,49 @@ describe('resolveBaseStepId', () => {
     expect(resolveBaseStepId('other', ['align'])).toBeNull();
   });
 });
+
+describe('mocked steps', () => {
+  const at = { v: 1 as const, ts: '2026-01-01T00:00:00.000Z' };
+
+  it('carries the mocked flag of step_succeeded and leaves normal steps unchanged', () => {
+    expect(
+      toStepEvent({ ...at, event: 'step_succeeded', step: 'a', attempts: 1, mocked: true })
+    ).toEqual({ kind: 'done', stepId: 'a', mocked: true });
+    expect(toStepEvent({ ...at, event: 'step_succeeded', step: 'a', attempts: 1 })).toEqual({
+      kind: 'done',
+      stepId: 'a',
+    });
+  });
+
+  it('marks the run, the node rollup and the status row as mocked', () => {
+    const runs = fold([
+      { kind: 'start', stepId: 'a', attempt: 1, maxAttempts: 1 },
+      { kind: 'done', stepId: 'a', mocked: true },
+      { kind: 'start', stepId: 'b', attempt: 1, maxAttempts: 1 },
+      { kind: 'done', stepId: 'b' },
+    ]);
+    expect(runs.a.mocked).toBe(true);
+    expect(runs.b.mocked).toBeUndefined();
+    const nodes = rollupNodeStatuses(runs, ['a', 'b']);
+    expect(nodes.a.mocked).toBe(true);
+    expect(nodes.b.mocked).toBeUndefined();
+    const rows = buildStatusRows(
+      runs,
+      [
+        { stepId: 'a', label: 'A' },
+        { stepId: 'b', label: 'B' },
+      ],
+      'ended'
+    );
+    expect(rows.map((r) => r.mocked)).toEqual([true, undefined]);
+  });
+
+  it('forgets the mark when the step runs for real next time', () => {
+    const runs = fold([
+      { kind: 'done', stepId: 'a', mocked: true },
+      { kind: 'start', stepId: 'a', attempt: 1, maxAttempts: 1 },
+      { kind: 'done', stepId: 'a' },
+    ]);
+    expect(runs.a.mocked).toBeUndefined();
+  });
+});

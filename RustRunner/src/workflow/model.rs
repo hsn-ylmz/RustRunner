@@ -256,6 +256,17 @@ pub struct Step {
     /// fail the step without re-running the tool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<OutputCheck>,
+
+    /// Do not run the tool: create (or touch) the declared outputs instead, so
+    /// the rest of the workflow can be tried out without the real tool or its
+    /// data. Files are created empty, outputs ending in `/` become
+    /// directories. A mocked step never counts as up to date.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mock: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -338,6 +349,7 @@ impl Step {
             retry_delay_secs: DEFAULT_RETRY_DELAY_SECS,
             timeout_secs: None,
             checks: Vec::new(),
+            mock: false,
         }
     }
 
@@ -355,6 +367,13 @@ impl Step {
             .map(|f| f.trim().to_string())
             .filter(|f| !f.is_empty())
             .collect()
+    }
+
+    /// Marks the step as mocked: its outputs are created instead of running
+    /// the tool.
+    pub fn with_mock(mut self, mock: bool) -> Self {
+        self.mock = mock;
+        self
     }
 
     /// Sets how many times a failed step is retried.

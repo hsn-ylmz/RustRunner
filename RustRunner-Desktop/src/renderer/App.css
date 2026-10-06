@@ -1157,6 +1157,95 @@
   stroke-width: 3;
 }
 
+/* Colour is not the only signal. A matching edge is solid; a mismatched one is
+   dashed (a long, still dash) and carries a "types differ" label. React Flow's
+   own animated dashes would make every edge look dashed, so they are turned off
+   for both typed verdicts. */
+.react-flow__edge.animated .typed-edge-match .react-flow__edge-path {
+  stroke-dasharray: none;
+  animation: none;
+}
+
+.react-flow__edge.animated .typed-edge-mismatch .react-flow__edge-path {
+  stroke-dasharray: 10 6;
+  animation: none;
+}
+
+.typed-edge-label {
+  pointer-events: none;
+}
+
+.typed-edge-label text {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.typed-edge-label-mismatch rect {
+  fill: #fff4e6;
+  stroke: #e8590c;
+  stroke-width: 1.5;
+}
+
+.typed-edge-label-mismatch text {
+  fill: #9a3d05;
+}
+
+.typed-edge-label-match circle {
+  fill: #e6f6ec;
+  stroke: #1f9d55;
+  stroke-width: 1.5;
+}
+
+.typed-edge-label-match text {
+  fill: #147a40;
+}
+
+/* Mocked steps: a tag on the node, a tag in the status panel and a badge by
+   the run buttons. Always text, never colour alone. */
+.node-mock-badge,
+.node-mocked-run {
+  display: inline-block;
+  margin-bottom: 2px;
+  padding: 0 6px;
+  border: 1px dashed currentColor;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: #fff8e1;
+  color: #8a5a00;
+}
+
+.mock-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px dashed #b7791f;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #8a5a00;
+  background: #fff8e1;
+}
+
+.mock-warning {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid #b7791f;
+  border-radius: 6px;
+  background: #fff8e1;
+  color: #8a5a00;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.check-target {
+  margin: 2px 0 6px 22px;
+}
+
+.check-target-select {
+  font-size: 12px;
+}
+
 /* =============================================================================
    Dark Mode
    ============================================================================= */
@@ -1231,6 +1320,33 @@
 
   .typed-edge-mismatch .react-flow__edge-path {
     stroke: #fb923c;
+  }
+
+  .typed-edge-label-mismatch rect {
+    fill: #3a2410;
+    stroke: #fb923c;
+  }
+
+  .typed-edge-label-mismatch text {
+    fill: #fdba74;
+  }
+
+  .typed-edge-label-match circle {
+    fill: #12301f;
+    stroke: #4ade80;
+  }
+
+  .typed-edge-label-match text {
+    fill: #86efac;
+  }
+
+  .node-mock-badge,
+  .node-mocked-run,
+  .mock-tag,
+  .mock-warning {
+    background: #3a2f10;
+    color: #fcd34d;
+    border-color: #fcd34d;
   }
 
   .workflow-title {

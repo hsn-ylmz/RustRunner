@@ -31,6 +31,8 @@ export interface RunSummary {
   /** Steps that needed more than one attempt. */
   retried: number;
   check_warnings: number;
+  /** Steps that were mocked (also counted in `succeeded`); absent when none. */
+  mocked?: number;
   duration_secs: number;
   /** Why the run did not succeed. */
   error?: string;
@@ -48,7 +50,13 @@ export type EngineEventBody =
       delay_secs: number;
       reason: string;
     }
-  | { event: 'step_succeeded'; step: string; attempts: number }
+  | {
+      event: 'step_succeeded';
+      step: string;
+      attempts: number;
+      /** The tool did not run; outputs are placeholders. Absent for a real run. */
+      mocked?: boolean;
+    }
   | { event: 'step_failed'; step: string; reason: string; attempts: number }
   | { event: 'step_skipped'; step: string; reason: string }
   | {
@@ -94,6 +102,7 @@ function validSummary(s: unknown): s is RunSummary {
     isInt(o.skipped) &&
     isInt(o.retried) &&
     isInt(o.check_warnings) &&
+    (o.mocked === undefined || isInt(o.mocked)) &&
     isNum(o.duration_secs) &&
     (o.error === undefined || isStr(o.error))
   );
@@ -114,7 +123,8 @@ const VALIDATORS: Record<string, (o: Obj) => boolean> = {
     isInt(o.max_attempts) &&
     isInt(o.delay_secs) &&
     isStr(o.reason),
-  step_succeeded: (o) => isStr(o.step) && isInt(o.attempts),
+  step_succeeded: (o) =>
+    isStr(o.step) && isInt(o.attempts) && (o.mocked === undefined || isBool(o.mocked)),
   step_failed: (o) => isStr(o.step) && isStr(o.reason) && isInt(o.attempts),
   step_skipped: (o) => isStr(o.step) && isStr(o.reason),
   check_failed: (o) =>

@@ -6,6 +6,8 @@ import {
   hasWildcards,
   labelToId,
   isBlocking,
+  declaredOutputs,
+  normalizeCheckTarget,
   MAX_WILDCARD_NAME_LENGTH,
   normalizeWildcardName,
   renameWildcardInPattern,
@@ -31,6 +33,56 @@ import {
 /** Checkbox state may be a boolean or, from loose data, the string 'true'. */
 const checksOn = (value: unknown) => value === true || value === 'true';
 
+/** The three check presets: which node fields hold their switch and their target. */
+const CHECK_TARGET_FIELDS = ['checkExistsTarget', 'checkNonEmptyTarget', 'checkMinLinesTarget'];
+
+/**
+ * "All outputs" or one of the node's declared outputs. A target that is no
+ * longer one of the outputs (the output field was edited) stays visible and is
+ * flagged, instead of silently changing what the check covers.
+ */
+function CheckTargetSelect({
+  testId,
+  value,
+  outputs,
+  disabled,
+  onChange,
+}: {
+  testId: string;
+  value: unknown;
+  outputs: string[];
+  disabled: boolean;
+  onChange: (target: string) => void;
+}) {
+  const target = normalizeCheckTarget(value) ?? '';
+  const stale = target !== '' && !outputs.includes(target);
+  return (
+    <div className="check-target">
+      <select
+        className="property-input check-target-select"
+        value={target}
+        data-testid={testId}
+        disabled={disabled}
+        aria-label="Which output this check applies to"
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">All outputs</option>
+        {outputs.map((output) => (
+          <option key={output} value={output}>
+            Only {output}
+          </option>
+        ))}
+        {stale && <option value={target}>Only {target} (no longer an output)</option>}
+      </select>
+      {stale && (
+        <div className="property-error" data-testid={`${testId}-stale`}>
+          ⚠ {target} is no longer one of this step's outputs; pick another or "All outputs".
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PropertiesPanel({
   selectedNode,
   onNodeUpdate,
@@ -50,6 +102,8 @@ export function PropertiesPanel({
   }
 
   const hasOutput = Boolean(selectedNode.data.output);
+  const outputs = declaredOutputs(selectedNode.data.output);
+  const isMocked = checksOn(selectedNode.data.mock);
   /** The name used inside {braces} for this node's batch files. */
   const wildcardName = normalizeWildcardName(selectedNode.data.wildcardName);
   const wildcardNameProblem = wildcardNameError(selectedNode.data.wildcardName);
@@ -133,6 +187,13 @@ export function PropertiesPanel({
     if (wildcardNameError(value) === null && next !== wildcardName) {
       handleInputChange('input', renameWildcardInPattern(selectedNode.data.input || '', wildcardName, next));
       handleInputChange('output', renameWildcardInPattern(selectedNode.data.output || '', wildcardName, next));
+      // A check aimed at one output follows the renamed pattern too.
+      for (const field of CHECK_TARGET_FIELDS) {
+        const target = selectedNode.data[field];
+        if (typeof target === 'string' && target !== '') {
+          handleInputChange(field, renameWildcardInPattern(target, wildcardName, next));
+        }
+      }
     }
   };
 
@@ -516,6 +577,24 @@ export function PropertiesPanel({
         </div>
       </div>
       <div className="property-group">
+        <label className="property-checkbox">
+          <input
+            type="checkbox"
+            checked={isMocked}
+            data-testid="prop-mock"
+            onChange={(e) => handleInputChange('mock', e.target.checked)}
+          />{' '}
+          Mock (don't run the tool)
+        </label>
+        <div className="property-hint">
+          Creates the step's outputs instead of running it: empty files, and folders for
+          paths ending in /. Use it to try the rest of the workflow without the real tool.
+          Non-empty and line-count checks are skipped, and a mocked step never counts as up
+          to date, so a real run executes it.
+        </div>
+      </div>
+
+      <div className="property-group">
         <label className="property-label">Output Checks:</label>
         <label className="property-checkbox">
           <input
@@ -527,6 +606,15 @@ export function PropertiesPanel({
           />{' '}
           Outputs must exist
         </label>
+        {checksOn(selectedNode.data.checkExists) && (
+          <CheckTargetSelect
+            testId="prop-check-exists-target"
+            value={selectedNode.data.checkExistsTarget}
+            outputs={outputs}
+            disabled={!hasOutput}
+            onChange={(target) => handleInputChange('checkExistsTarget', target)}
+          />
+        )}
         <label className="property-checkbox">
           <input
             type="checkbox"
@@ -537,6 +625,15 @@ export function PropertiesPanel({
           />{' '}
           Outputs must be non-empty
         </label>
+        {checksOn(selectedNode.data.checkNonEmpty) && (
+          <CheckTargetSelect
+            testId="prop-check-non-empty-target"
+            value={selectedNode.data.checkNonEmptyTarget}
+            outputs={outputs}
+            disabled={!hasOutput}
+            onChange={(target) => handleInputChange('checkNonEmptyTarget', target)}
+          />
+        )}
         <label className="property-checkbox">
           <input
             type="checkbox"
@@ -563,6 +660,15 @@ export function PropertiesPanel({
             placeholder="Minimum lines, e.g. 10"
           />
         )}
+        {checksOn(selectedNode.data.checkMinLinesEnabled) && (
+          <CheckTargetSelect
+            testId="prop-check-min-lines-target"
+            value={selectedNode.data.checkMinLinesTarget}
+            outputs={outputs}
+            disabled={!hasOutput}
+            onChange={(target) => handleInputChange('checkMinLinesTarget', target)}
+          />
+        )}
         <label className="property-checkbox">
           <input
             type="checkbox"
@@ -573,9 +679,14 @@ export function PropertiesPanel({
           />{' '}
           Blocking
         </label>
+        {isMocked && (
+          <div className="property-hint" data-testid="mock-checks-note">
+            This step is mocked: non-empty and line-count checks are skipped, "must exist" still runs.
+          </div>
+        )}
         <div className="property-hint">
           {hasOutput
-            ? 'Run after the step succeeds. A failed blocking check fails the step and skips everything after it; the tool is not re-run. Unchecked "Blocking" only logs a warning.'
+            ? 'Run after the step succeeds. Each check can cover all outputs or just one. A failed blocking check fails the step and skips everything after it; the tool is not re-run. Unchecked "Blocking" only logs a warning.'
             : 'Set an output file first; checks look at the step\'s outputs.'}
         </div>
       </div>

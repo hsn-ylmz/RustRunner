@@ -130,6 +130,14 @@ async function strokeOf(page: Page, edge: ReturnType<Page['locator']>): Promise<
   return (color.match(/\d+/g) ?? []).slice(0, 3).map(Number);
 }
 
+/** The computed dash pattern of an edge's stroke ("none" when solid). */
+async function dashOf(edge: ReturnType<Page['locator']>): Promise<string> {
+  return edge
+    .locator('.react-flow__edge-path')
+    .first()
+    .evaluate((el) => getComputedStyle(el).strokeDasharray);
+}
+
 test('connecting bwa to samtools sort shows a green edge; a mismatch is orange', async ({ page }) => {
   await addFromPalette(page, 'bwa', 'bwa-mem');
   await addFromPalette(page, 'sort', 'samtools-sort');
@@ -145,6 +153,9 @@ test('connecting bwa to samtools sort shows a green edge; a mismatch is orange',
   expect(g).toBeGreaterThan(r);
   expect(g).toBeGreaterThan(b);
   await expect(green.locator('title')).toHaveText(/Types match: BWA MEM makes sam/);
+  // Not colour alone: a matching edge is solid and carries a check mark.
+  expect(await dashOf(green)).toBe('none');
+  await expect(green.getByTestId('typed-edge-label')).toHaveText('✓');
 
   // FastQC makes html and zip; samtools sort wants sam or bam: orange, still connected.
   await connect(page, 'FastQC', 'samtools sort');
@@ -154,11 +165,16 @@ test('connecting bwa to samtools sort shows a green edge; a mismatch is orange',
   expect(r2).toBeGreaterThan(g2);
   expect(g2).toBeGreaterThan(b2);
   await expect(orange.locator('title')).toHaveText(/Types differ: FastQC makes html, zip/);
+  // Not colour alone: a mismatched edge is dashed and says so on the edge.
+  expect(await dashOf(orange)).not.toBe('none');
+  await expect(orange.getByTestId('typed-edge-label')).toContainText('types differ');
 
   // A custom node has no types: its edge stays neutral.
   await connect(page, 'samtools sort', 'Node 4');
   const neutral = page.locator('[data-testid="typed-edge"][data-type-match="unknown"]');
   await expect(neutral).toHaveCount(1);
+  // No verdict, no marker.
+  await expect(neutral.getByTestId('typed-edge-label')).toHaveCount(0);
   await expect(page.locator('.react-flow__edge')).toHaveCount(3);
   await expect(green).toHaveCount(1);
 });

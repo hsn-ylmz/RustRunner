@@ -131,6 +131,18 @@ pub fn execute_step_with_events(
         };
     }
 
+    // A mocked step stands in for the tool: it makes the outputs and returns.
+    if step.mock {
+        info!(
+            "Step '{}' is mocked: creating its outputs instead of running it",
+            step_name
+        );
+        return StepRun {
+            attempts: 1,
+            result: create_mock_outputs(&output_files, working_dir),
+        };
+    }
+
     // Resolve placeholders. Each file is shell-quoted individually so paths
     // containing spaces or shell metacharacters (e.g. a filename picked from
     // disk like `my sample; rm -rf ~.fastq`) are passed as literal arguments
@@ -402,6 +414,35 @@ fn ensure_output_directories(
                 debug!("Created directory: {}", parent.display());
             }
         }
+    }
+    Ok(())
+}
+
+/// Stands in for a mocked step: creates every declared output that is missing
+/// (an empty file, or a directory for a path ending in `/`) and refreshes the
+/// modification time of files that exist, leaving their content alone.
+fn create_mock_outputs(
+    output_files: &[String],
+    working_dir: &Option<PathBuf>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    for output_file in output_files {
+        let path = match working_dir {
+            Some(dir) => dir.join(output_file),
+            None => PathBuf::from(output_file),
+        };
+        if output_file.ends_with('/') || output_file.ends_with('\\') || path.is_dir() {
+            fs::create_dir_all(&path)
+                .map_err(|e| format!("Cannot create mock directory '{}': {}", output_file, e))?;
+            continue;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("Cannot create mock output '{}': {}", output_file, e))?;
+        file.set_modified(std::time::SystemTime::now())
+            .map_err(|e| format!("Cannot touch mock output '{}': {}", output_file, e))?;
+        debug!("Mocked output: {}", path.display());
     }
     Ok(())
 }

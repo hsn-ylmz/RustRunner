@@ -172,8 +172,24 @@ function CustomNode({ id, data, selected }: any) {
           </div>
         )}
 
+        {(data.mock === true || data.mock === 'true') && (
+          <div
+            className="node-mock-badge"
+            data-testid="node-mock-badge"
+            title="Mocked: the tool does not run, placeholder outputs are created"
+          >
+            MOCK
+          </div>
+        )}
+
         <div className="node-label">{data.label || 'New Node'}</div>
         <div className="node-tool">{data.tool || 'No tool'}</div>
+
+        {status?.mocked && state === 'succeeded' && (
+          <div className="node-mocked-run" data-testid="node-mocked-run">
+            MOCKED
+          </div>
+        )}
 
         {showCount && (
           <div className="node-progress">
@@ -194,9 +210,10 @@ function CustomNode({ id, data, selected }: any) {
 }
 
 /**
- * An edge coloured by its file-type check: green when an output type of the
- * source is an input type of the target, orange when not, neutral when either
- * end is not a catalog tool. The editor injects the check under `__typeCheck`
+ * An edge coloured by its file-type check: green and solid with a check mark
+ * when an output type of the source is an input type of the target, orange and
+ * dashed with a "types differ" label when not, neutral when either end is not a
+ * catalog tool. Dash and label carry the verdict without colour. The editor injects the check under `__typeCheck`
  * (like `__status` on nodes), so it never reaches a saved workflow. The title
  * is the tooltip. The check only informs; it never blocks a connection.
  */
@@ -213,7 +230,7 @@ function TypedEdge({
   interactionWidth,
   data,
 }: EdgeProps) {
-  const [path] = getBezierPath({
+  const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
     sourcePosition,
@@ -238,6 +255,32 @@ function TypedEdge({
         style={style}
         interactionWidth={interactionWidth}
       />
+      {/* The verdict is also written on the edge: a dashed line and a label, so
+          it never depends on telling green from orange. */}
+      {status === 'mismatch' && (
+        <g
+          className="typed-edge-label typed-edge-label-mismatch"
+          data-testid="typed-edge-label"
+          transform={`translate(${labelX}, ${labelY})`}
+        >
+          <rect x={-38} y={-10} width={76} height={20} rx={10} />
+          <text textAnchor="middle" dominantBaseline="central">
+            ⚠ types differ
+          </text>
+        </g>
+      )}
+      {status === 'match' && (
+        <g
+          className="typed-edge-label typed-edge-label-match"
+          data-testid="typed-edge-label"
+          transform={`translate(${labelX}, ${labelY})`}
+        >
+          <circle r={9} />
+          <text textAnchor="middle" dominantBaseline="central">
+            ✓
+          </text>
+        </g>
+      )}
     </g>
   );
 }

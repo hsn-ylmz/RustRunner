@@ -155,3 +155,21 @@ describe('EngineOutputSplitter', () => {
     expect(s.push(`${bad}\n`)).toEqual({ events: [], text: `${bad}\n` });
   });
 });
+
+describe('mocked steps', () => {
+  it('accepts the additive mocked fields and rejects wrong types', () => {
+    const ok = parseEngineLine(line({ event: 'step_succeeded', step: 'a', attempts: 1, mocked: true }));
+    expect(ok.type).toBe('event');
+    if (ok.type === 'event' && ok.event.event === 'step_succeeded') {
+      expect(ok.event.mocked).toBe(true);
+    }
+    const summary = parseEngineLine(
+      line({ event: 'run_finished', status: 'succeeded', summary: { ...SUMMARY, mocked: 1 } })
+    );
+    expect(summary.type).toBe('event');
+    // A malformed value is kept as log text, like any malformed event.
+    expect(
+      parseEngineLine(line({ event: 'step_succeeded', step: 'a', attempts: 1, mocked: 'yes' })).type
+    ).toBe('text');
+  });
+});
