@@ -5,7 +5,7 @@
 //!
 //! | `kind` | What the engine does |
 //! |---|---|
-//! | `conda` | Creates (once) an environment that holds exactly `package==version`; the environment name includes the version, so a pin is never silently replaced by another version. `channel` is searched before conda-forge. `osx64: true` installs the Intel build on Apple silicon (it runs under Rosetta) for tools whose native build is broken or missing. |
+//! | `conda` | Creates (once) an environment that holds exactly `package==version` (and any `constraints`, extra specs such as `polars<2` for a dependency that breaks the tool, which also name the environment); the environment name includes the version, so a pin is never silently replaced by another version. `channel` is searched before conda-forge. `osx64: true` installs the Intel build on Apple silicon (it runs under Rosetta) for tools whose native build is broken or missing. |
 //! | `external` | Downloads one file for the current platform into the app data directory (`~/.rustrunner/tools`), checks its SHA-256 and unpacks archives. The folder with the binary is put first on the step's `PATH`, for that step only. |
 //! | `system` | Expects `binary` on the `PATH`; nothing is installed. A missing binary is reported before the run starts. |
 //!
@@ -42,6 +42,11 @@ pub enum Install {
         /// Install the osx-64 build on Apple silicon (runs under Rosetta).
         #[serde(default, skip_serializing_if = "is_false")]
         osx64: bool,
+        /// Extra package specs installed beside the package, such as `polars<2`.
+        /// For a tool whose newest dependency is known to break it. Part of the
+        /// environment name, so a different set is a different environment.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        constraints: Vec<String>,
     },
     /// A binary (or archive holding it) downloaded from a fixed address.
     External {
@@ -107,6 +112,30 @@ fn is_plain_version(version: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '+' | '-'))
 }
 
+/// An extra package spec such as `polars<2` or `numpy>=1.26,<2`: a plain package
+/// name followed by comparison operators and plain versions, nothing a shell or
+/// micromamba could read as an option.
+fn is_plain_constraint(spec: &str) -> bool {
+    let name_end = spec
+        .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')))
+        .unwrap_or(spec.len());
+    let (name, rest) = spec.split_at(name_end);
+    let starts_plain = name
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric());
+    starts_plain
+        && !rest.is_empty()
+        && rest.starts_with(['<', '>', '=', '!', '~'])
+        && rest.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '.' | '_' | '+' | '-' | '<' | '>' | '=' | '!' | '~' | ',' | '*'
+                )
+        })
+}
+
 /// A binary name has no path parts.
 fn is_plain_binary_name(name: &str) -> bool {
     !name.is_empty()
@@ -130,8 +159,17 @@ impl Install {
                 package,
                 version,
                 channel,
+                constraints,
                 ..
             } => {
+                for spec in constraints {
+                    if !is_plain_constraint(spec) {
+                        problems.push(format!(
+                            "extra package '{}' must be a package name with a version limit such as polars<2",
+                            spec
+                        ));
+                    }
+                }
                 let plain_name = !package.is_empty()
                     && package
                         .chars()
@@ -229,11 +267,21 @@ impl Install {
     pub fn describe(&self) -> String {
         match self {
             Install::Conda {
-                package, version, ..
-            } => match version {
-                Some(v) => format!("conda {}=={}", package, v),
-                None => format!("conda {} (any version)", package),
-            },
+                package,
+                version,
+                constraints,
+                ..
+            } => {
+                let base = match version {
+                    Some(v) => format!("conda {}=={}", package, v),
+                    None => format!("conda {} (any version)", package),
+                };
+                if constraints.is_empty() {
+                    base
+                } else {
+                    format!("{} with {}", base, constraints.join(" "))
+                }
+            }
             Install::External {
                 binary, version, ..
             } => match version {
@@ -252,6 +300,7 @@ impl Install {
             package,
             version,
             osx64,
+            constraints,
             ..
         } = self
         else {
@@ -261,6 +310,12 @@ impl Install {
         if let Some(version) = version {
             name.push('-');
             name.push_str(&sanitize(version));
+        }
+        if !constraints.is_empty() {
+            // Another set of extra packages is another environment.
+            let digest = sha256_hex(constraints.join("\n").as_bytes());
+            name.push_str("-x");
+            name.push_str(&digest[..8]);
         }
         if *osx64 && platform == "osx-arm64" {
             name.push_str("-osx64");
@@ -279,6 +334,16 @@ impl Install {
             }),
             _ => None,
         }
+    }
+
+    /// Every spec micromamba installs into the environment: the package pin and
+    /// then the extra packages, if any.
+    pub fn conda_specs(&self) -> Vec<String> {
+        let mut specs: Vec<String> = self.conda_spec().into_iter().collect();
+        if let Install::Conda { constraints, .. } = self {
+            specs.extend(constraints.iter().cloned());
+        }
+        specs
     }
 
     /// Channels to search, in order.
@@ -750,6 +815,7 @@ mod tests {
             version: version.map(String::from),
             channel: None,
             osx64,
+            constraints: Vec::new(),
         }
     }
 
@@ -823,6 +889,70 @@ mod tests {
         );
     }
 
+    fn with_constraints(constraints: &[&str]) -> Install {
+        Install::Conda {
+            package: "pod5".into(),
+            version: Some("0.3.48".into()),
+            channel: None,
+            osx64: false,
+            constraints: constraints.iter().map(|c| c.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn test_extra_packages_follow_the_pin_and_name_the_environment() {
+        let plain = with_constraints(&[]);
+        let limited = with_constraints(&["polars<2"]);
+        assert_eq!(plain.conda_specs(), ["pod5==0.3.48"]);
+        assert_eq!(limited.conda_specs(), ["pod5==0.3.48", "polars<2"]);
+        assert_eq!(
+            plain.conda_env_name("linux-64"),
+            Some("pod5-0.3.48".to_string())
+        );
+        let name = limited.conda_env_name("linux-64").unwrap();
+        assert!(name.starts_with("pod5-0.3.48-x"), "{name}");
+        assert_eq!(name.len(), "pod5-0.3.48-x".len() + 8);
+        assert_ne!(
+            limited.conda_env_name("linux-64"),
+            with_constraints(&["polars<1.9"]).conda_env_name("linux-64")
+        );
+        // Changing the extra packages changes the step's definition hash.
+        assert_ne!(plain.hash_label("linux-64"), limited.hash_label("linux-64"));
+        assert!(limited.describe().contains("with polars<2"));
+        assert!(limited.problems().is_empty());
+    }
+
+    #[test]
+    fn test_extra_packages_must_be_plain_specs() {
+        for good in ["polars<2", "numpy>=1.26,<2", "pyarrow!=21.0", "x==1.*"] {
+            assert!(with_constraints(&[good]).problems().is_empty(), "{good}");
+        }
+        for bad in [
+            "",
+            "polars",
+            "<2",
+            "-polars<2",
+            "polars<2; rm -rf ~",
+            "a b<2",
+            "polars<$X",
+        ] {
+            assert!(!with_constraints(&[bad]).problems().is_empty(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn test_extra_packages_round_trip_through_yaml() {
+        let step: Install = serde_yaml::from_str(
+            "kind: conda\npackage: pod5\nversion: '0.3.48'\nconstraints: ['polars<2']\n",
+        )
+        .unwrap();
+        assert_eq!(step, with_constraints(&["polars<2"]));
+        let text = serde_yaml::to_string(&step).unwrap();
+        assert!(text.contains("polars<2"), "{text}");
+        let none = serde_yaml::to_string(&with_constraints(&[])).unwrap();
+        assert!(!none.contains("constraints"), "{none}");
+    }
+
     #[test]
     fn test_osx64_only_changes_apple_silicon() {
         let pin = conda(Some("2.7.10b"), true);
@@ -860,6 +990,7 @@ mod tests {
             version: None,
             channel: Some("conda-forge".into()),
             osx64: false,
+            constraints: Vec::new(),
         };
         assert_eq!(custom.conda_channels(), ["conda-forge"]);
         let other = Install::Conda {
@@ -867,6 +998,7 @@ mod tests {
             version: None,
             channel: Some("my-channel".into()),
             osx64: false,
+            constraints: Vec::new(),
         };
         assert_eq!(other.conda_channels(), ["my-channel", "conda-forge"]);
     }
@@ -881,7 +1013,8 @@ mod tests {
                 package: "samtools".into(),
                 version: Some("1.24".into()),
                 channel: None,
-                osx64: false
+                osx64: false,
+                constraints: Vec::new()
             }
         );
         let text = serde_yaml::to_string(&step).unwrap();
@@ -908,6 +1041,7 @@ mod tests {
             version: None,
             channel: None,
             osx64: false,
+            constraints: Vec::new(),
         };
         assert!(!bad_package.problems().is_empty());
         let good = external("https://example.org/t.tar.gz", &"a".repeat(64), "tool");

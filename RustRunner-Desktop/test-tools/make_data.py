@@ -39,6 +39,24 @@ Writes into OUTDIR:
                       start, end exclusive), with the number of fragments in the name
                       Made from a fourth random stream, so the files above are the
                       same as before these were added.
+  long_ref.fa         one circular 25 kb contig (contigL) for the long-read and assembly tools
+  long_ont.fastq.gz   nanopore-like reads from it (about 40x of good reads at Q14, plus low
+                      quality reads at Q7 and very short reads); the name of every read holds
+                      where it came from: ont<i>_s<start>_l<length>_<f|r>_q<quality>
+  long_hifi.fastq.gz  160 accurate (Q30) reads of 2 to 5 kb (about 22x), hifi<i>_s<start>_l<length>_<f|r>
+  long_cdna.fastq.gz  80 noisy cDNA reads, each one spliced transcript of genes.gtf (read
+                      names cdna<i>_tx<n>; the gene has a 300 base intron)
+  asm_R1/R2.fastq.gz  paired 100 bp reads (about 50x) from long_ref.fa for the assembler, with
+                      varied base qualities (SPAdes needs them to detect the quality encoding)
+  meta_A.fa, meta_B.fa, meta_C.fa   three 18 kb genomes with "kraken:taxid|N" in the
+                      header; B is A with 0.8% of the bases changed (the same genus; many reads fit both)
+  meta_names.dmp / meta_nodes.dmp   a tiny taxonomy (root, two genera, three species)
+  meta_reads.fastq.gz 3000 single-end 150 bp reads from the three genomes (50%, 20%, 30%
+                      of the genome reads) plus 5% from no genome; the name ends _A/_B/_C/_none
+  meta_truth.tsv      reads per source
+  meta_pairs_R1/R2.fastq.gz  1000 read pairs (100 bp, 220 to 320 bp fragments) from the same
+                      mixture; names p<i>_<A|B|C|none>/<1|2>; meta_pairs_truth.tsv counts them
+  All of these come from fifth and sixth random streams, so the files above are unchanged.
 """
 import gzip
 import os
@@ -61,6 +79,16 @@ CHIP_HALF_WIDTH = 150  # the truth region is centre +/- this
 ATAC_REGIONS = (("chr1", 210, 450), ("chr1", 2490, 350), ("chr2", 310, 300))
 ATAC_NUCLEOSOME_PAIRS = 120
 ATAC_BACKGROUND_PAIRS = 700
+LONG_GENOME = 25000
+ONT_GOOD, ONT_JUNK, ONT_SHORT = 200, 40, 30
+HIFI_READS = 160
+CDNA_READS = 80
+ASM_PAIRS = 6250  # 2 x 100 bp over 25 kb is about 50x
+META_GENOME = 18000
+META_DIVERGENCE = 0.008  # B differs from A at this share of its bases
+META_READS = 3000
+META_READ_LEN = 150
+META_PAIRS = 1000
 COMP = str.maketrans("ACGT", "TGCA")
 
 
@@ -172,6 +200,8 @@ def main():
     write_unnormalized_vcf(outdir, ref)
     write_stranded_rna_pairs(outdir, transcripts, random.Random(seed + 2))
     write_epigenomics(outdir, ref, random.Random(seed + 3))
+    write_long_reads(outdir, ref, transcripts, random.Random(seed + 4))
+    write_metagenome(outdir, random.Random(seed + 5))
 
 
 def write_pairs(outdir, prefix, ref, fragments, rng):
@@ -238,6 +268,184 @@ def write_epigenomics(outdir, ref, rng):
         with open(os.path.join(outdir, name), "w") as fh:
             for contig, start, end, count in rows:
                 fh.write(f"{contig}\t{max(start, 0)}\t{end}\t{prefix}_{contig}_{end - CHIP_HALF_WIDTH}_n{count}\n")
+
+
+def mutate(seq, rate, rng):
+    """Copies `seq` with each base replaced, deleted or followed by an insertion at probability `rate`."""
+    out = []
+    for base in seq:
+        if rng.random() >= rate:
+            out.append(base)
+            continue
+        kind = rng.random()
+        if kind < 0.4:  # substitution
+            out.append(rng.choice([b for b in "ACGT" if b != base]))
+        elif kind < 0.7:  # insertion after the base
+            out.append(base)
+            out.append(rng.choice("ACGT"))
+        # else: the base is lost (deletion)
+    return "".join(out)
+
+
+def write_fastq_q(path, records):
+    """Writes `(name, seq, quality)` records; the quality is one Phred score for every base of a read."""
+    with gzip.GzipFile(path, "wb", mtime=0) as raw:
+        for name, seq, q in records:
+            raw.write(f"@{name}\n{seq}\n+\n{chr(33 + q) * len(seq)}\n".encode())
+
+
+def write_fastq_varied(path, records, rng):
+    """Writes reads with Illumina-like per-base qualities: high at the start, falling towards the end,
+    with a few low bases. (SPAdes' error correction cannot tell the quality encoding from a read set
+    that has only one quality character.)"""
+    with gzip.GzipFile(path, "wb", mtime=0) as raw:
+        for name, seq in records:
+            qual = []
+            for i in range(len(seq)):
+                top = 40 - max(0, i - 60) // 4  # Q40 for 60 bases, then a slow fall
+                q = max(2, top - (rng.choice((0, 0, 0, 1, 3, 6)) if rng.random() < 0.3 else 0))
+                if rng.random() < 0.01:
+                    q = rng.randint(2, 12)
+                qual.append(chr(33 + q))
+            raw.write(f"@{name}\n{seq}\n+\n{''.join(qual)}\n".encode())
+
+
+def sample_circular(genome, start, length):
+    """`length` bases from `start`, running on past the end of the circular genome."""
+    return (genome + genome)[start:start + length]
+
+
+def write_long_reads(outdir, ref, transcripts, rng):
+    """Nanopore-like, HiFi-like and cDNA reads, and short reads for the assembler (see the module doc)."""
+    genome = random_seq(rng, LONG_GENOME)
+    with open(os.path.join(outdir, "long_ref.fa"), "w") as fh:
+        fh.write(f">contigL\n{wrap(genome)}\n")
+
+    def read(prefix, i, length, q, wrap_around):
+        high = LONG_GENOME if wrap_around else LONG_GENOME - length
+        start = rng.randrange(0, high)
+        seq = sample_circular(genome, start, length)
+        reverse = rng.random() < 0.5
+        seq = mutate(revcomp(seq) if reverse else seq, 10 ** (-q / 10), rng)
+        return seq, start, "r" if reverse else "f"
+
+    ont = []
+    for i in range(ONT_GOOD):
+        length = rng.randint(2500, 7500)
+        seq, start, strand = read("ont", i, length, 14, True)
+        ont.append((f"ont{i}_s{start}_l{length}_{strand}_q14", seq, 14))
+    for i in range(ONT_GOOD, ONT_GOOD + ONT_JUNK):
+        length = rng.randint(2500, 6000)
+        seq, start, strand = read("ont", i, length, 7, True)
+        ont.append((f"ont{i}_s{start}_l{length}_{strand}_q7", seq, 7))
+    for i in range(ONT_GOOD + ONT_JUNK, ONT_GOOD + ONT_JUNK + ONT_SHORT):
+        length = rng.randint(150, 700)
+        seq, start, strand = read("ont", i, length, 14, True)
+        ont.append((f"ont{i}_s{start}_l{length}_{strand}_q14", seq, 14))
+    rng.shuffle(ont)
+    write_fastq_q(os.path.join(outdir, "long_ont.fastq.gz"), ont)
+
+    hifi = []
+    for i in range(HIFI_READS):
+        length = rng.randint(2000, 5000)
+        seq, start, strand = read("hifi", i, length, 30, False)
+        hifi.append((f"hifi{i}_s{start}_l{length}_{strand}", seq, 30))
+    write_fastq_q(os.path.join(outdir, "long_hifi.fastq.gz"), hifi)
+
+    cdna = []
+    tids = list(transcripts)
+    for i in range(CDNA_READS):
+        tid = tids[i % len(tids)]
+        seq = transcripts[tid]
+        # Reads of the minus-strand gene are already reverse-complemented in `transcripts`; mapping
+        # does not care, and reads of either orientation are included.
+        seq = seq[rng.randrange(0, 60):]
+        seq = mutate(revcomp(seq) if rng.random() < 0.5 else seq, 0.04, rng)
+        cdna.append((f"cdna{i}_{tid}", seq, 14))
+    write_fastq_q(os.path.join(outdir, "long_cdna.fastq.gz"), cdna)
+
+    r1, r2 = [], []
+    for i in range(ASM_PAIRS):
+        length = rng.randint(250, 400)
+        frag = sample_circular(genome, rng.randrange(0, LONG_GENOME), length)
+        if rng.random() < 0.5:
+            frag = revcomp(frag)
+        r1.append((f"asm{i}/1", mutate(frag[:100], 0.002, rng)))
+        r2.append((f"asm{i}/2", mutate(revcomp(frag)[:100], 0.002, rng)))
+    write_fastq_varied(os.path.join(outdir, "asm_R1.fastq.gz"), r1, rng)
+    write_fastq_varied(os.path.join(outdir, "asm_R2.fastq.gz"), r2, rng)
+
+
+def write_metagenome(outdir, rng):
+    """Three small genomes with taxonomy ids, a tiny taxonomy and a read mixture (see the module doc)."""
+    a = random_seq(rng, META_GENOME)
+    b = "".join(rng.choice([x for x in "ACGT" if x != base]) if rng.random() < META_DIVERGENCE else base for base in a)
+    c = random_seq(rng, META_GENOME)
+    genomes = {"A": (101, a), "B": (102, b), "C": (201, c)}
+    for key, (taxid, seq) in genomes.items():
+        with open(os.path.join(outdir, f"meta_{key}.fa"), "w") as fh:
+            fh.write(f">genome{key}|kraken:taxid|{taxid}\n{wrap(seq)}\n")
+
+    # NCBI taxonomy dump format: fields separated by "\t|\t", lines end with "\t|".
+    def line(*fields):
+        return "\t|\t".join(str(f) for f in fields) + "\t|\n"
+
+    tree = [  # id, parent, rank, name
+        (1, 1, "no rank", "root"),
+        (10, 1, "genus", "Alphus"),
+        (101, 10, "species", "Alphus primus"),
+        (102, 10, "species", "Alphus secundus"),
+        (20, 1, "genus", "Betus"),
+        (201, 20, "species", "Betus unus"),
+    ]
+    with open(os.path.join(outdir, "meta_nodes.dmp"), "w") as fh:
+        for taxid, parent, rank, _ in tree:
+            fh.write(line(taxid, parent, rank, "", 0, 0, 1, 0, 0, 0, 0, 0, "", ""))
+    with open(os.path.join(outdir, "meta_names.dmp"), "w") as fh:
+        for taxid, _, _, name in tree:
+            fh.write(line(taxid, name, "", "scientific name"))
+
+    weights = {"A": 50, "B": 20, "C": 30}
+    counts = {"A": 0, "B": 0, "C": 0, "none": 0}
+    reads = []
+    for i in range(META_READS):
+        if rng.random() < 0.05:
+            key, seq = "none", random_seq(rng, META_READ_LEN)
+        else:
+            key = rng.choices(list(weights), weights=list(weights.values()))[0]
+            genome = genomes[key][1]
+            start = rng.randrange(0, len(genome) - META_READ_LEN)
+            seq = genome[start:start + META_READ_LEN]
+            seq = mutate(revcomp(seq) if rng.random() < 0.5 else seq, 0.003, rng)
+        counts[key] += 1
+        reads.append((f"m{i}_{key}", seq))
+    write_fastq(os.path.join(outdir, "meta_reads.fastq.gz"), reads)
+    with open(os.path.join(outdir, "meta_truth.tsv"), "w") as fh:
+        for key, n in counts.items():
+            fh.write(f"{key}\t{n}\n")
+
+    # The same mixture as read pairs, for the paired mode of the classifier.
+    pair_counts = {"A": 0, "B": 0, "C": 0, "none": 0}
+    r1, r2 = [], []
+    for i in range(META_PAIRS):
+        if rng.random() < 0.05:
+            key = "none"
+            frag = random_seq(rng, 260)
+        else:
+            key = rng.choices(list(weights), weights=list(weights.values()))[0]
+            genome = genomes[key][1]
+            length = rng.randint(220, 320)
+            frag = genome[(start := rng.randrange(0, len(genome) - length)):start + length]
+            if rng.random() < 0.5:
+                frag = revcomp(frag)
+        pair_counts[key] += 1
+        r1.append((f"p{i}_{key}/1", mutate(frag[:100], 0.003, rng)))
+        r2.append((f"p{i}_{key}/2", mutate(revcomp(frag)[:100], 0.003, rng)))
+    write_fastq(os.path.join(outdir, "meta_pairs_R1.fastq.gz"), r1)
+    write_fastq(os.path.join(outdir, "meta_pairs_R2.fastq.gz"), r2)
+    with open(os.path.join(outdir, "meta_pairs_truth.tsv"), "w") as fh:
+        for key, n in pair_counts.items():
+            fh.write(f"{key}\t{n}\n")
 
 
 def write_stranded_rna_pairs(outdir, transcripts, rng):

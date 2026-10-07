@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2026.14.0",
+  "version": "2026.15.0",
   "file_types": [
     "fastq",
     "fasta",
@@ -24,7 +24,11 @@
     "bedgraph",
     "bigwig",
     "matrix",
-    "image"
+    "image",
+    "pod5",
+    "fast5",
+    "gfa",
+    "taxonomy"
   ],
   "categories": {
     "qc": {
@@ -70,6 +74,22 @@
     "intervals": {
       "label": "Genome intervals",
       "color": "sage"
+    },
+    "sequences": {
+      "label": "FASTA and FASTQ tools",
+      "color": "sand"
+    },
+    "assembly": {
+      "label": "Assembly",
+      "color": "lilac"
+    },
+    "metagenomics": {
+      "label": "Metagenomics",
+      "color": "peach"
+    },
+    "nanopore": {
+      "label": "Nanopore signal data",
+      "color": "rose"
     }
   },
   "tools": [
@@ -4619,6 +4639,1962 @@
         "hint": "HOMER works from the genome FASTA and the GTF you connect, so nothing is downloaded. Use a GTF whose chromosome names match the FASTA. HOMER's own premade genomes (hg38, mm10, ...) are not used here."
       },
       "docs": "https://bioconda.github.io/recipes/homer/README.html"
+    },
+    {
+      "id": "minimap2-long",
+      "name": "minimap2 (long reads)",
+      "description": "Aligns long reads (Nanopore, PacBio HiFi or cDNA) to a reference genome. Pick the preset that matches how the reads were made. Writes SAM.",
+      "category": "alignment",
+      "subcategory": "Long-read aligners",
+      "install": {
+        "kind": "conda",
+        "package": "minimap2",
+        "channel": "bioconda",
+        "version": "2.30"
+      },
+      "inputs": [
+        {
+          "name": "ref",
+          "label": "Reference genome",
+          "description": "The genome FASTA the reads are aligned to. No index is needed.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        },
+        {
+          "name": "reads",
+          "label": "Long reads",
+          "description": "FASTQ or FASTA with the long reads. Compressed files (.gz) work.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "sam",
+          "label": "Alignments",
+          "description": "The alignments in SAM format. Sort and index them with samtools next.",
+          "types": [
+            "sam"
+          ],
+          "pattern": "long_aligned.sam",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "preset",
+          "label": "Kind of reads",
+          "type": "select",
+          "default": "map-ont",
+          "options": [
+            "map-ont",
+            "lr:hq",
+            "map-hifi",
+            "map-pb",
+            "splice",
+            "splice:hq"
+          ],
+          "description": "Tells minimap2 how many errors to expect. Use the spliced presets for cDNA or RNA reads, which are cut across introns.",
+          "option_labels": {
+            "map-ont": "Nanopore DNA reads (about 5 percent errors)",
+            "lr:hq": "Nanopore DNA reads, newest chemistry (Q20 and better)",
+            "map-hifi": "PacBio HiFi reads (very accurate)",
+            "map-pb": "PacBio continuous long reads (CLR)",
+            "splice": "Nanopore cDNA or direct RNA reads, spliced",
+            "splice:hq": "Accurate cDNA reads such as Iso-Seq, spliced"
+          }
+        },
+        {
+          "id": "sample_name",
+          "label": "Sample name",
+          "type": "string",
+          "default": "",
+          "description": "Optional. Written into every alignment as its read group. For example patient1."
+        },
+        {
+          "id": "primary_only",
+          "label": "Report only the best alignment of each read",
+          "type": "boolean",
+          "default": true,
+          "flag": "--secondary=no",
+          "description": "Leaves out the second-best places a read could go. Recommended for most uses."
+        }
+      ],
+      "command": "S={sample_name}; minimap2 -ax {preset} -t {threads} {primary_only} ${S:+-R \"@RG\\tID:$S\\tSM:$S\"} {ref} {reads} > {sam}",
+      "threads": 4,
+      "docs": "https://lh3.github.io/minimap2/minimap2.html"
+    },
+    {
+      "id": "nanoplot",
+      "name": "NanoPlot",
+      "description": "Summarises a Nanopore or PacBio run: how many reads, how long and how accurate, with plots. Reads FASTQ, a Dorado BAM or a sequencing summary.",
+      "category": "qc",
+      "subcategory": "Long-read QC",
+      "install": {
+        "kind": "conda",
+        "package": "nanoplot",
+        "channel": "bioconda",
+        "version": "1.48.0"
+      },
+      "inputs": [
+        {
+          "name": "reads",
+          "label": "Reads or summary",
+          "description": "FASTQ reads, a BAM from Dorado (unaligned or aligned), or a sequencing summary table. Pick the matching kind in Options.",
+          "types": [
+            "fastq",
+            "fasta",
+            "bam",
+            "tsv"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Report folder",
+          "description": "Folder for the report, the statistics and the plots.",
+          "types": [
+            "html",
+            "txt"
+          ],
+          "pattern": "nanoplot/",
+          "is_dir": true
+        },
+        {
+          "name": "report",
+          "label": "Report page",
+          "description": "The summary page with all plots (HTML).",
+          "types": [
+            "html"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "NanoPlot-report.html"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "stats",
+          "label": "Statistics",
+          "description": "The numbers behind the report: read count, lengths, quality, N50 (text).",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "NanoStats.txt"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "format",
+          "label": "Kind of input",
+          "type": "select",
+          "default": "--fastq",
+          "options": [
+            "--fastq",
+            "--fasta",
+            "--ubam",
+            "--bam",
+            "--summary"
+          ],
+          "description": "What the input file holds.",
+          "option_labels": {
+            "--fastq": "Reads (FASTQ)",
+            "--fasta": "Reads (FASTA, no quality)",
+            "--ubam": "Unaligned BAM from Dorado",
+            "--bam": "Aligned BAM",
+            "--summary": "Sequencing summary table (Dorado or MinKNOW)"
+          }
+        },
+        {
+          "id": "min_length",
+          "label": "Hide reads shorter than (bases)",
+          "type": "number",
+          "default": 0,
+          "description": "Reads shorter than this are left out of the plots. 0 keeps every read.",
+          "min": 0,
+          "step": 100
+        },
+        {
+          "id": "min_quality",
+          "label": "Hide reads with average quality below",
+          "type": "number",
+          "default": 0,
+          "description": "Reads below this average quality score are left out of the plots. 0 keeps every read. Q10 means 1 error in 10 bases.",
+          "min": 0,
+          "max": 60,
+          "step": 1
+        },
+        {
+          "id": "plot_files",
+          "label": "Plot files",
+          "type": "select",
+          "default": "--no_static",
+          "options": [
+            "--no_static",
+            ""
+          ],
+          "description": "The report page always has interactive plots. Picture files take a little longer.",
+          "option_labels": {
+            "--no_static": "Report page only",
+            "": "Report page and PNG pictures"
+          }
+        },
+        {
+          "id": "title",
+          "label": "Title",
+          "type": "string",
+          "default": "",
+          "description": "Optional. Written on every plot. For example Run 12."
+        }
+      ],
+      "command": "E=\"\"; if [ {min_length} -gt 0 ]; then E=\"$E --minlength {min_length}\"; fi; if [ {min_quality} -gt 0 ]; then E=\"$E --minqual {min_quality}\"; fi; T={title}; NanoPlot {format} {reads} -o {out_dir} --threads {threads} --N50 {plot_files} $E ${T:+--title \"$T\"}",
+      "threads": 2,
+      "docs": "https://github.com/wdecoster/NanoPlot"
+    },
+    {
+      "id": "filtlong",
+      "name": "Filtlong",
+      "description": "Keeps the best long reads of a Nanopore or PacBio run: drops reads that are too short or too inaccurate, and can keep only as many bases as you need. Writes a compressed FASTQ.",
+      "category": "trimming",
+      "subcategory": "Long-read filtering",
+      "install": {
+        "kind": "conda",
+        "package": "filtlong",
+        "channel": "bioconda",
+        "version": "0.3.1"
+      },
+      "inputs": [
+        {
+          "name": "reads",
+          "label": "Long reads",
+          "description": "The FASTQ file to filter. Compressed files (.gz) work.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        },
+        {
+          "name": "short1",
+          "label": "Short reads (first file)",
+          "description": "Optional. Accurate short reads of the same sample. Filtlong then judges each long read by how well its pieces match them.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "short_R1.fastq.gz"
+        },
+        {
+          "name": "short2",
+          "label": "Short reads (second file)",
+          "description": "Optional. The second file of the short read pair.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "short_R2.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filtered",
+          "label": "Filtered reads",
+          "description": "The reads that passed, as compressed FASTQ.",
+          "types": [
+            "fastq"
+          ],
+          "pattern": "filtered.fastq.gz",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "min_length",
+          "label": "Shortest read to keep (bases)",
+          "type": "number",
+          "default": 1000,
+          "description": "Shorter reads are dropped. Long reads are what make assemblies join up, so very short ones help little.",
+          "min": 0,
+          "step": 100
+        },
+        {
+          "id": "min_accuracy",
+          "label": "Lowest average accuracy to keep (percent)",
+          "type": "number",
+          "default": 90,
+          "description": "A read whose average accuracy is below this is dropped. 90 percent is about Q10. 0 turns the check off.",
+          "min": 0,
+          "max": 100,
+          "step": 1
+        },
+        {
+          "id": "keep_percent",
+          "label": "Share of the best reads to keep (percent)",
+          "type": "number",
+          "default": 100,
+          "description": "Keeps only this share of the bases, best reads first. 100 keeps everything that passed the other limits.",
+          "min": 1,
+          "max": 100,
+          "step": 1
+        },
+        {
+          "id": "target_bases",
+          "label": "Most bases to keep",
+          "type": "string",
+          "default": "",
+          "description": "Optional. Stop after this many bases, best reads first. For example 500m for 500 million. Useful to cap the coverage before an assembly."
+        },
+        {
+          "id": "max_length",
+          "label": "Longest read to keep (bases)",
+          "type": "number",
+          "default": 0,
+          "description": "Longer reads are dropped. 0 sets no limit.",
+          "min": 0,
+          "step": 1000
+        }
+      ],
+      "command": "set -o pipefail; R1=\"{short1}\"; R2=\"{short2}\"; E=\"\"; if [ {min_length} -gt 0 ]; then E=\"$E --min_length {min_length}\"; fi; if [ {max_length} -gt 0 ]; then E=\"$E --max_length {max_length}\"; fi; if [ {min_accuracy} -gt 0 ]; then E=\"$E --min_mean_q {min_accuracy}\"; fi; if [ {keep_percent} -lt 100 ]; then E=\"$E --keep_percent {keep_percent}\"; fi; T={target_bases}; filtlong $E ${T:+--target_bases \"$T\"} ${R1:+-1 \"$R1\"} ${R2:+-2 \"$R2\"} {reads} | gzip > {filtered}",
+      "threads": 1,
+      "docs": "https://github.com/rrwick/Filtlong"
+    },
+    {
+      "id": "chopper",
+      "name": "chopper",
+      "description": "Filters and trims long reads by their average quality and length. Fast, and the usual first step for Nanopore reads. Writes a compressed FASTQ.",
+      "category": "trimming",
+      "subcategory": "Long-read filtering",
+      "install": {
+        "kind": "conda",
+        "package": "chopper",
+        "channel": "bioconda",
+        "version": "0.14.1"
+      },
+      "inputs": [
+        {
+          "name": "reads",
+          "label": "Long reads",
+          "description": "The FASTQ file to filter. Compressed files (.gz) work.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filtered",
+          "label": "Filtered reads",
+          "description": "The reads that passed, as compressed FASTQ.",
+          "types": [
+            "fastq"
+          ],
+          "pattern": "chopped.fastq.gz",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "min_quality",
+          "label": "Lowest average quality to keep",
+          "type": "number",
+          "default": 10,
+          "description": "A read whose average quality score is below this is dropped. Q10 means 1 error in 10 bases. 0 turns the check off.",
+          "min": 0,
+          "max": 60,
+          "step": 1
+        },
+        {
+          "id": "min_length",
+          "label": "Shortest read to keep (bases)",
+          "type": "number",
+          "default": 500,
+          "description": "Shorter reads are dropped.",
+          "min": 1,
+          "step": 100
+        },
+        {
+          "id": "max_length",
+          "label": "Longest read to keep (bases)",
+          "type": "number",
+          "default": 0,
+          "description": "Longer reads are dropped. 0 sets no limit.",
+          "min": 0,
+          "step": 1000
+        },
+        {
+          "id": "head_crop",
+          "label": "Cut this many bases off the start",
+          "type": "number",
+          "default": 0,
+          "description": "Removes the first bases of every read, where quality is often poor. 0 cuts nothing.",
+          "min": 0,
+          "step": 1
+        },
+        {
+          "id": "tail_crop",
+          "label": "Cut this many bases off the end",
+          "type": "number",
+          "default": 0,
+          "description": "Removes the last bases of every read. 0 cuts nothing.",
+          "min": 0,
+          "step": 1
+        }
+      ],
+      "command": "set -o pipefail; E=\"\"; if [ {max_length} -gt 0 ]; then E=\"--maxlength {max_length}\"; fi; if [ {head_crop} -gt 0 ] || [ {tail_crop} -gt 0 ]; then E=\"$E --trim-approach fixed-crop --headcrop {head_crop} --tailcrop {tail_crop}\"; fi; chopper -i {reads} -q {min_quality} -l {min_length} --threads {threads} $E | gzip > {filtered}",
+      "threads": 2,
+      "docs": "https://github.com/wdecoster/chopper"
+    },
+    {
+      "id": "flye",
+      "name": "Flye",
+      "description": "Assembles a genome from long reads (Nanopore or PacBio) without a reference. Writes the contigs, the assembly graph and a table of contig lengths and coverage.",
+      "category": "assembly",
+      "subcategory": "Long-read assemblers",
+      "install": {
+        "kind": "conda",
+        "package": "flye",
+        "channel": "bioconda",
+        "version": "2.9.6"
+      },
+      "inputs": [
+        {
+          "name": "reads",
+          "label": "Long reads",
+          "description": "One or more FASTQ or FASTA files from the same sample. About 30 times the genome size in bases is a good amount. Filter them first for best results.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Assembly folder",
+          "description": "Folder for the assembly and its intermediate results.",
+          "types": [
+            "fasta"
+          ],
+          "pattern": "flye/",
+          "is_dir": true
+        },
+        {
+          "name": "assembly",
+          "label": "Assembled contigs",
+          "description": "The assembled sequences (FASTA).",
+          "types": [
+            "fasta"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "assembly.fasta"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "graph",
+          "label": "Assembly graph",
+          "description": "How the contigs connect (GFA). Open it in Bandage to look at it.",
+          "types": [
+            "gfa"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "assembly_graph.gfa"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "info",
+          "label": "Contig table",
+          "description": "One line per contig: length, coverage and whether it is circular (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "assembly_info.txt"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "log",
+          "label": "Log",
+          "description": "What Flye did, step by step (text).",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "flye.log"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "read_type",
+          "label": "Kind of reads",
+          "type": "select",
+          "default": "--nano-raw",
+          "options": [
+            "--nano-raw",
+            "--nano-hq",
+            "--pacbio-raw",
+            "--pacbio-hifi"
+          ],
+          "description": "Tells Flye how many errors to expect in the reads.",
+          "option_labels": {
+            "--nano-raw": "Nanopore reads (older chemistry or unknown)",
+            "--nano-hq": "Nanopore reads, newest chemistry (Q20 and better)",
+            "--pacbio-raw": "PacBio continuous long reads (CLR)",
+            "--pacbio-hifi": "PacBio HiFi reads"
+          }
+        },
+        {
+          "id": "genome_size",
+          "label": "Expected genome size",
+          "type": "string",
+          "default": "",
+          "description": "Optional. For example 5m for 5 million bases, or 25k. Helps when the coverage is low. Leave empty to let Flye work it out."
+        },
+        {
+          "id": "iterations",
+          "label": "Polishing rounds",
+          "type": "number",
+          "default": 1,
+          "description": "How many times the contigs are corrected with the reads. More rounds are slower and rarely help after 2.",
+          "min": 0,
+          "max": 5,
+          "step": 1
+        },
+        {
+          "id": "meta",
+          "label": "The sample is a mix of organisms (metagenome)",
+          "type": "boolean",
+          "default": false,
+          "flag": "--meta",
+          "description": "Tick this for a metagenome so Flye expects uneven coverage."
+        },
+        {
+          "id": "min_overlap",
+          "label": "Smallest overlap between reads",
+          "type": "string",
+          "default": "",
+          "description": "Optional. In bases, for example 3000. Flye picks it from the read lengths when empty."
+        }
+      ],
+      "command": "G={genome_size}; O={min_overlap}; flye {read_type} {reads} --out-dir {out_dir} --threads {threads} --iterations {iterations} {meta} ${G:+--genome-size \"$G\"} ${O:+--min-overlap \"$O\"}",
+      "threads": 4,
+      "docs": "https://github.com/mikolmogorov/Flye/blob/flye/docs/USAGE.md"
+    },
+    {
+      "id": "spades",
+      "name": "SPAdes",
+      "description": "Assembles a genome from short Illumina reads without a reference. Writes the contigs, the scaffolds and the assembly graph.",
+      "category": "assembly",
+      "subcategory": "Short-read assemblers",
+      "install": {
+        "kind": "conda",
+        "package": "spades",
+        "channel": "bioconda",
+        "version": "4.2.0"
+      },
+      "inputs": [
+        {
+          "name": "reads1",
+          "label": "Reads (first of the pair)",
+          "description": "FASTQ with the reads, or the first file of a pair.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads_R1.fastq.gz"
+        },
+        {
+          "name": "reads2",
+          "label": "Reads (second of the pair)",
+          "description": "Leave empty for single-end reads.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reads_R2.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Assembly folder",
+          "description": "Folder for the assembly and its intermediate results.",
+          "types": [
+            "fasta"
+          ],
+          "pattern": "spades/",
+          "is_dir": true
+        },
+        {
+          "name": "contigs",
+          "label": "Contigs",
+          "description": "The assembled sequences (FASTA).",
+          "types": [
+            "fasta"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "contigs.fasta"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "scaffolds",
+          "label": "Scaffolds",
+          "description": "Contigs joined into longer sequences where the read pairs allow it (FASTA).",
+          "types": [
+            "fasta"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "scaffolds.fasta"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "graph",
+          "label": "Assembly graph",
+          "description": "How the contigs connect (GFA). Open it in Bandage to look at it.",
+          "types": [
+            "gfa"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "assembly_graph_with_scaffolds.gfa"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "log",
+          "label": "Log",
+          "description": "What SPAdes did, step by step (text).",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "spades.log"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "mode",
+          "label": "Kind of sample",
+          "type": "select",
+          "default": "--isolate",
+          "options": [
+            "--isolate",
+            "",
+            "--careful",
+            "--meta",
+            "--sc"
+          ],
+          "description": "Picks the settings that suit the sample. A single cultured organism with plenty of reads is the usual case.",
+          "option_labels": {
+            "--isolate": "One cultured organism, deep sequencing (fast)",
+            "": "General purpose",
+            "--careful": "Small genome, fewer mistakes (slower)",
+            "--meta": "Mix of organisms (metagenome, needs paired reads)",
+            "--sc": "Single cell, uneven coverage"
+          }
+        },
+        {
+          "id": "memory",
+          "label": "Memory limit (GB)",
+          "type": "number",
+          "default": 8,
+          "description": "SPAdes stops if it needs more than this. Leave at 8 for small genomes; large genomes need more.",
+          "min": 1,
+          "step": 1
+        },
+        {
+          "id": "kmers",
+          "label": "Word sizes (k-mers)",
+          "type": "string",
+          "default": "",
+          "description": "Optional. Odd numbers separated by commas, for example 21,33,55. SPAdes chooses them from the read length when empty."
+        }
+      ],
+      "command": "K={kmers}; set -- -s \"{reads1}\"; if [ -n \"{reads2}\" ]; then set -- -1 \"{reads1}\" -2 \"{reads2}\"; fi; spades.py {mode} -o {out_dir} -t {threads} -m {memory} ${K:+-k \"$K\"} \"$@\"",
+      "threads": 4,
+      "docs": "https://ablab.github.io/spades/"
+    },
+    {
+      "id": "quast",
+      "name": "QUAST",
+      "description": "Judges genome assemblies: how many contigs, how long, and (with a reference) how complete and correct. Several assemblies go into one comparison.",
+      "category": "assembly",
+      "subcategory": "Assembly quality",
+      "install": {
+        "kind": "conda",
+        "package": "quast",
+        "channel": "bioconda",
+        "version": "5.3.0",
+        "osx64": true,
+        "constraints": [
+          "python<3.12"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "assemblies",
+          "label": "Assemblies",
+          "description": "One or more assembled sequences (FASTA). Give several to compare them side by side.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "assembly.fasta"
+        },
+        {
+          "name": "reference",
+          "label": "Reference genome",
+          "description": "Optional. A known genome of the same organism. With it QUAST also reports how much of it was recovered and the errors against it.",
+          "types": [
+            "fasta"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reference.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Report folder",
+          "description": "Folder for the comparison tables and the report page.",
+          "types": [
+            "tsv",
+            "html"
+          ],
+          "pattern": "quast/",
+          "is_dir": true
+        },
+        {
+          "name": "table",
+          "label": "Comparison table",
+          "description": "One column per assembly, one row per number (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "report.tsv"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "report",
+          "label": "Report page",
+          "description": "The same numbers with plots (HTML).",
+          "types": [
+            "html"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "report.html"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "summary",
+          "label": "Text summary",
+          "description": "The comparison as plain text.",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "report.txt"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "min_contig",
+          "label": "Ignore contigs shorter than (bases)",
+          "type": "number",
+          "default": 500,
+          "description": "Short contigs are usually noise and are left out of the numbers.",
+          "min": 0,
+          "step": 100
+        },
+        {
+          "id": "labels",
+          "label": "Names of the assemblies",
+          "type": "string",
+          "default": "",
+          "description": "Optional. Comma-separated, in the same order as the files. For example flye,spades. Without it the file names are used."
+        },
+        {
+          "id": "browser",
+          "label": "Contig browser",
+          "type": "select",
+          "default": "--no-icarus",
+          "options": [
+            "--no-icarus",
+            ""
+          ],
+          "description": "A page for scrolling along the contigs. It adds about 20 seconds.",
+          "option_labels": {
+            "--no-icarus": "Skip it (faster)",
+            "": "Make it"
+          }
+        }
+      ],
+      "command": "L={labels}; R=\"{reference}\"; quast.py {assemblies} -o {out_dir} -t {threads} --min-contig {min_contig} {browser} ${R:+-r \"$R\"} ${L:+--labels \"$L\"}",
+      "threads": 2,
+      "docs": "https://quast.sourceforge.net/docs/manual.html"
+    },
+    {
+      "id": "seqkit-stats",
+      "name": "seqkit stats",
+      "description": "Counts the sequences in FASTA or FASTQ files and reports their total length, shortest, longest, N50 and average quality, one line per file.",
+      "category": "qc",
+      "subcategory": "Sequence statistics",
+      "install": {
+        "kind": "conda",
+        "package": "seqkit",
+        "channel": "bioconda",
+        "version": "2.14.0"
+      },
+      "inputs": [
+        {
+          "name": "sequences",
+          "label": "Sequences",
+          "description": "One or more FASTA or FASTQ files. Compressed files (.gz) work.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "stats",
+          "label": "Statistics table",
+          "description": "One line per file (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "seqkit_stats.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "all",
+          "label": "Add N50 and quality statistics",
+          "type": "boolean",
+          "default": true,
+          "flag": "--all",
+          "description": "Also reports N50, the share of bases above Q20 and Q30, the average quality and the GC content."
+        }
+      ],
+      "command": "seqkit stats -j {threads} --tabular {all} {sequences} > {stats}",
+      "threads": 2,
+      "docs": "https://bioinf.shenwei.me/seqkit/usage/#stats"
+    },
+    {
+      "id": "seqkit-seq",
+      "name": "seqkit seq (filter or convert)",
+      "description": "Keeps the sequences within a length or quality range, and can reverse-complement or upper-case them. Writes a compressed file.",
+      "category": "sequences",
+      "subcategory": "Filter and convert",
+      "install": {
+        "kind": "conda",
+        "package": "seqkit",
+        "channel": "bioconda",
+        "version": "2.14.0"
+      },
+      "inputs": [
+        {
+          "name": "sequences",
+          "label": "Sequences",
+          "description": "A FASTA or FASTQ file. Compressed files (.gz) work.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "label": "Result",
+          "description": "The sequences that passed, in the same format as the input. A name ending in .gz is compressed.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "pattern": "filtered.fastq.gz",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "min_length",
+          "label": "Shortest sequence to keep (bases)",
+          "type": "number",
+          "default": 0,
+          "description": "Shorter sequences are dropped. 0 keeps every length.",
+          "min": 0,
+          "step": 100
+        },
+        {
+          "id": "max_length",
+          "label": "Longest sequence to keep (bases)",
+          "type": "number",
+          "default": 0,
+          "description": "Longer sequences are dropped. 0 sets no limit.",
+          "min": 0,
+          "step": 1000
+        },
+        {
+          "id": "min_quality",
+          "label": "Lowest average quality to keep",
+          "type": "number",
+          "default": 0,
+          "description": "FASTQ only. Reads with a lower average quality score are dropped. 0 keeps every read.",
+          "min": 0,
+          "max": 60,
+          "step": 1
+        },
+        {
+          "id": "reverse_complement",
+          "label": "Reverse-complement every sequence",
+          "type": "boolean",
+          "default": false,
+          "flag": "--reverse --complement",
+          "description": "Writes the other strand of every sequence."
+        },
+        {
+          "id": "upper_case",
+          "label": "Write sequences in upper case",
+          "type": "boolean",
+          "default": false,
+          "flag": "--upper-case",
+          "description": "Turns lower-case (soft-masked) bases into capitals."
+        }
+      ],
+      "command": "E=\"\"; if [ {min_length} -gt 0 ]; then E=\"$E --min-len {min_length}\"; fi; if [ {max_length} -gt 0 ]; then E=\"$E --max-len {max_length}\"; fi; if [ {min_quality} -gt 0 ]; then E=\"$E --min-qual {min_quality}\"; fi; seqkit seq -j {threads} $E {reverse_complement} {upper_case} {sequences} -o {result}",
+      "threads": 2,
+      "docs": "https://bioinf.shenwei.me/seqkit/usage/#seq"
+    },
+    {
+      "id": "seqkit-grep",
+      "name": "seqkit grep (pick sequences)",
+      "description": "Picks sequences by name or by a stretch of sequence, from a list of names or a pattern you type. Can also leave those out instead.",
+      "category": "sequences",
+      "subcategory": "Pick sequences",
+      "install": {
+        "kind": "conda",
+        "package": "seqkit",
+        "channel": "bioconda",
+        "version": "2.14.0"
+      },
+      "inputs": [
+        {
+          "name": "sequences",
+          "label": "Sequences",
+          "description": "A FASTA or FASTQ file. Compressed files (.gz) work.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        },
+        {
+          "name": "names",
+          "label": "List of names or patterns",
+          "description": "Optional. A text file with one name or pattern per line. Use it, the box in Options, or both.",
+          "types": [
+            "txt",
+            "tsv"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "wanted_reads.txt"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "matched",
+          "label": "Picked sequences",
+          "description": "The sequences that matched, in the same format as the input. A name ending in .gz is compressed.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "pattern": "picked.fastq.gz",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "pattern",
+          "label": "Name or pattern",
+          "type": "string",
+          "default": "",
+          "description": "Optional. A name typed here instead of (or as well as) a list. It must match the whole name unless you tick the regular expression box. For example read_17."
+        },
+        {
+          "id": "search_in",
+          "label": "Look in",
+          "type": "select",
+          "default": "",
+          "options": [
+            "",
+            "-n",
+            "-s"
+          ],
+          "description": "Where to look for the pattern.",
+          "option_labels": {
+            "": "The sequence name up to the first space (its ID)",
+            "-n": "The whole name line",
+            "-s": "The bases themselves"
+          }
+        },
+        {
+          "id": "invert",
+          "label": "Keep everything except the matches",
+          "type": "boolean",
+          "default": false,
+          "flag": "--invert-match",
+          "description": "Drops the sequences that match and keeps the rest."
+        },
+        {
+          "id": "ignore_case",
+          "label": "Ignore capital letters",
+          "type": "boolean",
+          "default": false,
+          "flag": "--ignore-case",
+          "description": "Treats A and a as the same."
+        },
+        {
+          "id": "regex",
+          "label": "The pattern is a regular expression",
+          "type": "boolean",
+          "default": false,
+          "flag": "--use-regexp",
+          "description": "Tick this to write a pattern like read_1[0-9]. Leave it unticked to match the text exactly."
+        }
+      ],
+      "command": "P={pattern}; L=\"{names}\"; if [ -z \"$P\" ] && [ -z \"$L\" ]; then echo \"Type a name or pattern, or connect a list of names.\" >&2; exit 1; fi; seqkit grep -j {threads} {search_in} {invert} {ignore_case} {regex} ${P:+-p \"$P\"} ${L:+-f \"$L\"} {sequences} -o {matched}",
+      "threads": 2,
+      "docs": "https://bioinf.shenwei.me/seqkit/usage/#grep"
+    },
+    {
+      "id": "kraken2-build",
+      "name": "Kraken2 build database",
+      "description": "Builds a Kraken2 database from your own genomes, for example the few species you expect in a sample. Needs a taxonomy that names every genome.",
+      "category": "metagenomics",
+      "subcategory": "Databases",
+      "install": {
+        "kind": "conda",
+        "package": "kraken2",
+        "channel": "bioconda",
+        "version": "2.17.1"
+      },
+      "inputs": [
+        {
+          "name": "genomes",
+          "label": "Genomes",
+          "description": "FASTA files. Every sequence name must carry its taxonomy number, like >seq1|kraken:taxid|562.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "genomes.fa"
+        },
+        {
+          "name": "names",
+          "label": "Taxonomy names",
+          "description": "The names.dmp file of an NCBI-style taxonomy, listing the name of every taxonomy number.",
+          "types": [
+            "taxonomy"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "names.dmp"
+        },
+        {
+          "name": "nodes",
+          "label": "Taxonomy tree",
+          "description": "The nodes.dmp file of the same taxonomy, giving the parent and rank of every taxonomy number.",
+          "types": [
+            "taxonomy"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "nodes.dmp"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "db",
+          "label": "Database folder",
+          "description": "The finished Kraken2 database. Connect it to Kraken2.",
+          "types": [
+            "database"
+          ],
+          "pattern": "kraken2_db/",
+          "is_dir": true
+        }
+      ],
+      "params": [
+        {
+          "id": "kmer_length",
+          "label": "Word size (k-mer length)",
+          "type": "number",
+          "default": 35,
+          "description": "Kraken2 matches reads to the genomes in words of this many bases. The standard is 35.",
+          "min": 15,
+          "max": 64,
+          "step": 1
+        },
+        {
+          "id": "minimizer_length",
+          "label": "Minimizer length",
+          "type": "number",
+          "default": 31,
+          "description": "The part of each word Kraken2 indexes. It must be at most the word size. The standard is 31.",
+          "min": 1,
+          "max": 64,
+          "step": 1
+        },
+        {
+          "id": "minimizer_spaces",
+          "label": "Minimizer spaces",
+          "type": "number",
+          "default": 7,
+          "description": "Positions skipped inside the minimizer to tolerate mismatches. The standard is 7.",
+          "min": 0,
+          "max": 32,
+          "step": 1
+        }
+      ],
+      "command": "set -e; D=\"{db}\"; rm -rf \"$D/library\" \"$D/seqid2taxid.map\"; mkdir -p \"$D/taxonomy\"; cp \"{names}\" \"$D/taxonomy/names.dmp\"; cp \"{nodes}\" \"$D/taxonomy/nodes.dmp\"; for g in {genomes}; do kraken2-build --add-to-library \"$g\" --db \"$D\"; done; kraken2-build --build --db \"$D\" --threads {threads} --kmer-len {kmer_length} --minimizer-len {minimizer_length} --minimizer-spaces {minimizer_spaces}",
+      "threads": 4,
+      "docs": "https://github.com/DerrickWood/kraken2/wiki/Manual#custom-databases"
+    },
+    {
+      "id": "kraken2",
+      "name": "Kraken2",
+      "description": "Names the organism each read most likely comes from (its taxonomy) by matching it against a database of genomes. Writes a summary table by species and a line for every read.",
+      "category": "metagenomics",
+      "subcategory": "Classification",
+      "install": {
+        "kind": "conda",
+        "package": "kraken2",
+        "channel": "bioconda",
+        "version": "2.17.1"
+      },
+      "inputs": [
+        {
+          "name": "reads1",
+          "label": "Reads (first of the pair)",
+          "description": "FASTQ or FASTA with the reads, or the first file of a pair.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads_R1.fastq.gz"
+        },
+        {
+          "name": "reads2",
+          "label": "Reads (second of the pair)",
+          "description": "Leave empty for single-end reads.",
+          "types": [
+            "fastq",
+            "fasta"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reads_R2.fastq.gz"
+        },
+        {
+          "name": "db",
+          "label": "Database folder",
+          "description": "A Kraken2 database: a folder you built with Kraken2 build database, or a ready-made one downloaded from the Kraken2 index page.",
+          "types": [
+            "database"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "kraken2_db"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report",
+          "label": "Summary by species",
+          "description": "How many reads fell in each group of the tree of life, as a table (tab-separated). Bracken reads it.",
+          "types": [
+            "tsv",
+            "txt"
+          ],
+          "pattern": "kraken2_report.tsv",
+          "is_dir": false
+        },
+        {
+          "name": "assignments",
+          "label": "Assignment of every read",
+          "description": "One line per read: classified or not, which group, and how long it is (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "kraken2_reads.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "confidence",
+          "label": "Confidence needed",
+          "type": "number",
+          "default": 0,
+          "description": "Share of a read that must match its group, from 0 to 1. Higher is stricter: fewer reads are named, with fewer mistakes.",
+          "min": 0,
+          "max": 1,
+          "step": 0.05
+        },
+        {
+          "id": "min_hit_groups",
+          "label": "Smallest number of matching words",
+          "type": "number",
+          "default": 2,
+          "description": "A read needs at least this many separate matching stretches to be named.",
+          "min": 1,
+          "step": 1
+        },
+        {
+          "id": "memory_mapping",
+          "label": "Read the database from disk instead of memory",
+          "type": "boolean",
+          "default": false,
+          "flag": "--memory-mapping",
+          "description": "Tick this when the database is bigger than the free memory. It is slower."
+        }
+      ],
+      "command": "set -- \"{reads1}\"; if [ -n \"{reads2}\" ]; then set -- --paired \"{reads1}\" \"{reads2}\"; fi; kraken2 --db {db} --threads {threads} --confidence {confidence} --minimum-hit-groups {min_hit_groups} {memory_mapping} --report {report} --output {assignments} \"$@\"",
+      "threads": 4,
+      "docs": "https://github.com/DerrickWood/kraken2/wiki/Manual",
+      "needs_database": {
+        "label": "Kraken2 database",
+        "hint": "Build a small one with Kraken2 build database, or download a ready-made index from the Kraken2 index page (benlangmead.github.io/aws-indexes/k2). The standard databases need 8 GB to 70 GB of memory."
+      }
+    },
+    {
+      "id": "bracken-build",
+      "name": "Bracken prepare database",
+      "description": "Gets a Kraken2 database ready for Bracken. Makes a new folder that links to your database and adds the files Bracken needs for one read length. Your database is not changed.",
+      "category": "metagenomics",
+      "subcategory": "Databases",
+      "install": {
+        "kind": "conda",
+        "package": "bracken",
+        "channel": "bioconda",
+        "version": "2.6.1",
+        "osx64": true
+      },
+      "inputs": [
+        {
+          "name": "db",
+          "label": "Kraken2 database",
+          "description": "The Kraken2 database folder the reads were or will be classified against.",
+          "types": [
+            "database"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "kraken2_db"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "bracken_db",
+          "label": "Prepared database",
+          "description": "A folder that works as a Kraken2 database and as a Bracken database. Connect it to Kraken2 and Bracken.",
+          "types": [
+            "database"
+          ],
+          "pattern": "bracken_db/",
+          "is_dir": true
+        }
+      ],
+      "params": [
+        {
+          "id": "read_length",
+          "label": "Read length (bases)",
+          "type": "number",
+          "default": 150,
+          "description": "The usual length of your reads. Run it again for another length.",
+          "min": 30,
+          "step": 1
+        },
+        {
+          "id": "kmer_length",
+          "label": "Word size of the database",
+          "type": "number",
+          "default": 35,
+          "description": "The word size the database was built with. The standard is 35.",
+          "min": 15,
+          "max": 64,
+          "step": 1
+        }
+      ],
+      "command": "set -e; SRC=$(cd \"{db}\" && pwd); mkdir -p \"{bracken_db}\"; DST=$(cd \"{bracken_db}\" && pwd); if [ \"$SRC\" = \"$DST\" ]; then echo \"Choose a new folder for the prepared database. It must not be the database itself.\" >&2; exit 1; fi; rm -f \"$DST\"/database*; for e in \"$SRC\"/*; do case \"$(basename \"$e\")\" in database*) ;; *) ln -sfn \"$e\" \"$DST/$(basename \"$e\")\";; esac; done; bracken-build -d \"$DST\" -t {threads} -k {kmer_length} -l {read_length}",
+      "threads": 4,
+      "docs": "https://github.com/jenniferlu717/Bracken",
+      "needs_database": {
+        "label": "Kraken2 database",
+        "hint": "A Kraken2 database whose library folder is still there (ready-made indexes that ship the Bracken files do not need this step)."
+      }
+    },
+    {
+      "id": "bracken",
+      "name": "Bracken",
+      "description": "Turns a Kraken2 summary into better abundance estimates. Reads that Kraken2 could only place on a genus are shared out over the species of that genus.",
+      "category": "metagenomics",
+      "subcategory": "Abundance",
+      "install": {
+        "kind": "conda",
+        "package": "bracken",
+        "channel": "bioconda",
+        "version": "2.6.1",
+        "osx64": true
+      },
+      "inputs": [
+        {
+          "name": "report",
+          "label": "Kraken2 summary",
+          "description": "The summary table written by Kraken2.",
+          "types": [
+            "tsv",
+            "txt"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "kraken2_report.tsv"
+        },
+        {
+          "name": "db",
+          "label": "Prepared database",
+          "description": "The database folder made by Bracken prepare database for the same read length, or a ready-made database that includes the Bracken files.",
+          "types": [
+            "database"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "bracken_db"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "estimates",
+          "label": "Abundance table",
+          "description": "One line per species: reads Kraken2 gave it, reads added by Bracken, the estimate and its share of all reads (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "bracken_abundance.tsv",
+          "is_dir": false
+        },
+        {
+          "name": "new_report",
+          "label": "Updated summary",
+          "description": "The Kraken2 summary with the new numbers. MultiQC and Krona read it.",
+          "types": [
+            "tsv",
+            "txt"
+          ],
+          "pattern": "bracken_report.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "read_length",
+          "label": "Read length (bases)",
+          "type": "number",
+          "default": 150,
+          "description": "Must be a length the database was prepared for.",
+          "min": 30,
+          "step": 1
+        },
+        {
+          "id": "level",
+          "label": "Group reads by",
+          "type": "select",
+          "default": "S",
+          "options": [
+            "S",
+            "G",
+            "F",
+            "O",
+            "C",
+            "P",
+            "D"
+          ],
+          "description": "The level of the tree of life the estimates are made at.",
+          "option_labels": {
+            "S": "Species",
+            "G": "Genus",
+            "F": "Family",
+            "O": "Order",
+            "C": "Class",
+            "P": "Phylum",
+            "D": "Domain"
+          }
+        },
+        {
+          "id": "threshold",
+          "label": "Fewest reads to keep a group",
+          "type": "number",
+          "default": 0,
+          "description": "Groups with fewer reads than this are left out before the estimate. 0 keeps all.",
+          "min": 0,
+          "step": 1
+        }
+      ],
+      "command": "bracken -d {db} -i {report} -o {estimates} -w {new_report} -r {read_length} -l {level} -t {threshold}",
+      "threads": 1,
+      "docs": "https://github.com/jenniferlu717/Bracken",
+      "needs_database": {
+        "label": "Bracken database",
+        "hint": "Use Bracken prepare database on your Kraken2 database, or download a ready-made index that lists Bracken files for your read length."
+      }
+    },
+    {
+      "id": "pod5-view",
+      "name": "pod5 view",
+      "description": "Lists the reads in POD5 files as a table: read ID, channel, length in samples, start time and more. Use it to pick reads for pod5 filter or pod5 subset.",
+      "category": "nanopore",
+      "subcategory": "POD5 files",
+      "install": {
+        "kind": "conda",
+        "package": "pod5",
+        "channel": "bioconda",
+        "version": "0.3.48",
+        "constraints": [
+          "polars<2"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "pods",
+          "label": "POD5 files",
+          "description": "A POD5 file holds the raw electrical signal of a Nanopore run. One or more files.",
+          "types": [
+            "pod5"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "run.pod5"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "table",
+          "label": "Read table",
+          "description": "One line per read (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "pod5_reads.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "columns",
+          "label": "Columns to show",
+          "type": "string",
+          "default": "",
+          "description": "Optional. Comma-separated column names, for example read_id,channel,num_samples. Empty shows the standard columns."
+        }
+      ],
+      "command": "I={columns}; pod5 view {pods} ${I:+--include \"$I\"} --threads {threads} --force-overwrite --output {table}",
+      "threads": 2,
+      "docs": "https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-view"
+    },
+    {
+      "id": "pod5-inspect",
+      "name": "pod5 inspect",
+      "description": "Reports what a POD5 file holds: how many reads it has, how they are grouped into batches, and the version of the file format.",
+      "category": "nanopore",
+      "subcategory": "POD5 files",
+      "install": {
+        "kind": "conda",
+        "package": "pod5",
+        "channel": "bioconda",
+        "version": "0.3.48",
+        "constraints": [
+          "polars<2"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "pod",
+          "label": "POD5 file",
+          "description": "A POD5 file holds the raw electrical signal of a Nanopore run.",
+          "types": [
+            "pod5"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "run.pod5"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report",
+          "label": "Report",
+          "description": "The summary as text.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "pod5_inspect.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "pod5 inspect summary {pod} > {report}",
+      "threads": 1,
+      "docs": "https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-inspect"
+    },
+    {
+      "id": "pod5-filter",
+      "name": "pod5 filter",
+      "description": "Copies only the reads you list into a new POD5 file. Use it to basecall or share a small part of a run.",
+      "category": "nanopore",
+      "subcategory": "POD5 files",
+      "install": {
+        "kind": "conda",
+        "package": "pod5",
+        "channel": "bioconda",
+        "version": "0.3.48",
+        "constraints": [
+          "polars<2"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "pods",
+          "label": "POD5 files",
+          "description": "A POD5 file holds the raw electrical signal of a Nanopore run. One or more files holding the reads.",
+          "types": [
+            "pod5"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "run.pod5"
+        },
+        {
+          "name": "ids",
+          "label": "Read IDs to keep",
+          "description": "A text file with one read ID per line, for example made from the table of pod5 view.",
+          "types": [
+            "txt",
+            "tsv"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "keep_ids.txt"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filtered",
+          "label": "Filtered file",
+          "description": "A POD5 file with just the listed reads.",
+          "types": [
+            "pod5"
+          ],
+          "pattern": "filtered.pod5",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "missing_ok",
+          "label": "Skip IDs that are not in the files",
+          "type": "boolean",
+          "default": false,
+          "flag": "--missing-ok",
+          "description": "Without this, pod5 filter stops when a listed read is not found."
+        }
+      ],
+      "command": "pod5 filter {pods} --ids {ids} --output {filtered} --threads {threads} --force-overwrite {missing_ok}",
+      "threads": 2,
+      "docs": "https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-filter"
+    },
+    {
+      "id": "pod5-subset",
+      "name": "pod5 subset (split by column)",
+      "description": "Splits POD5 files into several files by a value in a table, for example one file per channel. The table can come from pod5 view or from a sequencing summary.",
+      "category": "nanopore",
+      "subcategory": "POD5 files",
+      "install": {
+        "kind": "conda",
+        "package": "pod5",
+        "channel": "bioconda",
+        "version": "0.3.48",
+        "constraints": [
+          "polars<2"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "pods",
+          "label": "POD5 files",
+          "description": "A POD5 file holds the raw electrical signal of a Nanopore run. One or more files holding the reads.",
+          "types": [
+            "pod5"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "run.pod5"
+        },
+        {
+          "name": "table",
+          "label": "Table of reads",
+          "description": "A table with a read_id column and the column to split by, such as the output of pod5 view (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "pod5_reads.tsv"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Folder of files",
+          "description": "One POD5 file per value, named after the value.",
+          "types": [
+            "pod5"
+          ],
+          "pattern": "pod5_split/",
+          "is_dir": true
+        }
+      ],
+      "params": [
+        {
+          "id": "split_by",
+          "label": "Split by column",
+          "type": "string",
+          "default": "channel",
+          "description": "The name of a column in the table. Use several, separated by spaces, to split by their combination.",
+          "required": true
+        },
+        {
+          "id": "missing_ok",
+          "label": "Skip reads that are not in the files",
+          "type": "boolean",
+          "default": false,
+          "flag": "--missing-ok",
+          "description": "Without this, pod5 subset stops when a table row names a read that is missing."
+        }
+      ],
+      "command": "pod5 subset {pods} --table {table} --columns {split_by} --output {out_dir} --threads {threads} --force-overwrite {missing_ok}",
+      "threads": 2,
+      "docs": "https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-subset"
+    },
+    {
+      "id": "pod5-merge",
+      "name": "pod5 merge",
+      "description": "Joins several POD5 files into one, for example the many files MinKNOW writes during a run.",
+      "category": "nanopore",
+      "subcategory": "POD5 files",
+      "install": {
+        "kind": "conda",
+        "package": "pod5",
+        "channel": "bioconda",
+        "version": "0.3.48",
+        "constraints": [
+          "polars<2"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "pods",
+          "label": "POD5 files",
+          "description": "A POD5 file holds the raw electrical signal of a Nanopore run. Two or more files.",
+          "types": [
+            "pod5"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "run_1.pod5"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "merged",
+          "label": "Merged file",
+          "description": "One POD5 file with the reads of all inputs.",
+          "types": [
+            "pod5"
+          ],
+          "pattern": "merged.pod5",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "duplicates",
+          "label": "Allow the same read twice if its signal is identical",
+          "type": "boolean",
+          "default": false,
+          "flag": "--merge-duplicate-reads",
+          "description": "Without this, pod5 merge stops when two files hold the same read ID."
+        }
+      ],
+      "command": "pod5 merge {pods} --output {merged} --threads {threads} --force-overwrite {duplicates}",
+      "threads": 2,
+      "docs": "https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-merge"
+    },
+    {
+      "id": "pod5-convert-fast5",
+      "name": "pod5 convert from FAST5",
+      "description": "Converts old FAST5 signal files to one POD5 file, the format Dorado reads.",
+      "category": "nanopore",
+      "subcategory": "POD5 files",
+      "install": {
+        "kind": "conda",
+        "package": "pod5",
+        "channel": "bioconda",
+        "version": "0.3.48",
+        "constraints": [
+          "polars<2"
+        ]
+      },
+      "inputs": [
+        {
+          "name": "fast5",
+          "label": "FAST5 files",
+          "description": "One or more FAST5 files (single-read or multi-read) from a Nanopore run.",
+          "types": [
+            "fast5"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "run.fast5"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "converted",
+          "label": "POD5 file",
+          "description": "One POD5 file with every read of the FAST5 files.",
+          "types": [
+            "pod5"
+          ],
+          "pattern": "converted.pod5",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "pod5 convert fast5 {fast5} --output {converted} --threads {threads} --force-overwrite",
+      "threads": 2,
+      "docs": "https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-convert"
+    },
+    {
+      "id": "dorado-basecaller",
+      "name": "Dorado basecaller",
+      "description": "Turns the raw signal of a Nanopore run (POD5) into DNA sequence. Writes an unaligned BAM. Needs a graphics card or an Apple chip for anything but tests.",
+      "category": "nanopore",
+      "subcategory": "Basecalling",
+      "install": {
+        "kind": "external",
+        "binary": "dorado",
+        "version": "1.4.0",
+        "url": {
+          "osx-arm64": "https://cdn.oxfordnanoportal.com/software/analysis/dorado-{version}-osx-arm64.zip"
+        },
+        "sha256": {
+          "osx-arm64": "3d0d511313f5c99158906ad6b2cd5df4ba013d7e454beefc613fe03525b8dc5f"
+        },
+        "license": "Oxford Nanopore Technologies Public License"
+      },
+      "inputs": [
+        {
+          "name": "pod",
+          "label": "POD5 file or folder",
+          "description": "A POD5 file, or a folder of POD5 files. Convert old FAST5 files first.",
+          "types": [
+            "pod5"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "run.pod5"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "calls",
+          "label": "Basecalled reads",
+          "description": "The reads with their sequence and quality, as an unaligned BAM.",
+          "types": [
+            "bam"
+          ],
+          "pattern": "basecalled.bam",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "model",
+          "label": "Accuracy",
+          "type": "select",
+          "default": "hac",
+          "options": [
+            "fast",
+            "hac",
+            "sup"
+          ],
+          "description": "Dorado picks the model that fits your flow cell and kit from the file. More accurate models are much slower.",
+          "option_labels": {
+            "fast": "Fast (for a quick look or tests)",
+            "hac": "High accuracy (the usual choice)",
+            "sup": "Super accuracy (slowest)"
+          }
+        },
+        {
+          "id": "min_qscore",
+          "label": "Drop reads below this quality",
+          "type": "number",
+          "default": 10,
+          "description": "Reads with an average quality score under this are not written. 10 is the usual cut. 0 keeps every read.",
+          "min": 0,
+          "max": 60,
+          "step": 1
+        },
+        {
+          "id": "device",
+          "label": "Run on",
+          "type": "select",
+          "default": "auto",
+          "options": [
+            "auto",
+            "cpu"
+          ],
+          "description": "Auto uses the graphics card or Apple chip when there is one. The processor alone is very slow for real data.",
+          "option_labels": {
+            "auto": "Graphics card or Apple chip if available",
+            "cpu": "Processor only"
+          }
+        }
+      ],
+      "command": "set -o pipefail; M=\"$HOME/.rustrunner/dorado-models\"; mkdir -p \"$M\"; dorado basecaller {model} {pod} --models-directory \"$M\" --device {device} --min-qscore {min_qscore} --recursive > {calls}",
+      "threads": 1,
+      "docs": "https://github.com/nanoporetech/dorado",
+      "needs_database": {
+        "label": "Basecalling model",
+        "hint": "Dorado downloads the model it needs the first time (about 30 MB to 300 MB) into your .rustrunner folder, so the first run needs the internet."
+      }
+    },
+    {
+      "id": "dorado-summary",
+      "name": "Dorado summary",
+      "description": "Makes a table with one line per read from a Dorado BAM: read ID, channel, length and quality. NanoPlot and pod5 subset read it.",
+      "category": "nanopore",
+      "subcategory": "Basecalling",
+      "install": {
+        "kind": "external",
+        "binary": "dorado",
+        "version": "1.4.0",
+        "url": {
+          "osx-arm64": "https://cdn.oxfordnanoportal.com/software/analysis/dorado-{version}-osx-arm64.zip"
+        },
+        "sha256": {
+          "osx-arm64": "3d0d511313f5c99158906ad6b2cd5df4ba013d7e454beefc613fe03525b8dc5f"
+        },
+        "license": "Oxford Nanopore Technologies Public License"
+      },
+      "inputs": [
+        {
+          "name": "calls",
+          "label": "Basecalled reads",
+          "description": "The BAM written by Dorado basecaller.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "basecalled.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "summary",
+          "label": "Summary table",
+          "description": "One line per read (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "sequencing_summary.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "dorado summary {calls} > {summary}",
+      "threads": 1,
+      "docs": "https://github.com/nanoporetech/dorado"
     }
   ]
 }

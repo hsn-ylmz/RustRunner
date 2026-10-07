@@ -46,7 +46,7 @@ test('the palette searches by name and category, and closes with Escape', async 
   await page.getByTestId('open-palette').click();
   const items = page.locator('[data-testid^="palette-item-"]');
   const all = await items.count();
-  expect(all).toBeGreaterThanOrEqual(57);
+  expect(all).toBeGreaterThanOrEqual(79);
 
   await page.getByTestId('palette-search').fill('BWA');
   await expect(items).toHaveCount(2);
@@ -364,6 +364,67 @@ test('MultiQC follows several steps at once, and asks which of a step\'s files t
   await expect(page.getByTestId('prop-slot-reports-from-badge-2')).toHaveCount(0);
   await expect(page.getByTestId('prop-slot-reports-from-badge')).toContainText('from FastQC');
   await expect(page.getByTestId('prop-slot-reports-typed')).toHaveValue('cutadapt.txt');
+});
+
+test('Nanopore signal tools are found by their file format, and Dorado says where it can run and what it downloads', async ({
+  page,
+}) => {
+  await page.getByTestId('open-palette').click();
+  const items = page.locator('[data-testid^="palette-item-"]');
+  // The six POD5 tools, and the two Dorado tools that read POD5 files.
+  await page.getByTestId('palette-search').fill('pod5');
+  await expect(items).toHaveCount(8);
+  await expect(page.getByTestId('palette-item-pod5-convert-fast5')).toBeVisible();
+  await page.getByTestId('palette-search').fill('');
+  await page.getByTestId('palette-category').selectOption('nanopore');
+  await expect(items).toHaveCount(8);
+  await expect(page.getByTestId('palette-item-dorado-basecaller')).toContainText('Basecalling');
+  await page.getByTestId('palette-search').press('Escape');
+
+  await addFromPalette(page, 'dorado basecaller', 'dorado-basecaller');
+  // A download that is there for one kind of computer says so, in the line that says where the tool comes from.
+  await expect(page.getByTestId('catalog-types')).toContainText('dorado 1.4.0');
+  await expect(page.getByTestId('catalog-types')).toContainText('Available for macOS on Apple silicon only.');
+  await expect(page.getByTestId('catalog-needs-database')).toContainText('Basecalling model');
+  await expect(page.getByTestId('catalog-needs-database')).toContainText('needs the internet');
+  const model = page.getByTestId('catalog-param-model');
+  await expect(model.locator('option')).toHaveText(['Fast (for a quick look or tests)', 'High accuracy (the usual choice)', 'Super accuracy (slowest)']);
+  await expect(model).toHaveValue('hac');
+  await openSection(page, 'advanced');
+  await expect(page.getByTestId('prop-command')).toHaveValue(/dorado basecaller hac \{pod\} --models-directory/);
+  await model.selectOption({ label: 'Fast (for a quick look or tests)' });
+  await expect(page.getByTestId('prop-command')).toHaveValue(/dorado basecaller fast \{pod\}/);
+  await expect(page.getByTestId('prop-slot-pod-row')).not.toContainText('optional');
+});
+
+test('Flye takes the filtered reads, QUAST asks which SPAdes file to compare, and Kraken2 says what database it needs', async ({
+  page,
+}) => {
+  await addFromPalette(page, 'chopper', 'chopper');
+  await addFromPalette(page, 'flye', 'flye');
+  await addFromPalette(page, 'spades', 'spades');
+  await addFromPalette(page, 'quast', 'quast');
+  await connect(page, 'chopper', 'Flye');
+  await selectNode(page, 'Flye');
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-reads')).toHaveText('chopped.fastq.gz');
+  // The assembly file is offered, not its folder.
+  await connect(page, 'Flye', 'QUAST');
+  await selectNode(page, 'QUAST');
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-assemblies')).toHaveText('flye/assembly.fasta');
+  // SPAdes writes contigs and scaffolds: the person picks.
+  await connect(page, 'SPAdes', 'QUAST');
+  await selectNode(page, 'QUAST');
+  await expect(page.getByTestId('binding-prompt')).toBeVisible();
+  await page.getByTestId('binding-option-assemblies-contigs').click();
+  await expect(page.getByTestId('prop-slot-assemblies-2')).toHaveText('spades/contigs.fasta');
+  await expect(page.getByTestId('prop-slot-reference-row')).toContainText('optional');
+
+  await addFromPalette(page, 'kraken2', 'kraken2');
+  await expect(page.getByTestId('catalog-needs-database')).toContainText('Kraken2 build database');
+  await expect(page.getByTestId('prop-slot-reads2-row')).toContainText('optional');
+  await expect(page.getByTestId('prop-slot-db-row')).not.toContainText('optional');
 });
 
 test('a catalog step runs through the real engine with its install block (mocked, so nothing is installed)', async ({

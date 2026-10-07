@@ -100,6 +100,15 @@ export type Platform = 'linux-64' | 'linux-aarch64' | 'osx-64' | 'osx-arm64' | '
 
 export const PLATFORMS: Platform[] = ['linux-64', 'linux-aarch64', 'osx-64', 'osx-arm64', 'win-64'];
 
+/** How a platform is named for the person. */
+export const PLATFORM_NAMES: Record<Platform, string> = {
+  'linux-64': 'Linux (Intel or AMD)',
+  'linux-aarch64': 'Linux (ARM)',
+  'osx-64': 'macOS on Intel',
+  'osx-arm64': 'macOS on Apple silicon',
+  'win-64': 'Windows',
+};
+
 export interface CondaInstall {
   kind: 'conda';
   package: string;
@@ -108,6 +117,12 @@ export interface CondaInstall {
   version: string;
   /** Install the Intel build on Apple silicon (runs under Rosetta). */
   osx64?: boolean;
+  /**
+   * Extra packages installed beside the tool, each a name with a version limit
+   * such as `polars<2`. For a dependency whose newest release breaks the pinned
+   * tool; the engine gives such a set an environment of its own.
+   */
+  constraints?: string[];
 }
 
 export interface ExternalInstall {
@@ -226,6 +241,7 @@ export function installYaml(install: Install): Record<string, unknown> {
         channel: install.channel,
       };
       if (install.osx64) out.osx64 = true;
+      if (install.constraints && install.constraints.length > 0) out.constraints = [...install.constraints];
       return out;
     }
     case 'external':
@@ -248,9 +264,15 @@ export function describeInstall(install: Install): string {
     case 'conda':
       return `Installed from ${install.channel} (conda): ${install.package} ${install.version}${
         install.osx64 ? ', Intel build on Apple silicon' : ''
-      }.`;
-    case 'external':
-      return `Downloaded and checked on first use: ${install.binary} ${install.version} (${install.license}).`;
+      }${install.constraints?.length ? `, with ${install.constraints.join(' ')}` : ''}.`;
+    case 'external': {
+      const platforms = PLATFORMS.filter((p) => p in install.url);
+      const where =
+        platforms.length < PLATFORMS.length
+          ? ` Available for ${platforms.map((p) => PLATFORM_NAMES[p]).join(', ')} only.`
+          : '';
+      return `Downloaded and checked on first use: ${install.binary} ${install.version} (${install.license}).${where}`;
+    }
     case 'system':
       return `Uses ${install.binary} from your computer. Install it yourself and make sure it is on your PATH.`;
   }
@@ -269,6 +291,8 @@ const PLAIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** One exact version: no ranges, wildcards or comparison operators. */
 const EXACT_VERSION = /^[0-9][A-Za-z0-9._+-]*$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+/** An extra package spec: a plain name, an operator, then plain version text (same rule as the engine). */
+const CONSTRAINT = /^[A-Za-z0-9][A-Za-z0-9._-]*[<>=!~][A-Za-z0-9._+*,<>=!~-]*$/;
 const SLOT_NAME = /^[a-z][a-z0-9_]*$/;
 
 /** Matches `{name}` placeholders, with the one space before it (see `renderCommand`). */
@@ -301,6 +325,17 @@ function validateInstall(where: string, install: unknown, errors: string[]): voi
       }
       if (install.osx64 !== undefined && typeof install.osx64 !== 'boolean') {
         errors.push(`${where}: osx64 must be true or false`);
+      }
+      if (install.constraints !== undefined) {
+        if (!Array.isArray(install.constraints)) {
+          errors.push(`${where}: constraints must be a list of package limits such as polars<2`);
+        } else {
+          for (const spec of install.constraints) {
+            if (typeof spec !== 'string' || !CONSTRAINT.test(spec)) {
+              errors.push(`${where}: constraint ${JSON.stringify(spec)} must be a package name with a version limit such as polars<2`);
+            }
+          }
+        }
       }
       break;
     }

@@ -24,6 +24,7 @@
  * results. Nothing is written to the real home directory.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -113,6 +114,8 @@ export interface Chain {
 export interface DomainDefinition {
   /** The domain name: also the file name, `chains/<domain>.tools.ts`. */
   domain: string;
+  /** Extra data this domain needs, made once before its chains run (after `make_data.py`). */
+  prepare?: () => void;
   /** Every catalog tool this domain's chains exercise. */
   covers: string[];
   chains: Chain[];
@@ -178,6 +181,43 @@ export function countsPerGene(table: string): number[] {
 // -----------------------------------------------------------------------------
 // Sandbox, micromamba, engine
 // -----------------------------------------------------------------------------
+
+/**
+ * Makes the synthetic Nanopore signal files (`make_pod5.py`) in the data folder. They need the
+ * pod5 and FAST5 Python packages, which are installed into a virtual environment inside the
+ * sandbox (`.sandbox/venv-pod5`); nothing is installed into the system Python. Runs again only
+ * when `make_pod5.py` has changed.
+ */
+export function ensurePod5Data(): void {
+  const script = path.join(__dirname, 'make_pod5.py');
+  const stamp = path.join(DATA, '.pod5-stamp');
+  const wanted = createHash('sha256').update(fs.readFileSync(script)).digest('hex');
+  const outputs = ['nano_a.pod5', 'nano_b.pod5', 'nano_fast5.fast5', 'nano_ids.txt', 'nano_truth.tsv'];
+  if (
+    fs.existsSync(stamp) &&
+    fs.readFileSync(stamp, 'utf8') === wanted &&
+    outputs.every((f) => fs.existsSync(path.join(DATA, f)))
+  ) {
+    return;
+  }
+  const venv = path.join(SANDBOX, 'venv-pod5');
+  const python = path.join(venv, 'bin', 'python');
+  // pip and the venv live in the sandbox: HOME and the pip cache point there.
+  const env = sandboxEnv({ PIP_CACHE_DIR: path.join(HOME, '.cache', 'pip'), PIP_DISABLE_PIP_VERSION_CHECK: '1' });
+  if (!fs.existsSync(python)) {
+    const made = run('python3', ['-m', 'venv', venv], { env });
+    if (made.status !== 0) throw new Error(`could not create the pod5 virtual environment: ${made.stderr}`);
+  }
+  const have = run(python, ['-I', '-W', 'ignore', '-c', 'import pod5, ont_fast5_api'], { env });
+  if (have.status !== 0) {
+    // ont-fast5-api still imports pkg_resources, which newer setuptools no longer ships.
+    const installed = run(python, ['-m', 'pip', 'install', '--quiet', 'pod5', 'ont-fast5-api', 'setuptools<81'], { env });
+    if (installed.status !== 0) throw new Error(`could not install pod5 into the sandbox virtual environment: ${installed.stderr}`);
+  }
+  const gen = run(python, ['-I', '-W', 'ignore', script, DATA], { env });
+  if (gen.status !== 0) throw new Error(`make_pod5.py failed: ${gen.stderr}`);
+  fs.writeFileSync(stamp, wanted);
+}
 
 function sandboxEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   // HOME is the sandbox so the engine's $HOME/.rustrunner never touches the real home.
@@ -427,6 +467,7 @@ export function defineDomain(definition: DomainDefinition): void {
       exe = installEngine();
       const gen = run('python3', ['-I', path.join(__dirname, 'make_data.py'), DATA]);
       if (gen.status !== 0) throw new Error(`make_data.py failed: ${gen.stderr}`);
+      definition.prepare?.();
     });
 
     for (const chain of chains) {
@@ -449,6 +490,8 @@ export function defineDomain(definition: DomainDefinition): void {
           if (ok) record(catalogId, 'pass', '', chain.name);
           else if (/Failed to create environment/.test(outcome.log)) {
             record(catalogId, 'unavailable', 'the pinned package could not be installed on this platform', chain.name);
+          } else if (/has no download for this computer/.test(outcome.log)) {
+            record(catalogId, 'unavailable', 'the tool has no download for this platform', chain.name);
           } else record(catalogId, 'fail', `step ${stepId} ${outcome.steps[stepId] ?? 'did not run'}`, chain.name);
           if (!ok) failures.push(`${stepId}: ${outcome.steps[stepId] ?? 'did not run'}`);
         }

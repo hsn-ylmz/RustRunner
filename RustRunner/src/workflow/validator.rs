@@ -1061,6 +1061,7 @@ mod tests {
                 version: Some("1.24".into()),
                 channel: Some("bioconda".into()),
                 osx64: false,
+                constraints: Vec::new(),
             }),
             Step::new("b", "minimap2", "minimap2 --version").with_install(Install::System {
                 binary: "minimap2".into(),
@@ -1078,6 +1079,7 @@ mod tests {
             version: Some("1.0 && rm -rf ~".into()),
             channel: None,
             osx64: false,
+            constraints: Vec::new(),
         });
         let mut wf = Workflow::from_steps(vec![step]);
         let quick = quick_validate(&wf);

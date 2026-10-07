@@ -36,11 +36,11 @@ const tool = (id: string): CatalogTool => {
 };
 
 describe('catalog structure', () => {
-  it('has schema version 2, a catalog version and 12 to 60 tools', () => {
+  it('has schema version 2, a catalog version and 12 to 100 tools', () => {
     expect(CATALOG.schema_version).toBe(2);
     expect(CATALOG.version).toMatch(/^\d{4}\.\d+\.\d+$/);
     expect(CATALOG.tools.length).toBeGreaterThanOrEqual(12);
-    expect(CATALOG.tools.length).toBeLessThanOrEqual(60);
+    expect(CATALOG.tools.length).toBeLessThanOrEqual(100);
   });
 
   it('passes the schema check (the same one the CI test uses on every future catalog)', () => {

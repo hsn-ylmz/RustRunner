@@ -167,6 +167,10 @@ describe('the DNA-seq and variant tools in the catalog', () => {
       'peak_calling',
       'signal',
       'intervals',
+      'sequences',
+      'assembly',
+      'metagenomics',
+      'nanopore',
     ]);
   });
 });

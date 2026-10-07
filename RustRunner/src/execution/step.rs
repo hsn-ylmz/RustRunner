@@ -1069,6 +1069,7 @@ mod tests {
             version: version.map(String::from),
             channel: None,
             osx64: false,
+            constraints: Vec::new(),
         }
     }
 

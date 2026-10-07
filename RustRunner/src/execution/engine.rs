@@ -1059,14 +1059,12 @@ impl Engine {
             info!("Preparing tool: {}", install.describe());
             match &install {
                 Install::Conda { .. } => {
-                    let (Some(name), Some(spec)) =
-                        (install.conda_env_name(platform), install.conda_spec())
-                    else {
+                    let Some(name) = install.conda_env_name(platform) else {
                         continue;
                     };
                     create_env_with(
                         &name,
-                        &[spec],
+                        &install.conda_specs(),
                         &install.conda_channels(),
                         install.conda_subdir(platform),
                     )?;
@@ -2339,6 +2337,7 @@ mod tests {
             version: Some("1.24".into()),
             channel: None,
             osx64: false,
+            constraints: Vec::new(),
         };
         let steps = vec![
             Step::new("a", "samtools", "samtools view x").with_install(pinned.clone()),

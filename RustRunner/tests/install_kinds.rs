@@ -99,6 +99,7 @@ fn conda(package: &str, version: &str, osx64: bool) -> Install {
         version: Some(version.into()),
         channel: None,
         osx64,
+        constraints: Vec::new(),
     }
 }
 
@@ -162,6 +163,33 @@ fn two_pins_of_one_package_use_two_environments() {
         fs::read_to_string(sb.path("work/b.txt")).unwrap().trim(),
         "samtools-1.24"
     );
+}
+
+#[test]
+fn extra_packages_are_installed_beside_the_pin_in_an_environment_of_their_own() {
+    let sb = Sandbox::new();
+    sb.fake_micromamba();
+    let limited = Install::Conda {
+        package: "pod5".into(),
+        version: Some("0.3.48".into()),
+        channel: None,
+        osx64: false,
+        constraints: vec!["polars<2".into()],
+    };
+    let a = Step::new("a", "pod5", "echo $FAKE_ENV > a.txt")
+        .with_output("a.txt")
+        .with_install(limited);
+    let b = Step::new("b", "pod5", "echo $FAKE_ENV > b.txt")
+        .with_output("b.txt")
+        .with_install(conda("pod5", "0.3.48", false));
+    let out = sb.run(vec![a, b]);
+    assert!(out.status.success(), "{}", text(&out));
+    let log = sb.mamba_log();
+    assert!(log.contains("pod5==0.3.48 polars<2"), "{log}");
+    let env_a = fs::read_to_string(sb.path("work/a.txt")).unwrap();
+    let env_b = fs::read_to_string(sb.path("work/b.txt")).unwrap();
+    assert!(env_a.trim().starts_with("pod5-0.3.48-x"), "{env_a}");
+    assert_eq!(env_b.trim(), "pod5-0.3.48");
 }
 
 #[test]

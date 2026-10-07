@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CATALOG, installYaml, validateCatalog, type Catalog, type CatalogTool } from '../tools/catalog';
+import { CATALOG, describeInstall, installYaml, validateCatalog, type Catalog, type CatalogTool } from '../tools/catalog';
 
 /** A deep copy of the bundled catalog that a test may break. */
 function copy(): any {
@@ -117,6 +117,52 @@ describe('install rules', () => {
     const c = copy();
     tool(c, 'star').install.osx64 = 'yes';
     expect(errorsOf(c)).toContain('osx64 must be true or false');
+  });
+
+  it('accepts extra package limits and writes them to the step', () => {
+    const c = copy();
+    tool(c, 'fastqc').install.constraints = ['polars<2', 'numpy>=1.26,<2'];
+    expect(errorsOf(c)).toBe('');
+    expect(installYaml(tool(c, 'fastqc').install).constraints).toEqual(['polars<2', 'numpy>=1.26,<2']);
+    // Nothing is written when there are none.
+    tool(c, 'fastqc').install.constraints = [];
+    expect('constraints' in installYaml(tool(c, 'fastqc').install)).toBe(false);
+    expect(describeInstall(tool(c, 'fastqc').install)).not.toContain('with');
+  });
+
+  it('rejects an extra package that is not a name with a version limit', () => {
+    for (const bad of ['polars', '<2', '-polars<2', 'polars<2; rm -rf ~', 'a b<2', '', 7]) {
+      const c = copy();
+      tool(c, 'fastqc').install.constraints = [bad];
+      expect(errorsOf(c), String(bad)).toContain('fastqc: constraint');
+    }
+    const c = copy();
+    tool(c, 'fastqc').install.constraints = 'polars<2';
+    expect(errorsOf(c)).toContain('constraints must be a list');
+  });
+
+  it('names the extra packages and the platforms of a download in the line shown in Options', () => {
+    expect(describeInstall({ kind: 'conda', package: 'pod5', channel: 'bioconda', version: '0.3.48', constraints: ['polars<2'] })).toBe(
+      'Installed from bioconda (conda): pod5 0.3.48, with polars<2.'
+    );
+    const one = describeInstall({
+      kind: 'external',
+      binary: 'dorado',
+      version: '1.4.0',
+      url: { 'osx-arm64': 'https://example.org/d.zip' },
+      sha256: { 'osx-arm64': SHA },
+      license: 'ONT licence',
+    });
+    expect(one).toContain('Available for macOS on Apple silicon only.');
+    const all = describeInstall({
+      kind: 'external',
+      binary: 'x',
+      version: '1',
+      url: Object.fromEntries(['linux-64', 'linux-aarch64', 'osx-64', 'osx-arm64', 'win-64'].map((p) => [p, 'https://example.org/x'])),
+      sha256: Object.fromEntries(['linux-64', 'linux-aarch64', 'osx-64', 'osx-arm64', 'win-64'].map((p) => [p, SHA])),
+      license: 'MIT',
+    });
+    expect(all).not.toContain('Available for');
   });
 
   it('rejects an unknown install kind', () => {
@@ -383,7 +429,7 @@ describe('a minimal new tool passes', () => {
   it('lets a domain add a system tool with one input and one output', () => {
     const c: Catalog = copy();
     c.tools.push({
-      id: 'minimap2-long',
+      id: 'example-long-aligner',
       name: 'minimap2 for long reads',
       description: 'Aligns long reads.',
       category: 'alignment',
