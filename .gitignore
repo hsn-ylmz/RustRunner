@@ -68,3 +68,7 @@ examples/out/
 
 # Real-tool validation sandbox (micromamba, conda envs, synthetic data)
 /.sandbox/
+
+# Ribo-seq test data (downloaded by riboseq-test/prepare_data.sh)
+/riboseq-test/data/
+__pycache__/
