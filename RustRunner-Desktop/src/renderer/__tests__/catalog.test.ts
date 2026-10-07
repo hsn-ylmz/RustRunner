@@ -601,3 +601,34 @@ describe('flags verified against the real tools', () => {
     expect(off).not.toContain('-p');
   });
 });
+
+describe('Bowtie2 read pairs and samtools fastq (catalog 2026.16.0)', () => {
+  it('Bowtie2 takes the second read file as an optional slot and aligns pairs when it is set', () => {
+    const t = tool('bowtie2');
+    const second = t.inputs.find((i) => i.name === 'reads2')!;
+    expect(second.required).toBe(false);
+    expect(second.types).toEqual(['fastq']);
+    const cmd = renderCommand(t, defaultParams(t), 4);
+    // One command for both kinds: single-end unless the second file is given.
+    expect(cmd).toContain('set -- -U "{reads}"; if [ -n "{reads2}" ]; then set -- -1 "{reads}" -2 "{reads2}"; fi;');
+    expect(cmd).toContain('-X 500 "$@"');
+    expect(renderCommand(t, { max_fragment: 2000 }, 4)).toContain('-X 2000 "$@"');
+  });
+
+  it('Bowtie2 still asks only for the index and the first reads file', () => {
+    const t = tool('bowtie2');
+    const nodes = [{ id: 'a', position: { x: 0, y: 0 }, data: { ...buildCatalogNodeData(t, []), slotFiles: { index: 'idx', reads: 'r.fq.gz', sam: 'a.sam' } } }];
+    expect(validateCatalogNodes(nodes)).toEqual([]);
+  });
+
+  it('samtools fastq turns a BAM into compressed FASTQ and keeps a failed pipe visible', () => {
+    const t = tool('samtools-fastq');
+    expect(t.install).toEqual(tool('samtools-sort').install);
+    expect(t.inputs.map((i) => i.name)).toEqual(['alignments']);
+    expect(t.outputs.map((o) => [o.name, o.types, o.pattern])).toEqual([['reads', ['fastq'], 'reads.fastq.gz']]);
+    expect(renderCommand(t, {}, 2)).toBe('set -o pipefail; samtools fastq -@ 2 {alignments} | gzip > {reads}');
+    // The Dorado output connects to it, and its output connects to the read filters.
+    expect(t.inputs[0].types).toContain(tool('dorado-basecaller').outputs[0].types[0]);
+    expect(tool('chopper').inputs[0].types).toContain('fastq');
+  });
+});

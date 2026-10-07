@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2026.15.1",
+  "version": "2026.16.0",
   "file_types": [
     "fastq",
     "fasta",
@@ -909,7 +909,7 @@
     {
       "id": "bowtie2",
       "name": "Bowtie2",
-      "description": "Aligns single-end reads to an indexed genome. Writes SAM.",
+      "description": "Aligns reads to an indexed genome, single-end or as read pairs. Writes SAM.",
       "category": "alignment",
       "subcategory": "DNA aligners",
       "install": {
@@ -932,14 +932,25 @@
         },
         {
           "name": "reads",
-          "label": "Reads",
-          "description": "Sequencing reads in FASTQ format (plain or .gz).",
+          "label": "Reads (first of the pair)",
+          "description": "FASTQ with the reads, or the first file of a pair (plain or .gz).",
           "types": [
             "fastq"
           ],
           "required": true,
           "multiple": false,
           "example": "reads.fastq.gz"
+        },
+        {
+          "name": "reads2",
+          "label": "Reads (second of the pair)",
+          "description": "Leave empty for single-end reads.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reads_R2.fastq.gz"
         }
       ],
       "outputs": [
@@ -967,9 +978,18 @@
             "very-sensitive"
           ],
           "description": "Speed against sensitivity."
+        },
+        {
+          "id": "max_fragment",
+          "label": "Longest fragment for pairs",
+          "type": "number",
+          "default": 500,
+          "description": "Read pairs further apart than this many bases are not counted as proper pairs. Use 2000 for ATAC-seq, whose fragments can be long. Ignored for single-end reads.",
+          "min": 50,
+          "step": 50
         }
       ],
-      "command": "bowtie2 -p {threads} --{preset} -x {index} -U {reads} -S {sam}",
+      "command": "set -- -U \"{reads}\"; if [ -n \"{reads2}\" ]; then set -- -1 \"{reads}\" -2 \"{reads2}\"; fi; bowtie2 -p {threads} --{preset} -x {index} -X {max_fragment} \"$@\" -S {sam}",
       "threads": 4,
       "docs": "https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml"
     },
@@ -1350,6 +1370,48 @@
       "command": "samtools flagstat -@ {threads} {alignments} > {report}",
       "threads": 2,
       "docs": "https://www.htslib.org/doc/samtools-flagstat.html"
+    },
+    {
+      "id": "samtools-fastq",
+      "name": "samtools fastq",
+      "description": "Turns an unaligned BAM, such as the output of the Dorado basecaller, into a FASTQ file of reads. Writes compressed FASTQ.",
+      "category": "processing",
+      "subcategory": "Alignment files",
+      "install": {
+        "kind": "conda",
+        "package": "samtools",
+        "channel": "bioconda",
+        "version": "1.24"
+      },
+      "inputs": [
+        {
+          "name": "alignments",
+          "label": "Reads (BAM)",
+          "description": "A BAM with the reads, aligned or not. Secondary and supplementary alignments are skipped, so each read appears once.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "basecalled.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "reads",
+          "label": "Reads",
+          "description": "The reads with their base qualities (compressed FASTQ).",
+          "types": [
+            "fastq"
+          ],
+          "pattern": "reads.fastq.gz",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "set -o pipefail; samtools fastq -@ {threads} {alignments} | gzip > {reads}",
+      "threads": 2,
+      "docs": "https://www.htslib.org/doc/samtools-fastq.html"
     },
     {
       "id": "samtools-merge",

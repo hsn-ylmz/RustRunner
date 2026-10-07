@@ -1,0 +1,224 @@
+{
+  "formatVersion": 1,
+  "id": "nanopore-fastq",
+  "name": "Nanopore reads from FASTQ to coverage",
+  "description": "Filter Nanopore reads, check their quality, map them to a genome and measure coverage. Works on every computer.",
+  "details": "Use this when you already have base-called Nanopore reads as a FASTQ file (the usual output of MinKNOW) and want to know how good they are and how well they cover a reference genome. The pipeline drops reads that are short or of low quality with chopper (Q10 and 500 bases by default), reports the quality and length of what is left with NanoPlot, maps the reads to your reference genome with minimap2 (Nanopore preset), sorts and indexes the alignments with samtools, and measures how deeply each part of the genome is covered with mosdepth. Every tool runs on macOS, Linux and Windows. If you start from raw signal (POD5 files) on a Mac with Apple silicon, the template \"Nanopore from raw signal to coverage\" adds the basecalling step. Change the minimum length and quality in the chopper step for short or noisy samples. For PacBio reads use the same pipeline and change the minimap2 preset in the mapping step.",
+  "domain": "longread",
+  "difficulty": "intermediate",
+  "minCatalogVersion": "2026.16.0",
+  "inputs": [
+    {
+      "id": "reads",
+      "label": "Nanopore reads",
+      "hint": "One FASTQ file of long reads, plain or compressed.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "reads.fastq.gz",
+      "targets": [
+        {
+          "step": "chopper",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "label": "Reference genome",
+      "hint": "The genome the reads should map to, as a FASTA file.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "genome.fa",
+      "targets": [
+        {
+          "step": "minimap2",
+          "slot": "ref"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "chopper",
+      "tool": "chopper",
+      "label": "Filter reads (chopper)",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "nanoplot",
+      "tool": "nanoplot",
+      "label": "Read quality report (NanoPlot)",
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "key": "minimap2",
+      "tool": "minimap2-long",
+      "label": "Map reads (minimap2)",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort",
+      "tool": "samtools-sort",
+      "label": "Sort alignments",
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "index",
+      "tool": "samtools-index",
+      "label": "Index alignments",
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "key": "mosdepth",
+      "tool": "mosdepth",
+      "label": "Coverage (mosdepth)",
+      "position": {
+        "x": 1040,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "chopper",
+      "to": "nanoplot",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "filtered"
+        }
+      ]
+    },
+    {
+      "from": "chopper",
+      "to": "minimap2",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "filtered"
+        }
+      ]
+    },
+    {
+      "from": "minimap2",
+      "to": "sort",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "index",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "mosdepth",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "index",
+      "to": "mosdepth",
+      "bind": [
+        {
+          "slot": "bai",
+          "output": "bai"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Filtered reads",
+      "step": "chopper",
+      "slot": "filtered",
+      "hint": "FASTQ with the reads that passed the quality and length filter."
+    },
+    {
+      "label": "Read quality report",
+      "step": "nanoplot",
+      "slot": "report",
+      "hint": "Open NanoPlot-report.html in a browser: read lengths and qualities."
+    },
+    {
+      "label": "Read statistics",
+      "step": "nanoplot",
+      "slot": "stats",
+      "hint": "The same numbers as text: number of reads, N50, mean quality."
+    },
+    {
+      "label": "Alignments",
+      "step": "sort",
+      "slot": "bam",
+      "hint": "Sorted BAM of the mapped reads."
+    },
+    {
+      "label": "Coverage summary",
+      "step": "mosdepth",
+      "slot": "summary",
+      "hint": "Mean depth for each chromosome."
+    },
+    {
+      "label": "Coverage in windows",
+      "step": "mosdepth",
+      "slot": "regions",
+      "hint": "Mean depth in windows of 500 bases (compressed BED)."
+    }
+  ],
+  "references": [
+    {
+      "label": "De Coster W, Rademakers R. NanoPack2: population-scale evaluation of long-read sequencing data. Bioinformatics 2023;39:btad311.",
+      "url": "https://doi.org/10.1093/bioinformatics/btad311"
+    },
+    {
+      "label": "De Coster W, D'Hert S, Schultz DT, Cruts M, Van Broeckhoven C. NanoPack: visualizing and processing long-read sequencing data. Bioinformatics 2018;34:2666-2669.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty149"
+    },
+    {
+      "label": "Li H. Minimap2: pairwise alignment for nucleotide sequences. Bioinformatics 2018;34:3094-3100.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty191"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    },
+    {
+      "label": "Pedersen BS, Quinlan AR. Mosdepth: quick coverage calculation for genomes and exomes. Bioinformatics 2018;34:867-868.",
+      "url": "https://doi.org/10.1093/bioinformatics/btx699"
+    }
+  ]
+}

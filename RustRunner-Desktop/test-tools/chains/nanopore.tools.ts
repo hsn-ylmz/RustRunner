@@ -14,7 +14,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { defineDomain, ensurePod5Data, exists, read, type Chain, type Check } from '../harness';
-import { nanoStat, tableRows } from '../seqio';
+import { fastqRecords, nanoStat, tableRows } from '../seqio';
 
 const ok = (tool: string, condition: boolean, message: string): Check => ({ tool, ok: condition, message });
 
@@ -77,6 +77,7 @@ const CHAINS: Chain[] = [
       { key: 'dorado', catalog: 'dorado-basecaller', params: { model: 'fast', min_qscore: 0 }, files: { calls: 'calls.bam' } },
       { key: 'summary', catalog: 'dorado-summary', files: { summary: 'sequencing_summary.tsv' } },
       { key: 'flag', catalog: 'samtools-flagstat', files: { report: 'calls_flagstat.txt' } },
+      { key: 'tofastq', catalog: 'samtools-fastq', files: { reads: 'calls.fastq.gz' } },
       { key: 'plotbam', catalog: 'nanoplot', params: { format: '--ubam' }, files: { out_dir: 'nanoplot_bam/' } },
       { key: 'plotsum', catalog: 'nanoplot', params: { format: '--summary' }, files: { out_dir: 'nanoplot_summary/' } },
       { key: 'subset2', catalog: 'pod5-subset', files: { out_dir: 'by_channel_from_summary/' } },
@@ -96,6 +97,7 @@ const CHAINS: Chain[] = [
       ['merge', 'dorado'],
       ['dorado', 'summary'],
       ['dorado', 'flag'],
+      ['dorado', 'tofastq'],
       ['dorado', 'plotbam'],
       ['summary', 'plotsum'],
       ['merge', 'subset2'],
@@ -117,6 +119,7 @@ const CHAINS: Chain[] = [
       const fromFast5 = truth.filter((r) => r.file === 'nano_fast5.fast5');
       const cpuCount = flagstat(read(dir, 'calls_cpu_flagstat.txt'), 'primary');
       const polars = read(dir, 'polars_version.txt').trim();
+      const fastq = fastqRecords(dir, 'calls.fastq.gz');
       return [
         ok('pod5-view', /^1\.\d+\.\d+/.test(polars), `pod5 runs with polars below 2 because of the install's extra package limit (polars ${polars})`),
         ok('pod5-convert-fast5', exists(dir, 'converted.pod5') && fromFast5.length === 4, 'the FAST5 file became a POD5 file'),
@@ -136,6 +139,7 @@ const CHAINS: Chain[] = [
         ok('dorado-basecaller', flagstat(read(dir, 'calls_flagstat.txt'), 'primary') === 20, 'Dorado called all 20 reads'),
         ok('dorado-summary', summary.length === 20 && JSON.stringify(sorted(summary.map((r) => r.read_id))) === JSON.stringify(ids), 'the summary lists exactly the 20 reads of the POD5 file'),
         ok('dorado-summary', summary.every((r) => Number(r.sequence_length_template) > 100 && Number(r.channel) === truth.find((t) => t.id === r.read_id)!.channel), 'every read has a called sequence and its own channel'),
+        ok('samtools-fastq', fastq.length === 20 && JSON.stringify(sorted(fastq.map((r) => r.name))) === JSON.stringify(ids) && fastq.every((r) => r.seq.length > 100 && r.seq.length === r.qual.length), 'the called reads became a FASTQ file with all 20 reads once each, bases and qualities of equal length'),
         ok('nanoplot', nanoStat(read(dir, 'nanoplot_bam/NanoStats.txt'), 'Number of reads:') === 20, 'NanoPlot reads the unaligned BAM from Dorado'),
         ok('nanoplot', nanoStat(read(dir, 'nanoplot_summary/NanoStats.txt'), 'Number of reads:') === 20, 'NanoPlot reads the sequencing summary'),
         ok('dorado-basecaller', cpuCount >= 1 && cpuCount < 4, `on the processor alone, with reads under Q6 dropped, some but not all of the 4 filtered reads are kept (${cpuCount})`),
@@ -147,6 +151,6 @@ const CHAINS: Chain[] = [
 defineDomain({
   domain: 'nanopore',
   prepare: ensurePod5Data,
-  covers: ['pod5-view', 'pod5-inspect', 'pod5-filter', 'pod5-subset', 'pod5-merge', 'pod5-convert-fast5', 'dorado-basecaller', 'dorado-summary'],
+  covers: ['pod5-view', 'pod5-inspect', 'pod5-filter', 'pod5-subset', 'pod5-merge', 'pod5-convert-fast5', 'dorado-basecaller', 'dorado-summary', 'samtools-fastq'],
   chains: CHAINS,
 });

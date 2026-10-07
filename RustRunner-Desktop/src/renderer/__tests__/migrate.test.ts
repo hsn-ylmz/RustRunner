@@ -166,7 +166,8 @@ describe('each version 1 tool becomes a version 2 step with the same files', () 
   it('bowtie2: index prefix and preset', () => {
     const data = migrateOne(v1('bowtie2', 'bowtie2', { index: 'idx/ref', preset: 'fast' }, 'reads.fq', 'aln.sam')).data;
     expect(data.slotFiles).toMatchObject({ index: 'idx/ref', reads: 'reads.fq', sam: 'aln.sam' });
-    expect(data.command).toBe('bowtie2 -p 4 --fast -x {index} -U {reads} -S {sam}');
+    expect(data.command).toContain('bowtie2 -p 4 --fast -x {index} -X 500 "$@" -S {sam}');
+    expect(data.command).toContain('set -- -U "{reads}"');
   });
 
   it('star: genome folder and output prefix become slots; the decompression option is dropped', () => {

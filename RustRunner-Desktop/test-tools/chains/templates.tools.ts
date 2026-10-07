@@ -10,11 +10,15 @@
  * file chosen for each input, and what the results must hold). The layout test
  * in `../coverage.tools.ts` fails for a bundled template without one.
  */
-import { defineDomain, exists, read, truthSnps, type BuiltChain, type Chain, type Check } from '../harness';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { DATA, defineDomain, ensurePod5Data, exists, read, sizeOf, truthSnps, type BuiltChain, type Chain, type Check, type NodeSpec } from '../harness';
+import { ATAC_TRUTH, CHIP_TRUTH, hits, homerRows, homerSummary, isBigWig, overlap, pngSize, regions, type Region } from '../regions';
+import { fastaRecords, fastqRecords, nanoStat, quastTable, samRecords, tableRows } from '../seqio';
 import { bundledTemplates } from '../../src/renderer/templates/registry';
 import { instantiateTemplate, templateNodeId } from '../../src/renderer/templates/instantiate';
 import { collectIssues } from '../../src/renderer/validation';
-import { validateCatalogNodes } from '../../src/renderer/tools/catalog';
+import { applyParamChange, findTool, buildCatalogNodeData, defaultParams, renderCommand, validateCatalogNodes, type ParamValue } from '../../src/renderer/tools/catalog';
 import { convertNodesToWorkflow, labelToId, validateWorkflow } from '../../src/renderer/workflowConversion';
 
 interface Setup {
@@ -23,6 +27,22 @@ interface Setup {
   /** The files chosen for each template input, as the setup step would pass them. */
   values: Record<string, string[]>;
   verify: Chain['verify'];
+  /**
+   * Options changed for the synthetic data, by step key. A template's defaults suit real
+   * data (human genome size, 500000 sampled regions, Q10 reads); the 5 kb genome and the
+   * 16 made-up reads need smaller values. Nothing else about the steps is changed.
+   */
+  overrides?: Record<string, Record<string, ParamValue>>;
+  /**
+   * Steps whose output may be empty on the synthetic data (only that it exists is checked).
+   * The made-up Nanopore signal does not map to any genome, so the depth tables are empty.
+   */
+  mayBeEmpty?: string[];
+  /**
+   * Steps that make something the template asks the person to bring (a Kraken2 database).
+   * They run first, in the same workflow, and the template steps in `before` run after them.
+   */
+  prelude?: { nodes: NodeSpec[]; edges: Array<[string, string]>; before: Record<string, string[]> };
 }
 
 
@@ -166,6 +186,153 @@ export const SETUPS: Record<string, Setup> = {
       ];
     },
   },
+  'chipseq-macs3': {
+    files: ['chip_R1.fastq.gz', 'input_R1.fastq.gz', 'ref.fa', 'genes.gtf'],
+    values: { chip_reads: ['chip_R1.fastq.gz'], control_reads: ['input_R1.fastq.gz'], genome: ['ref.fa'], annotation: ['genes.gtf'] },
+    overrides: { macs3: { genome_size: '5000' }, fingerprint: { sample_regions: 400 } },
+    verify: (dir) => {
+      const truth = CHIP_TRUTH();
+      const peaks = regions(read(dir, 'macs3/sample_peaks.narrowPeak'));
+      const summits = regions(read(dir, 'macs3/sample_summits.bed'));
+      const header = read(dir, 'macs3/sample_peaks.xls');
+      const metrics = tableRows(read(dir, 'fingerprint_metrics.tsv'));
+      const auc = (sample: string) => Number(metrics.find((m) => m.Sample === sample)?.AUC);
+      const fp = pngSize(dir, 'fingerprint.png');
+      const annotated = homerRows(read(dir, 'annotated_peaks.tsv'));
+      const row = (t: Region) => annotated.find((r) => overlap(r, t));
+      const summary = homerSummary(read(dir, 'annotation_summary.txt'));
+      return [
+        ok('fastp', exists(dir, 'chip.trimmed.fastq.gz') && exists(dir, 'input.trimmed.fastq.gz'), 'both read files were trimmed'),
+        ok('bowtie2-build', exists(dir, 'bowtie2_index/reference.fa.1.bt2'), 'the Bowtie2 index was built from the genome'),
+        ok('samtools-index', exists(dir, 'chip.sorted.bam.bai') && exists(dir, 'input.sorted.bam.bai'), 'both sorted BAMs have an index'),
+        ok('macs3-callpeak', peaks.length === truth.length && truth.every((t) => hits(peaks, t).length === 1), `one peak in each of the ${truth.length} planted regions (${peaks.length} peaks)`),
+        ok('macs3-callpeak', peaks.every((p) => hits(truth, p).length === 1) && summits.length === peaks.length, 'no peak outside the planted regions, one summit per peak'),
+        ok('macs3-callpeak', /# ChIP-seq file = \['chip\.sorted\.bam'\]/.test(header) && /# control file = \['input\.sorted\.bam'\]/.test(header), 'MACS3 took the ChIP as treatment and the input as control'),
+        ok('deeptools-bamcoverage', isBigWig(dir, 'chip.bw') && isBigWig(dir, 'input.bw'), 'both signal tracks are bigWig files'),
+        ok('deeptools-plotfingerprint', fp !== null && fp.width > 300 && metrics.length === 2, 'the fingerprint plot is a picture and its numbers have a row for each sample'),
+        ok('deeptools-plotfingerprint', auc('chip.sorted.bam') < auc('input.sorted.bam') - 0.1, `the ChIP is more enriched than the control (AUC ${auc('chip.sorted.bam').toFixed(2)} against ${auc('input.sorted.bam').toFixed(2)})`),
+        ok('homer-annotatepeaks', annotated.length === peaks.length && /^promoter-TSS \(txA\)/.test(row(truth[0])?.annotation ?? '') && /^promoter-TSS \(txB\)/.test(row(truth[3])?.annotation ?? ''), 'the peaks on the two promoters are called promoters of txA and txB'),
+        ok('homer-annotatepeaks', /^exon \(txC/.test(row(truth[2])?.annotation ?? '') && row(truth[1])?.nearest === 'txA', 'the exon peak is called an exon of txC and the intron peak is nearest to txA'),
+        ok('homer-annotatepeaks', summary.Promoter === 2 && summary.Exon === 1 && summary.TTS === 1, `the summary counts 2 promoter, 1 exon and 1 end-of-gene peaks (${JSON.stringify(summary)})`),
+      ];
+    },
+  },
+  'atacseq-genrich': {
+    files: ['atac_R1.fastq.gz', 'atac_R2.fastq.gz', 'ref.fa'],
+    values: { reads1: ['atac_R1.fastq.gz'], reads2: ['atac_R2.fastq.gz'], genome: ['ref.fa'] },
+    verify: (dir) => {
+      const truth = ATAC_TRUTH();
+      const peaks = regions(read(dir, 'genrich_peaks.narrowPeak'));
+      const merged = regions(read(dir, 'merged.bed'));
+      return [
+        ok('bowtie2-build', exists(dir, 'bowtie2_index/reference.fa.1.bt2'), 'the Bowtie2 index was built from the genome'),
+        ok('bowtie2', exists(dir, 'atac.sam') && sizeOf(dir, 'atac.sam') > 100000, 'the read pairs were aligned'),
+        ok('genrich', peaks.length === truth.length && truth.every((t) => hits(peaks, t).length === 1), `ATAC mode: exactly one peak in each of the ${truth.length} open regions (${peaks.length} peaks)`),
+        ok('genrich', peaks.every((p) => hits(truth, p).length === 1 && p.columns.length === 10), 'no peak outside the open regions, all in narrowPeak format'),
+        ok('bedtools-merge', merged.length === truth.length && truth.every((t) => hits(merged, t).length === 1), `the merged peaks are the ${truth.length} open regions`),
+        ok('samtools-index', exists(dir, 'atac.sorted.bam.bai'), 'the position-sorted BAM has an index'),
+        ok('deeptools-bamcoverage', isBigWig(dir, 'coverage.bw'), 'the signal track is a bigWig file'),
+      ];
+    },
+  },
+  'nanopore-signal': {
+    files: ['nano_a.pod5', 'nano_b.pod5', 'nano_truth.tsv', 'long_ref.fa'],
+    values: { pod5: ['nano_a.pod5', 'nano_b.pod5'], reference: ['long_ref.fa'] },
+    // The signal is made up, so its calls are low quality and short: the fastest model, no quality cut, and a small length cut.
+    overrides: { dorado: { model: 'fast', min_qscore: 0 }, chopper: { min_quality: 0, min_length: 50 } },
+    mayBeEmpty: ['mosdepth'],
+    verify: (dir) => {
+      const ids = read(dir, 'nano_truth.tsv').split('\n').filter(Boolean).map((l) => l.split('\t')).filter((f) => f[0] !== 'nano_fast5.fast5').map((f) => f[1]).sort();
+      const called = fastqRecords(dir, 'reads.fastq.gz');
+      const kept = fastqRecords(dir, 'chopped.fastq.gz');
+      const summary = read(dir, 'mosdepth/sample.mosdepth.summary.txt');
+      const mapped = samRecords(read(dir, 'long_aligned.sam'));
+      return [
+        ok('pod5-merge', /16 reads/.test(read(dir, 'pod5_inspect.txt')), 'the merged signal file holds the 16 reads of both files'),
+        ok('dorado-basecaller', called.length === ids.length && JSON.stringify(called.map((r) => r.name).sort()) === JSON.stringify(ids), 'Dorado called every one of the 16 reads, each once'),
+        ok('chopper', kept.length === called.length && kept.every((r) => r.seq.length >= 50), `chopper kept the ${called.length} called reads (${kept.length})`),
+        ok('nanoplot', nanoStat(read(dir, 'nanoplot/NanoStats.txt'), 'Number of reads:') === kept.length, 'NanoPlot reports the filtered reads'),
+        ok('minimap2-long', mapped.length === kept.length, `minimap2 got every kept read (${mapped.length}); the made-up signal does not map to the genome, so none align (${mapped.filter((r) => (r.flag & 4) === 0).length})`),
+        ok('samtools-index', exists(dir, 'sorted.bam') && exists(dir, 'sorted.bam.bai'), 'the sorted BAM has an index'),
+        ok('mosdepth', /^total\t0\t0\t0\.00/m.test(summary) && exists(dir, 'mosdepth/sample.regions.bed.gz'), 'mosdepth ran and reported no covered bases, as it must when nothing aligned'),
+      ];
+    },
+  },
+  'nanopore-fastq': {
+    files: ['long_ont.fastq.gz', 'long_ref.fa'],
+    values: { reads: ['long_ont.fastq.gz'], reference: ['long_ref.fa'] },
+    verify: (dir) => {
+      const raw = fastqRecords(dir, 'long_ont.fastq.gz');
+      const kept = fastqRecords(dir, 'chopped.fastq.gz');
+      const bases = kept.reduce((n, r) => n + r.seq.length, 0);
+      const summary = tableRows(read(dir, 'mosdepth/sample.mosdepth.summary.txt'));
+      const chr = summary.find((r) => r.chrom === 'contigL');
+      const windows = fs.existsSync(path.join(dir, 'mosdepth/sample.regions.bed.gz'));
+      return [
+        ok('chopper', kept.length > 0 && kept.length < raw.length && kept.every((r) => r.seq.length >= 500), `chopper dropped the poor and short reads (${kept.length} of ${raw.length} kept)`),
+        ok('nanoplot', nanoStat(read(dir, 'nanoplot/NanoStats.txt'), 'Number of reads:') === kept.length, 'NanoPlot reports the filtered reads'),
+        ok('minimap2-long', exists(dir, 'sorted.bam.bai'), 'the reads were mapped, sorted and indexed'),
+        ok('mosdepth', Boolean(chr) && Number(chr!.mean) > 0.7 * bases / 25000 && Number(chr!.mean) < 1.1 * bases / 25000, `mean depth ${chr?.mean} matches the ${(bases / 25000).toFixed(1)}x the kept reads give`),
+        ok('mosdepth', windows, 'the depth in windows was written'),
+      ];
+    },
+  },
+  'metagenomics-kraken2-bracken': {
+    files: ['meta_A.fa', 'meta_B.fa', 'meta_C.fa', 'meta_names.dmp', 'meta_nodes.dmp', 'meta_reads.fastq.gz', 'meta_truth.tsv'],
+    values: { reads: ['meta_reads.fastq.gz'], database: ['bracken_db/'] },
+    // The database the person would download is made here from three small genomes.
+    prelude: {
+      nodes: [
+        { key: 'dbbuild', catalog: 'kraken2-build', files: { genomes: 'meta_A.fa, meta_B.fa, meta_C.fa', names: 'meta_names.dmp', nodes: 'meta_nodes.dmp', db: 'kraken2_db/' } },
+        { key: 'dbprep', catalog: 'bracken-build', files: { db: 'kraken2_db/', bracken_db: 'bracken_db/' } },
+      ],
+      edges: [['dbbuild', 'dbprep']],
+      before: { dbprep: ['kraken2', 'bracken'] },
+    },
+    verify: (dir) => {
+      const t = Object.fromEntries(read(dir, 'meta_truth.tsv').split('\n').filter(Boolean).map((l) => l.split('\t')).map(([k, n]) => [k, Number(n)]));
+      const estimates = Object.fromEntries(tableRows(read(dir, 'bracken_abundance.tsv')).map((r) => [Number(r.taxonomy_id), r]));
+      const report = read(dir, 'kraken2_report.tsv');
+      const within = (value: number, expected: number) => Math.abs(value - expected) <= expected * 0.05;
+      const modules = multiqcModules(dir, 'multiqc');
+      return [
+        ok('kraken2', /\t201\t/.test(report) && /\t101\t/.test(report) && /\t102\t/.test(report), 'Kraken2 found the three species of the database'),
+        ok('bracken', Object.keys(estimates).length === 3, 'Bracken has one line for each of the three species'),
+        ok('bracken', within(Number(estimates[101].new_est_reads), t.A) && within(Number(estimates[102].new_est_reads), t.B) && within(Number(estimates[201].new_est_reads), t.C), `the estimates are within 5 percent of the true ${t.A}, ${t.B} and ${t.C} reads (${estimates[101].new_est_reads}, ${estimates[102].new_est_reads}, ${estimates[201].new_est_reads})`),
+        ok('bracken', exists(dir, 'bracken_report.tsv'), 'the summary with the Bracken numbers was written'),
+        ok('multiqc', ['fastp', 'Kraken'].every((m) => modules.includes(m)), `MultiQC read fastp and Kraken (it read ${modules.join(', ')})`),
+      ];
+    },
+  },
+  'assembly-spades-quast': {
+    files: ['asm_R1.fastq.gz', 'asm_R2.fastq.gz', 'long_ref.fa'],
+    values: { reads1: ['asm_R1.fastq.gz'], reads2: ['asm_R2.fastq.gz'], reference: ['long_ref.fa'] },
+    verify: (dir) => {
+      const contigs = fastaRecords(dir, 'spades/contigs.fasta');
+      const quast = quastTable(read(dir, 'quast/report.tsv'));
+      const column = Object.keys(quast['Genome fraction (%)'] ?? {})[0];
+      return [
+        ok('spades', contigs.length === 1 && contigs[0].seq.length > 24900 && contigs[0].seq.length < 25300, `SPAdes assembled the 25 kb genome into one contig (${contigs.map((c) => c.seq.length).join(', ')})`),
+        ok('quast', Number(quast['Genome fraction (%)'][column]) > 99.9 && Number(quast['# misassemblies'][column]) === 0, 'QUAST: the assembly covers the whole reference with no misassembly'),
+        ok('quast', Number(quast['# contigs'][column]) === 1 && exists(dir, 'quast/report.html'), 'QUAST counts one contig and wrote its page'),
+      ];
+    },
+  },
+  'assembly-flye-quast': {
+    files: ['long_ont.fastq.gz', 'long_ref.fa'],
+    values: { reads: ['long_ont.fastq.gz'], reference: ['long_ref.fa'] },
+    verify: (dir) => {
+      const contigs = fastaRecords(dir, 'flye/assembly.fasta');
+      const info = tableRows(read(dir, 'flye/assembly_info.txt'));
+      const quast = quastTable(read(dir, 'quast/report.tsv'));
+      const column = Object.keys(quast['Genome fraction (%)'] ?? {})[0];
+      return [
+        ok('flye', contigs.length === 1 && contigs[0].seq.length > 24800 && contigs[0].seq.length < 25200, `Flye assembled the 25 kb genome into one contig (${contigs.map((c) => c.seq.length).join(', ')})`),
+        ok('flye', info.length === 1 && info[0]['circ.'] === 'Y', 'the contig table says the contig is circular'),
+        ok('quast', Number(quast['Genome fraction (%)'][column]) > 99.5 && Number(quast['# misassemblies'][column]) === 0, 'QUAST: the assembly covers the reference with no misassembly'),
+      ];
+    },
+  },
 };
 
 function templateChain(id: string): Chain {
@@ -177,12 +344,43 @@ function templateChain(id: string): Chain {
     const made = instantiateTemplate(template, setup.values);
     if (made.ok === false) throw new Error(made.errors.join('; '));
     // The same switches every chain turns on: a declared output that is not what the tool writes fails the step.
-    const nodes = made.nodes.map((n) => ({ ...n, data: { ...n.data, checkExists: true, checkNonEmpty: true } }));
-    const issues = collectIssues(nodes, {}, made.edges);
+    let nodes = made.nodes.map((n) => {
+      const changes = Object.entries(setup.overrides ?? {}).find(([key]) => templateNodeId(key) === n.id)?.[1];
+      const tool = findTool(n.data.catalogId)!;
+      const data = changes ? { ...n.data, ...applyParamChange(tool, n.data, { params: { ...n.data.catalogParams, ...changes } }) } : n.data;
+      return { ...n, data: { ...data, checkExists: true, checkNonEmpty: !(setup.mayBeEmpty ?? []).some((key) => templateNodeId(key) === n.id) } };
+    });
+    let edges = made.edges;
+    const preludeStepIds: Record<string, string> = {};
+    if (setup.prelude) {
+      // The things the template asks for are made by catalog steps of their own, which come first.
+      const labels = nodes.map((n) => n.data.label as string);
+      const extra = setup.prelude.nodes.map((spec) => {
+        const tool = findTool(spec.catalog!)!;
+        const data: Record<string, any> = buildCatalogNodeData(tool, labels);
+        const params = { ...defaultParams(tool), ...spec.params };
+        data.catalogParams = params;
+        data.command = renderCommand(tool, params, tool.threads);
+        data.slotFiles = { ...data.slotFiles, ...spec.files };
+        data.checkExists = true;
+        data.checkNonEmpty = true;
+        labels.push(data.label);
+        return { id: `pre_${spec.key}`, type: 'custom', position: { x: -300, y: 0 }, data };
+      });
+      nodes = [...nodes, ...extra];
+      const link = (source: string, target: string) => ({ id: `${source}-${target}`, source, target });
+      edges = [
+        ...edges,
+        ...setup.prelude.edges.map(([a, b]) => link(`pre_${a}`, `pre_${b}`)),
+        ...Object.entries(setup.prelude.before).flatMap(([pre, steps]) => steps.map((k) => link(`pre_${pre}`, templateNodeId(k)))),
+      ];
+      for (const spec of setup.prelude.nodes) preludeStepIds[spec.key] = labelToId(extra.find((n) => n.id === `pre_${spec.key}`)!.data.label as string);
+    }
+    const issues = collectIssues(nodes, {}, edges);
     if (issues.length > 0) throw new Error(issues.map((i) => `${i.nodeLabel}: ${i.message}`).join('; '));
     const problems = validateCatalogNodes(nodes);
     if (problems.length > 0) throw new Error(problems.join('; '));
-    const workflow = convertNodesToWorkflow(nodes, made.edges, {}, { name });
+    const workflow = convertNodesToWorkflow(nodes, edges, {}, { name });
     const errors = validateWorkflow(workflow);
     if (errors.length > 0) throw new Error(errors.join('; '));
     const stepOf: Record<string, string> = {};
@@ -193,6 +391,10 @@ function templateChain(id: string): Chain {
       stepOf[step.key] = stepId;
       toolOf[stepId] = step.tool;
     }
+    for (const spec of setup.prelude?.nodes ?? []) {
+      stepOf[spec.key] = preludeStepIds[spec.key];
+      toolOf[preludeStepIds[spec.key]] = spec.catalog!;
+    }
     return { workflow, stepOf, toolOf };
   };
   return { name, files: setup.files, nodes: [], edges: [], build, verify: setup.verify };
@@ -202,5 +404,7 @@ defineDomain({
   domain: 'templates',
   // The tools are covered by their own domains; this domain checks the templates built from them.
   covers: [],
+  // The Nanopore templates start from the synthetic signal files.
+  prepare: ensurePod5Data,
   chains: Object.keys(SETUPS).map(templateChain),
 });

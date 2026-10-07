@@ -1,0 +1,515 @@
+{
+  "formatVersion": 1,
+  "id": "chipseq-macs3",
+  "name": "ChIP-seq peak calling with MACS3",
+  "description": "Find where a protein binds the genome: trim, align a ChIP sample and its input control, call peaks, draw the signal and say which genes the peaks lie near.",
+  "details": "Use this for a ChIP-seq experiment on one sample with an input (or IgG) control, for example a transcription factor or a histone mark in a genome you have as a FASTA file and a GTF. The pipeline trims both read files with fastp, builds a Bowtie2 index of your genome, aligns the ChIP and the control, sorts and indexes the alignments with samtools, and calls peaks with MACS3 (the ChIP against the control). deepTools then makes a signal track of each sample that you can open in a genome browser, and a fingerprint plot that shows how strongly the ChIP is enriched compared with the control. HOMER finally tells you for each peak whether it lies in a promoter, an exon, an intron or between genes, and which gene is nearest. Before you run it, open the MACS3 step and set \"Genome size\" to your organism (hs for human, mm for mouse, or a number of bases for other genomes); the default is human. The reads are single-end; for paired reads, align them yourself and set \"Read type\" in the MACS3 step to paired-end. Broad histone marks need MACS3 in broad mode, which this template does not use. One ChIP sample and one control per run.",
+  "domain": "epigenomics",
+  "difficulty": "advanced",
+  "minCatalogVersion": "2026.16.0",
+  "inputs": [
+    {
+      "id": "chip_reads",
+      "label": "ChIP reads",
+      "hint": "One FASTQ file of single-end reads from the immunoprecipitated sample, plain or compressed.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "chip.fastq.gz",
+      "targets": [
+        {
+          "step": "fastp_chip",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "control_reads",
+      "label": "Control reads",
+      "hint": "One FASTQ file of single-end reads from the input or IgG control of the same experiment.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "input.fastq.gz",
+      "targets": [
+        {
+          "step": "fastp_input",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "genome",
+      "label": "Reference genome",
+      "hint": "The genome as a FASTA file. The reads are aligned to it.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "genome.fa",
+      "targets": [
+        {
+          "step": "bt_build",
+          "slot": "ref"
+        },
+        {
+          "step": "homer",
+          "slot": "genome"
+        }
+      ]
+    },
+    {
+      "id": "annotation",
+      "label": "Gene annotation",
+      "hint": "The genes of the same genome in GTF format, with the same chromosome names as the FASTA. Used to say where each peak lies.",
+      "types": [
+        "gtf"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "genes.gtf",
+      "targets": [
+        {
+          "step": "homer",
+          "slot": "annotation"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "fastp_chip",
+      "tool": "fastp",
+      "label": "Trim ChIP reads (fastp)",
+      "files": {
+        "trimmed": "chip.trimmed.fastq.gz",
+        "html_report": "chip.fastp.html",
+        "json_report": "chip.fastp.json"
+      },
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "fastp_input",
+      "tool": "fastp",
+      "label": "Trim control reads (fastp)",
+      "files": {
+        "trimmed": "input.trimmed.fastq.gz",
+        "html_report": "input.fastp.html",
+        "json_report": "input.fastp.json"
+      },
+      "position": {
+        "x": 0,
+        "y": 160
+      }
+    },
+    {
+      "key": "bt_build",
+      "tool": "bowtie2-build",
+      "label": "Bowtie2 index",
+      "position": {
+        "x": 0,
+        "y": 320
+      }
+    },
+    {
+      "key": "bt_chip",
+      "tool": "bowtie2",
+      "label": "Align ChIP reads (Bowtie2)",
+      "files": {
+        "sam": "chip.sam"
+      },
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "bt_input",
+      "tool": "bowtie2",
+      "label": "Align control reads (Bowtie2)",
+      "files": {
+        "sam": "input.sam"
+      },
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "key": "sort_chip",
+      "tool": "samtools-sort",
+      "label": "Sort ChIP alignments",
+      "files": {
+        "bam": "chip.sorted.bam"
+      },
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort_input",
+      "tool": "samtools-sort",
+      "label": "Sort control alignments",
+      "files": {
+        "bam": "input.sorted.bam"
+      },
+      "position": {
+        "x": 520,
+        "y": 160
+      }
+    },
+    {
+      "key": "idx_chip",
+      "tool": "samtools-index",
+      "label": "Index ChIP alignments",
+      "files": {
+        "bai": "chip.sorted.bam.bai"
+      },
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "key": "idx_input",
+      "tool": "samtools-index",
+      "label": "Index control alignments",
+      "files": {
+        "bai": "input.sorted.bam.bai"
+      },
+      "position": {
+        "x": 780,
+        "y": 160
+      }
+    },
+    {
+      "key": "macs3",
+      "tool": "macs3-callpeak",
+      "label": "Call peaks (MACS3)",
+      "params": {
+        "format": "BAM"
+      },
+      "position": {
+        "x": 780,
+        "y": 320
+      }
+    },
+    {
+      "key": "cov_chip",
+      "tool": "deeptools-bamcoverage",
+      "label": "ChIP signal track",
+      "files": {
+        "coverage": "chip.bw"
+      },
+      "position": {
+        "x": 1040,
+        "y": 0
+      }
+    },
+    {
+      "key": "cov_input",
+      "tool": "deeptools-bamcoverage",
+      "label": "Control signal track",
+      "files": {
+        "coverage": "input.bw"
+      },
+      "position": {
+        "x": 1040,
+        "y": 160
+      }
+    },
+    {
+      "key": "fingerprint",
+      "tool": "deeptools-plotfingerprint",
+      "label": "Enrichment fingerprint",
+      "position": {
+        "x": 1040,
+        "y": 320
+      }
+    },
+    {
+      "key": "homer",
+      "tool": "homer-annotatepeaks",
+      "label": "Annotate peaks (HOMER)",
+      "position": {
+        "x": 1040,
+        "y": 480
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "fastp_chip",
+      "to": "bt_chip",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "fastp_input",
+      "to": "bt_input",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "bt_build",
+      "to": "bt_chip",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index"
+        }
+      ]
+    },
+    {
+      "from": "bt_build",
+      "to": "bt_input",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index"
+        }
+      ]
+    },
+    {
+      "from": "bt_chip",
+      "to": "sort_chip",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "bt_input",
+      "to": "sort_input",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "sort_chip",
+      "to": "idx_chip",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort_input",
+      "to": "idx_input",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort_chip",
+      "to": "macs3",
+      "bind": [
+        {
+          "slot": "treatment",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort_input",
+      "to": "macs3",
+      "bind": [
+        {
+          "slot": "control",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort_chip",
+      "to": "cov_chip",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "idx_chip",
+      "to": "cov_chip",
+      "bind": [
+        {
+          "slot": "bai",
+          "output": "bai"
+        }
+      ]
+    },
+    {
+      "from": "sort_input",
+      "to": "cov_input",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "idx_input",
+      "to": "cov_input",
+      "bind": [
+        {
+          "slot": "bai",
+          "output": "bai"
+        }
+      ]
+    },
+    {
+      "from": "sort_chip",
+      "to": "fingerprint",
+      "bind": [
+        {
+          "slot": "bams",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort_input",
+      "to": "fingerprint",
+      "bind": [
+        {
+          "slot": "bams",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "idx_chip",
+      "to": "fingerprint",
+      "bind": [
+        {
+          "slot": "bais",
+          "output": "bai"
+        }
+      ]
+    },
+    {
+      "from": "idx_input",
+      "to": "fingerprint",
+      "bind": [
+        {
+          "slot": "bais",
+          "output": "bai"
+        }
+      ]
+    },
+    {
+      "from": "macs3",
+      "to": "homer",
+      "bind": [
+        {
+          "slot": "peaks",
+          "output": "peaks"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Peaks",
+      "step": "macs3",
+      "slot": "peaks",
+      "hint": "narrowPeak file: one peak per line with its fold enrichment and significance."
+    },
+    {
+      "label": "Peak summits",
+      "step": "macs3",
+      "slot": "summits",
+      "hint": "The single highest base of each peak (BED)."
+    },
+    {
+      "label": "ChIP signal track",
+      "step": "cov_chip",
+      "slot": "coverage",
+      "hint": "bigWig file to open in a genome browser such as IGV."
+    },
+    {
+      "label": "Control signal track",
+      "step": "cov_input",
+      "slot": "coverage",
+      "hint": "bigWig file of the control, to compare with the ChIP."
+    },
+    {
+      "label": "Fingerprint plot",
+      "step": "fingerprint",
+      "slot": "plot",
+      "hint": "A picture: the more the ChIP curve bends away from the control, the stronger the enrichment."
+    },
+    {
+      "label": "Annotated peaks",
+      "step": "homer",
+      "slot": "annotated",
+      "hint": "Table: where each peak lies and the nearest gene."
+    },
+    {
+      "label": "Summary by place",
+      "step": "homer",
+      "slot": "stats",
+      "hint": "How many peaks lie in promoters, exons, introns and between genes."
+    }
+  ],
+  "references": [
+    {
+      "label": "Zhang Y, Liu T, Meyer CA, et al. Model-based analysis of ChIP-Seq (MACS). Genome Biology 2008;9:R137.",
+      "url": "https://doi.org/10.1186/gb-2008-9-9-r137"
+    },
+    {
+      "label": "Langmead B, Salzberg SL. Fast gapped-read alignment with Bowtie 2. Nature Methods 2012;9:357-359.",
+      "url": "https://doi.org/10.1038/nmeth.1923"
+    },
+    {
+      "label": "Ramirez F, Ryan DP, Gruning B, et al. deepTools2: a next generation web server for deep-sequencing data analysis. Nucleic Acids Research 2016;44:W160-W165.",
+      "url": "https://doi.org/10.1093/nar/gkw257"
+    },
+    {
+      "label": "Heinz S, Benner C, Spann N, et al. Simple combinations of lineage-determining transcription factors prime cis-regulatory elements required for macrophage and B cell identities. Molecular Cell 2010;38:576-589.",
+      "url": "https://doi.org/10.1016/j.molcel.2010.05.004"
+    },
+    {
+      "label": "Landt SG, Marinov GK, Kundaje A, et al. ChIP-seq guidelines and practices of the ENCODE and modENCODE consortia. Genome Research 2012;22:1813-1831.",
+      "url": "https://doi.org/10.1101/gr.136184.111"
+    },
+    {
+      "label": "Chen S, Zhou Y, Chen Y, Gu J. fastp: an ultra-fast all-in-one FASTQ preprocessor. Bioinformatics 2018;34:i884-i890.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty560"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    }
+  ]
+}

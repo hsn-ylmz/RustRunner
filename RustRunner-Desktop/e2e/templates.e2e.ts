@@ -54,7 +54,7 @@ test('the empty canvas offers templates first, and the gallery shows what each o
   await expect(card).toContainText('Uses FastQC, fastp, MultiQC');
   await expect(card.getByTestId('template-dag')).toHaveAttribute('aria-label', /Pipeline of 4 steps: FastQC \(raw reads\), then/);
   // No tool of this template needs a database.
-  await expect(page.getByTestId('template-needs-database')).toHaveCount(0);
+  await expect(card.getByTestId('template-needs-database')).toHaveCount(0);
   await expect(page.getByTestId('my-templates-empty')).toBeVisible();
 });
 
@@ -64,6 +64,8 @@ test('search and the topic filter narrow the list', async ({ page }) => {
   await expect(page.getByTestId('template-card-basic-read-qc')).toBeVisible();
   await page.getByTestId('template-search').fill('kraken');
   await expect(page.getByTestId('template-card-basic-read-qc')).toHaveCount(0);
+  await expect(page.getByTestId('template-card-metagenomics-kraken2-bracken')).toBeVisible();
+  await page.getByTestId('template-search').fill('zzzqqq');
   await expect(page.getByTestId('template-empty')).toContainText('No ready-made template matches');
   await page.getByTestId('template-search').fill('salmon');
   await expect(page.getByTestId('template-card-rnaseq-salmon')).toBeVisible();
@@ -72,7 +74,7 @@ test('search and the topic filter narrow the list', async ({ page }) => {
   await page.getByTestId('template-domain').selectOption('qc');
   await expect(page.getByTestId('template-card-basic-read-qc')).toBeVisible();
   // The select offers only topics that have a template.
-  await expect(page.getByTestId('template-domain').locator('option')).toHaveText(['All topics', 'Read quality', 'DNA sequencing', 'RNA sequencing']);
+  await expect(page.getByTestId('template-domain').locator('option')).toHaveText(['All topics', 'Read quality', 'DNA sequencing', 'RNA sequencing', 'Epigenomics', 'Long reads', 'Metagenomics']);
 });
 
 test('the RNA-seq and variant calling templates are listed, and the paired-end one asks for both read files', async ({
@@ -95,6 +97,60 @@ test('the RNA-seq and variant calling templates are listed, and the paired-end o
   await expect(page.getByTestId('template-dialog')).toHaveCount(0);
   await expect(nodes(page)).toHaveCount(10);
   await expect(nodes(page).filter({ hasText: 'Align read pairs (BWA-MEM)' })).toHaveCount(1);
+});
+
+test('the epigenomics, long-read, metagenomics and assembly templates are listed by topic, and the ones that need a database say so', async ({
+  page,
+}) => {
+  await openGallery(page);
+  const ids = {
+    epigenomics: ['chipseq-macs3', 'atacseq-genrich'],
+    longread: ['nanopore-signal', 'nanopore-fastq', 'assembly-spades-quast', 'assembly-flye-quast'],
+    metagenomics: ['metagenomics-kraken2-bracken'],
+  };
+  for (const [topic, list] of Object.entries(ids)) {
+    await page.getByTestId('template-domain').selectOption(topic);
+    for (const id of list) await expect(page.getByTestId(`template-card-${id}`)).toBeVisible();
+    await expect(page.getByTestId('template-card-basic-read-qc')).toHaveCount(0);
+  }
+  await page.getByTestId('template-domain').selectOption('');
+  // The need is shown on the card before anything is created, with the link to the downloads.
+  const kraken = page.getByTestId('template-card-metagenomics-kraken2-bracken');
+  await expect(kraken.getByTestId('template-needs-database')).toBeVisible();
+  // Dorado downloads its model on the first run.
+  await expect(page.getByTestId('template-card-nanopore-signal').getByTestId('template-needs-database')).toBeVisible();
+  await expect(page.getByTestId('template-card-nanopore-fastq').getByTestId('template-needs-database')).toHaveCount(0);
+  await expect(page.getByTestId('template-card-atacseq-genrich').getByTestId('template-needs-database')).toHaveCount(0);
+});
+
+test('the metagenomics setup names both databases, with the link to the downloads, before the workflow is made', async ({ page }) => {
+  await openGallery(page);
+  await page.getByTestId('template-card-metagenomics-kraken2-bracken').click();
+  const notes = page.getByTestId('template-database-note');
+  await expect(notes).toHaveCount(2);
+  await expect(notes.nth(0)).toContainText('Kraken2');
+  await expect(notes.nth(0)).toContainText('Kraken2 index downloads');
+  await expect(notes.nth(1)).toContainText('Bracken');
+  await page.getByTestId('template-input-field-reads').fill('/data/s.fastq.gz');
+  await page.getByTestId('template-input-field-database').fill('/data/k2_standard_8gb');
+  await page.getByTestId('template-create').click();
+  await expect(nodes(page)).toHaveCount(4);
+  await expect(page.getByTestId('problems-toggle')).toHaveCount(0);
+});
+
+test('ATAC-seq asks for both read files and a reference, and offers the regions to ignore as optional', async ({ page }) => {
+  await openGallery(page);
+  await page.getByTestId('template-card-atacseq-genrich').click();
+  await expect(page.getByTestId('template-setup')).toBeVisible();
+  await expect(page.getByTestId('template-input-field-blacklist')).toBeVisible();
+  await page.getByTestId('template-input-field-reads1').fill('/data/a_R1.fastq.gz');
+  await page.getByTestId('template-input-field-reads2').fill('/data/a_R2.fastq.gz');
+  await page.getByTestId('template-input-field-genome').fill('/data/genome.fa');
+  await page.getByTestId('template-create').click();
+  await expect(page.getByTestId('template-dialog')).toHaveCount(0);
+  await expect(nodes(page)).toHaveCount(8);
+  await expect(nodes(page).filter({ hasText: 'Call peaks (Genrich, ATAC mode)' })).toHaveCount(1);
+  await expect(page.getByTestId('problems-toggle')).toHaveCount(0);
 });
 
 test('the quantification templates make their steps with the files in place', async ({ page }) => {
