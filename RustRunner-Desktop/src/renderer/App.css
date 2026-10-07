@@ -1895,6 +1895,12 @@
   min-width: 0;
 }
 
+.template-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .template-details {
   margin: 0;
   line-height: var(--leading-normal);

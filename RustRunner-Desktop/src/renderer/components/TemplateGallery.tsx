@@ -43,6 +43,7 @@ import {
 import {
   domainLabel,
   domainsOf,
+  detailParagraphs,
   filterEntries,
   readLayoutLabel,
   stepCountLabel,
@@ -532,7 +533,13 @@ function Setup({
   return (
     <div className="template-setup" data-testid="template-setup">
       <div className="template-setup-main">
-        <p className="template-details">{template.details}</p>
+        <div className="template-details-body">
+          {detailParagraphs(template.details).map((paragraph) => (
+            <p key={paragraph} className="template-details">
+              {paragraph}
+            </p>
+          ))}
+        </div>
 
         {entry.notes && entry.notes.length > 0 && (
           <Callout tone="info" data-testid="template-adapted-note">

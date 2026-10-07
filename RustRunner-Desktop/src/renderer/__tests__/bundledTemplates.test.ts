@@ -32,6 +32,7 @@ describe('bundled templates', () => {
       'metagenomics-kraken2-bracken',
       'assembly-spades-quast',
       'assembly-flye-quast',
+      'riboseq-umi-ribowaltz',
     ]);
   });
 

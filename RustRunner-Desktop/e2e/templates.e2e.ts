@@ -496,6 +496,46 @@ test('a template from an older version is adapted and says what changed; one fro
   await expect(page.getByTestId('problems-toggle')).toHaveCount(0);
 });
 
+test('the Ribo-seq template asks for its six files and the library settings, and makes the 20-step pipeline', async ({ page }) => {
+  await openGallery(page);
+  await page.getByTestId('template-search').fill('ribo');
+  const card = page.getByTestId('template-card-riboseq-umi-ribowaltz');
+  await expect(card).toBeVisible();
+  await expect(card).toContainText('Ribo-seq with UMIs (riboWaltz)');
+  await expect(card).toContainText('20 steps');
+  await card.click();
+  await expect(page.getByTestId('template-setup')).toBeVisible();
+  // The settings that depend on the library start at the values of the public test library.
+  await expect(page.getByTestId('template-settings')).toBeVisible();
+  await expect(page.getByLabel(/^3' adapter/)).toHaveValue('AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC');
+  await expect(page.getByLabel(/^UMI length/)).toHaveValue('12');
+  await expect(page.getByLabel(/^Bases to remove next to the UMI/)).toHaveValue('4');
+  await expect(page.getByLabel(/^Shortest footprint/)).toHaveValue('28');
+  await expect(page.getByLabel(/^Longest footprint/)).toHaveValue('34');
+  await expect(page.getByLabel(/^Mismatches allowed in STAR/)).toHaveValue('2');
+  await expect(page.getByLabel(/^Most places a read may align to/)).toHaveValue('1');
+  const files: Record<string, string> = {
+    reads: '/data/sample.fastq.gz',
+    rrna: '/data/rRNA.fa',
+    trna: '/data/tRNA.fa',
+    ncrna: '/data/ncRNA.fa',
+    genome: '/data/genome.fa',
+    annotation: '/data/genes.gtf',
+  };
+  for (const [id, file] of Object.entries(files)) await page.getByTestId(`template-input-field-${id}`).fill(file);
+  await page.getByLabel(/^UMI length/).fill('10');
+  await page.getByTestId('template-create').click();
+  await expect(page.getByTestId('template-dialog')).toHaveCount(0);
+  await expect(nodes(page)).toHaveCount(20);
+  await expect(nodes(page).filter({ hasText: 'FastQC' })).toHaveCount(4);
+  await expect(nodes(page).filter({ hasText: 'riboWaltz report' })).toHaveCount(1);
+  // Every file is given: nothing is reported missing.
+  await expect(page.getByTestId('problems-toggle')).toHaveCount(0);
+  // The setting typed in the setup step reached the step.
+  await nodes(page).filter({ hasText: 'Move UMI to read name' }).first().click();
+  await expect(page.getByLabel(/^UMI length/)).toHaveValue('10');
+});
+
 test('a workflow with a step written by hand cannot become a template, and says why', async ({ page }) => {
   await page.getByTestId('add-node').click();
   await expect(nodes(page)).toHaveCount(1);

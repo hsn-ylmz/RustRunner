@@ -6,6 +6,10 @@
  * synthetic data. A template that works in the editor but not in the engine,
  * or whose declared outputs are not what the tools write, fails here.
  *
+ * The Ribo-seq template runs on the real HEK293T footprint reads of `riboseq-test/data`
+ * (build them once with `riboseq-test/prepare_data.sh`) and is held to the checks of
+ * `../riboseq/shared.ts`; its 5 million read variant runs with RIBOSEQ_FULL=1.
+ *
  * To add a bundled template: add an entry to `SETUPS` (the data files and the
  * file chosen for each input, and what the results must hold). The layout test
  * in `../coverage.tools.ts` fails for a bundled template without one.
@@ -15,6 +19,7 @@ import * as path from 'node:path';
 import { DATA, defineDomain, ensurePod5Data, exists, read, sizeOf, truthSnps, type BuiltChain, type Chain, type Check, type NodeSpec } from '../harness';
 import { ATAC_TRUTH, CHIP_TRUTH, hits, homerRows, homerSummary, isBigWig, overlap, pngSize, regions, type Region } from '../regions';
 import { fastaRecords, fastqRecords, nanoStat, quastTable, samRecords, tableRows } from '../seqio';
+import { linkRiboData, verifyRiboseq } from '../riboseq/shared';
 import { bundledTemplates } from '../../src/renderer/templates/registry';
 import { instantiateTemplate, templateNodeId, type SettingTexts } from '../../src/renderer/templates/instantiate';
 import { collectIssues } from '../../src/renderer/validation';
@@ -323,6 +328,7 @@ export const SETUPS: Record<string, Setup> = {
       ];
     },
   },
+  'riboseq-umi-ribowaltz': riboSetup('ribo_tiny.fastq.gz', false),
   'assembly-flye-quast': {
     files: ['long_ont.fastq.gz', 'long_ref.fa'],
     values: { reads: ['long_ont.fastq.gz'], reference: ['long_ref.fa'] },
@@ -340,9 +346,26 @@ export const SETUPS: Record<string, Setup> = {
   },
 };
 
-function templateChain(id: string): Chain {
-  const setup = SETUPS[id];
-  const name = `template-${id}`;
+/** The Ribo-seq template on real data: the files are the ones `linkRiboData` puts in the data folder. */
+function riboSetup(reads: string, full: boolean): Setup {
+  const refs = ['ribo_genome.fa', 'ribo_genes.gtf', 'ribo_rRNA.fa', 'ribo_tRNA.fa', 'ribo_ncRNA.fa'];
+  return {
+    files: [reads, ...refs],
+    values: {
+      reads: [reads],
+      rrna: ['ribo_rRNA.fa'],
+      trna: ['ribo_tRNA.fa'],
+      ncrna: ['ribo_ncRNA.fa'],
+      genome: ['ribo_genome.fa'],
+      annotation: ['ribo_genes.gtf'],
+    },
+    // No setting is typed: the template's defaults are the settings of this library (D-Plex adapter,
+    // 12 nt UMI at the 5' end, 4 nt motif, 28 to 34 nt, 2 mismatches, one place).
+    verify: (dir) => verifyRiboseq(dir, full),
+  };
+}
+
+function templateChain(id: string, setup: Setup = SETUPS[id], name = `template-${id}`, requiresEnv?: string): Chain {
   const build = (): BuiltChain => {
     const template = bundledTemplates().find((t) => t.id === id);
     if (!template) throw new Error(`no bundled template ${id}`);
@@ -402,14 +425,22 @@ function templateChain(id: string): Chain {
     }
     return { workflow, stepOf, toolOf };
   };
-  return { name, files: setup.files, nodes: [], edges: [], build, verify: setup.verify };
+  return { name, files: setup.files, nodes: [], edges: [], build, verify: setup.verify, requiresEnv };
 }
 
 defineDomain({
   domain: 'templates',
   // The tools are covered by their own domains; this domain checks the templates built from them.
   covers: [],
-  // The Nanopore templates start from the synthetic signal files.
-  prepare: ensurePod5Data,
-  chains: Object.keys(SETUPS).map(templateChain),
+  prepare: () => {
+    // The Nanopore templates start from the synthetic signal files.
+    ensurePod5Data();
+    // The Ribo-seq template starts from real data. A run of other templates only does not need it.
+    const wanted = (process.env.TOOLS_CHAIN ?? '').trim();
+    linkRiboData(wanted === '' || 'template-riboseq-umi-ribowaltz'.includes(wanted));
+  },
+  chains: [
+    ...Object.keys(SETUPS).map((id) => templateChain(id)),
+    templateChain('riboseq-umi-ribowaltz', riboSetup('ribo_full.fastq.gz', true), 'template-riboseq-umi-ribowaltz-full', 'RIBOSEQ_FULL'),
+  ],
 });

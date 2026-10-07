@@ -185,12 +185,17 @@ The catalog (2026.17.0) has an entry for every step of the pipeline; each is run
 | riboWaltz | riboWaltz report | lengths 28 to 34, automatic read end, 6 flanking bases, genome FASTA for codon usage |
 | MultiQC | MultiQC | every FastQC report and every log |
 
+The same pipeline is also a bundled template, **Ribo-seq with UMIs (riboWaltz)** (`riboseq-umi-ribowaltz`, 20 steps; its
+setup step asks for the six files and for the settings of the table above). `npm run test:tools` makes it into steps with the
+code the template dialog runs and holds it to the same checks (chains `template-riboseq-umi-ribowaltz` on the tiny set and
+`template-riboseq-umi-ribowaltz-full` with `RIBOSEQ_FULL=1`). How to try it by hand in the app is in [README.md](README.md).
+
 Run the two chains (the data must have been built with `prepare_data.sh`):
 
 ```
 cd RustRunner-Desktop
 TOOLS_DOMAIN=riboseq TOOLS_CHAIN=tiny npm run test:tools             # 200 000 reads, about 90 s
-RIBOSEQ_FULL=1 TOOLS_DOMAIN=riboseq TOOLS_CHAIN=full npm run test:tools   # 5 million reads, about 15 minutes
+RIBOSEQ_FULL=1 TOOLS_DOMAIN=riboseq TOOLS_CHAIN=full npm run test:tools   # 5 million reads, about 2 minutes (tools installed)
 ```
 
 On the 200 000-read set riboWaltz cannot estimate offsets (13 reads cover an annotated start codon with 6 bases

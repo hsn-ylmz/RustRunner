@@ -5,6 +5,7 @@ import { databaseNeeds } from '../templates/schema';
 import {
   dagDescription,
   dagOf,
+  detailParagraphs,
   domainLabel,
   domainsOf,
   filterEntries,
@@ -96,5 +97,22 @@ describe('the pipeline drawing', () => {
     expect(dagDescription(basic())).toBe(
       'Pipeline of 4 steps: FastQC (raw reads), then Trim reads (fastp), then FastQC (trimmed reads), then MultiQC report.'
     );
+  });
+});
+
+describe('the "what this does" text', () => {
+  it('is one paragraph when it has no blank line, and one paragraph for each blank line otherwise', () => {
+    expect(detailParagraphs('One paragraph only.')).toEqual(['One paragraph only.']);
+    expect(detailParagraphs('First.\n\nSecond,\nwrapped.\n \n\nThird.')).toEqual(['First.', 'Second, wrapped.', 'Third.']);
+  });
+
+  it('drops empty paragraphs and never returns an empty list for text', () => {
+    expect(detailParagraphs('\n\nText\n\n')).toEqual(['Text']);
+    expect(detailParagraphs('   ')).toEqual([]);
+  });
+
+  it('is used by the Ribo-seq template to separate the pipeline, the settings to check and the limits', () => {
+    const t = BUNDLED_SOURCES.map((s) => s.raw as WorkflowTemplate).find((x) => x.id === 'riboseq-umi-ribowaltz')!;
+    expect(detailParagraphs(t.details).length).toBeGreaterThanOrEqual(3);
   });
 });

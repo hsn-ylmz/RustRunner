@@ -73,6 +73,14 @@ export function filterEntries(
 }
 
 /** "Paired-end reads" for a short-read template that says how it wants its reads; null otherwise. */
+/** The paragraphs of a template's "what this does" text: a blank line starts a new one. */
+export function detailParagraphs(details: string): string[] {
+  return details
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
 export function readLayoutLabel(template: Pick<WorkflowTemplate, 'readLayout'>): string | null {
   return template.readLayout ? READ_LAYOUTS[template.readLayout] ?? null : null;
 }

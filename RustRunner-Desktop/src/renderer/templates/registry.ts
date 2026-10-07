@@ -20,6 +20,7 @@ import nanoporeFastq from './nanopore-fastq.json';
 import metagenomicsKraken2Bracken from './metagenomics-kraken2-bracken.json';
 import assemblySpadesQuast from './assembly-spades-quast.json';
 import assemblyFlyeQuast from './assembly-flye-quast.json';
+import riboseqUmiRibowaltz from './riboseq-umi-ribowaltz.json';
 import { parseTemplate, type WorkflowTemplate } from './schema';
 
 /** Every bundled template file, as imported. Order is the order the gallery shows. */
@@ -37,6 +38,7 @@ export const BUNDLED_SOURCES: Array<{ file: string; raw: unknown }> = [
   { file: 'metagenomics-kraken2-bracken.json', raw: metagenomicsKraken2Bracken },
   { file: 'assembly-spades-quast.json', raw: assemblySpadesQuast },
   { file: 'assembly-flye-quast.json', raw: assemblyFlyeQuast },
+  { file: 'riboseq-umi-ribowaltz.json', raw: riboseqUmiRibowaltz },
 ];
 
 /** The bundled templates that are valid for the tool catalog this app has. */
