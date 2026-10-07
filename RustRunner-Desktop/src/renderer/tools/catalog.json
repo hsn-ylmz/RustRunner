@@ -7189,7 +7189,10 @@
         "kind": "conda",
         "package": "ribowaltz",
         "channel": "bioconda",
-        "version": "2.0"
+        "version": "2.0",
+        "constraints": [
+          "bioconductor-txdbmaker==1.2.0"
+        ]
       },
       "inputs": [
         {
