@@ -568,6 +568,15 @@ fn launch_for(step: &Step, tool_env_map: &HashMap<String, String>) -> Result<Lau
     }
 }
 
+/// Runs the step script (`$0`) after putting the environment's own Java first
+/// on PATH. conda's openjdk installs `java` under `lib/jvm/bin` and only sets
+/// JAVA_HOME, so tools that call plain `java` (FastQC, Picard, GATK, Qualimap,
+/// snpEff) would otherwise reach the system `java`, which on a Mac without a
+/// JDK is a stub that pops up an "install Java" dialog.
+const CONDA_SCRIPT_LAUNCHER: &str =
+    "if [ -n \"${CONDA_PREFIX:-}\" ] && [ -x \"$CONDA_PREFIX/lib/jvm/bin/java\" ]; \
+then PATH=\"$CONDA_PREFIX/lib/jvm/bin:$PATH\"; export PATH; fi; exec bash \"$0\"";
+
 /// Executes a script within a conda environment.
 fn execute_with_conda(
     script_path: &PathBuf,
@@ -581,6 +590,8 @@ fn execute_with_conda(
         .arg("-n")
         .arg(env_name)
         .arg("bash")
+        .arg("-c")
+        .arg(CONDA_SCRIPT_LAUNCHER)
         .arg(script_path);
 
     if let Some(dir) = working_dir {
@@ -600,6 +611,54 @@ mod tests {
     use super::*;
     use crate::workflow::model::split_list as parse_file_list;
     use crate::workflow::slots::{shell_join, shell_quote};
+
+    /// Runs CONDA_SCRIPT_LAUNCHER the way `micromamba run` would, with the
+    /// given CONDA_PREFIX, and returns what `command -v java` printed.
+    #[cfg(unix)]
+    fn java_seen_by_launcher(prefix: &std::path::Path) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("step.sh");
+        std::fs::write(&script, "command -v java || echo none\n").unwrap();
+        let output = Command::new("bash")
+            .arg("-c")
+            .arg(CONDA_SCRIPT_LAUNCHER)
+            .arg(&script)
+            .env("CONDA_PREFIX", prefix)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_conda_launcher_prefers_the_environment_java() {
+        use std::os::unix::fs::PermissionsExt;
+        let prefix = tempfile::tempdir().unwrap();
+        let jvm_bin = prefix.path().join("lib/jvm/bin");
+        std::fs::create_dir_all(&jvm_bin).unwrap();
+        let java = jvm_bin.join("java");
+        std::fs::write(&java, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            java_seen_by_launcher(prefix.path()),
+            java.display().to_string()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_conda_launcher_leaves_path_alone_without_an_environment_java() {
+        let prefix = tempfile::tempdir().unwrap();
+        let seen = java_seen_by_launcher(prefix.path());
+        assert!(
+            !seen.starts_with(&prefix.path().display().to_string()),
+            "got {}",
+            seen
+        );
+    }
 
     #[test]
     fn test_parse_file_list() {

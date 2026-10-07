@@ -50,9 +50,10 @@ case "$1" in
     mkdir -p "$FAKE_MAMBA_ENVS/$4"
     ;;
   run)
-    # run -n NAME bash SCRIPT
+    # run -n NAME COMMAND... (like the real one, run everything after the name)
     export FAKE_ENV="$3"
-    exec "$4" "$5"
+    shift 3
+    exec "$@"
     ;;
 esac
 "#;
