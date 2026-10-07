@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2026.13.0",
+  "version": "2026.14.0",
   "file_types": [
     "fastq",
     "fasta",
@@ -19,7 +19,12 @@
     "dict",
     "bed",
     "tbi",
-    "database"
+    "database",
+    "peaks",
+    "bedgraph",
+    "bigwig",
+    "matrix",
+    "image"
   ],
   "categories": {
     "qc": {
@@ -53,6 +58,18 @@
     "quantification": {
       "label": "Quantification",
       "color": "lemon"
+    },
+    "peak_calling": {
+      "label": "Peak calling and epigenomics",
+      "color": "periwinkle"
+    },
+    "signal": {
+      "label": "Signal tracks and plots",
+      "color": "lavender"
+    },
+    "intervals": {
+      "label": "Genome intervals",
+      "color": "sage"
     }
   },
   "tools": [
@@ -3397,6 +3414,1211 @@
       "command": "read_distribution.py -i {bam} -r {gene_model} > {report}",
       "threads": 1,
       "docs": "https://rseqc.sourceforge.net/#read-distribution-py"
+    },
+    {
+      "id": "macs3-callpeak",
+      "name": "MACS3 callpeak",
+      "description": "Finds the places in the genome where a ChIP-seq (or ATAC-seq) sample has more reads than expected, with an optional input control. Makes sharp peaks, summits and a signal track.",
+      "category": "peak_calling",
+      "subcategory": "Peak calling",
+      "install": {
+        "kind": "conda",
+        "package": "macs3",
+        "channel": "bioconda",
+        "version": "3.0.5"
+      },
+      "inputs": [
+        {
+          "name": "treatment",
+          "label": "ChIP alignments (BAM)",
+          "description": "The BAM of the ChIP sample, sorted by genome position. To pool replicates, merge them first with samtools merge.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "chip.sorted.bam"
+        },
+        {
+          "name": "control",
+          "label": "Control alignments (BAM)",
+          "description": "Optional. The input or IgG control BAM. Without a control MACS3 uses the local background of the ChIP itself, which finds more false peaks.",
+          "types": [
+            "bam"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "input.sorted.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Peak folder",
+          "description": "Folder for the peaks and the signal track.",
+          "types": [
+            "peaks",
+            "bed"
+          ],
+          "pattern": "macs3/",
+          "is_dir": true
+        },
+        {
+          "name": "peaks",
+          "label": "Peaks",
+          "description": "The peaks, one per line (narrowPeak format: BED with the fold enrichment and significance of each).",
+          "types": [
+            "peaks",
+            "bed"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "sample_peaks.narrowPeak"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "summits",
+          "label": "Summits",
+          "description": "The single highest base of each peak (BED).",
+          "types": [
+            "bed"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "sample_summits.bed"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "table",
+          "label": "Peak table",
+          "description": "The same peaks as a table with a header that describes every column (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "sample_peaks.xls"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "signal",
+          "label": "Signal track",
+          "description": "How many fragments cover each stretch of the genome (bedGraph).",
+          "types": [
+            "bedgraph"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "sample_treat_pileup.bdg"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "format",
+          "label": "Read type",
+          "type": "select",
+          "default": "BAMPE",
+          "options": [
+            "BAMPE",
+            "BAM"
+          ],
+          "description": "Paired-end data gives MACS3 the real size of every DNA fragment. Pick single-end if your reads have no mate.",
+          "option_labels": {
+            "BAMPE": "Paired-end reads",
+            "BAM": "Single-end reads"
+          }
+        },
+        {
+          "id": "genome_size",
+          "label": "Genome size",
+          "type": "string",
+          "default": "hs",
+          "description": "hs for human, mm for mouse, ce for worm, dm for fly, or the size of your genome in bases, for example 4600000. MACS3 uses it to estimate the background."
+        },
+        {
+          "id": "qvalue",
+          "label": "Significance cut-off (q-value)",
+          "type": "number",
+          "default": 0.05,
+          "description": "A peak must be at least this significant after correcting for the number of places tested. Smaller keeps fewer, more certain peaks.",
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        },
+        {
+          "id": "fragment_length",
+          "label": "Fragment length (single-end only)",
+          "type": "number",
+          "default": 200,
+          "description": "Single-end only: every read is extended to this length, the size of the DNA pieces you sequenced. Paired-end data ignores it.",
+          "min": 1
+        },
+        {
+          "id": "keep_dup",
+          "label": "Duplicate reads",
+          "type": "select",
+          "default": "1",
+          "options": [
+            "1",
+            "all",
+            "auto"
+          ],
+          "description": "Several reads that start at exactly the same place are often PCR copies.",
+          "option_labels": {
+            "1": "Keep one read per position (drops PCR copies)",
+            "all": "Keep every read",
+            "auto": "Let MACS3 decide from the data"
+          }
+        },
+        {
+          "id": "call_summits",
+          "label": "Split touching peaks at their summits",
+          "type": "boolean",
+          "default": false,
+          "flag": "--call-summits",
+          "description": "Tick this when neighbouring binding sites are merged into one wide peak. Each summit then becomes its own peak."
+        }
+      ],
+      "command": "C=\"{control}\"; E=\"\"; if [ {format} = BAM ]; then E=\"--nomodel --extsize {fragment_length}\"; fi; macs3 callpeak -t {treatment} ${C:+-c \"$C\"} -f {format} -g {genome_size} -q {qvalue} --keep-dup {keep_dup} $E {call_summits} -B -n sample --outdir {out_dir}",
+      "threads": 1,
+      "docs": "https://macs3-project.github.io/MACS/docs/callpeak.html"
+    },
+    {
+      "id": "genrich",
+      "name": "Genrich",
+      "description": "Finds open chromatin in ATAC-seq data (or enriched regions in ChIP-seq). It reads all replicates together and takes the Tn5 cut sites into account.",
+      "category": "peak_calling",
+      "subcategory": "Peak calling",
+      "install": {
+        "kind": "conda",
+        "package": "genrich",
+        "channel": "bioconda",
+        "version": "0.6.1"
+      },
+      "inputs": [
+        {
+          "name": "alignments",
+          "label": "Alignments sorted by read name (BAM)",
+          "description": "Genrich needs BAM files sorted by read NAME, not by position: use samtools sort and tick Sort by read name. Connect several steps to call peaks from all replicates together. File names must not contain commas.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "atac.byname.bam"
+        },
+        {
+          "name": "control",
+          "label": "Control alignments (BAM)",
+          "description": "Optional. A control sample, also sorted by read name.",
+          "types": [
+            "bam"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "control.byname.bam"
+        },
+        {
+          "name": "blacklist",
+          "label": "Regions to ignore",
+          "description": "Optional. A BED file of regions that should never become peaks, such as known artefact regions.",
+          "types": [
+            "bed"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "blacklist.bed"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "peaks",
+          "label": "Peaks",
+          "description": "The peaks in narrowPeak format (BED with a significance for each).",
+          "types": [
+            "peaks",
+            "bed"
+          ],
+          "pattern": "genrich_peaks.narrowPeak",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "atac_mode",
+          "label": "ATAC-seq mode",
+          "type": "boolean",
+          "default": true,
+          "flag": "-j",
+          "description": "Counts where the transposase cut the DNA instead of whole reads. Untick it for ChIP-seq alignments."
+        },
+        {
+          "id": "qvalue",
+          "label": "Significance cut-off (q-value)",
+          "type": "number",
+          "default": 0.05,
+          "description": "A peak must be at least this significant after correcting for the number of places tested. Smaller keeps fewer, more certain peaks.",
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        },
+        {
+          "id": "min_auc",
+          "label": "Minimum peak strength",
+          "type": "number",
+          "default": 200,
+          "description": "Peaks with less total signal than this are dropped. Raise it for fewer, stronger peaks.",
+          "min": 0
+        },
+        {
+          "id": "min_length",
+          "label": "Minimum peak length (bases)",
+          "type": "number",
+          "default": 200,
+          "description": "Shorter peaks are dropped.",
+          "min": 1
+        },
+        {
+          "id": "max_gap",
+          "label": "Join peaks closer than (bases)",
+          "type": "number",
+          "default": 100,
+          "description": "Two peaks separated by less than this become one.",
+          "min": 0
+        },
+        {
+          "id": "min_mapq",
+          "label": "Minimum mapping quality",
+          "type": "number",
+          "default": 0,
+          "description": "Reads that map with less confidence than this are ignored.",
+          "min": 0,
+          "max": 255
+        },
+        {
+          "id": "remove_duplicates",
+          "label": "Remove PCR duplicates",
+          "type": "boolean",
+          "default": true,
+          "flag": "-r",
+          "description": "Reads that are exact copies of each other are counted once."
+        },
+        {
+          "id": "skip_chroms",
+          "label": "Chromosomes to ignore",
+          "type": "string",
+          "default": "chrM",
+          "description": "Names separated by commas, for example chrM,chrY. Mitochondrial DNA is open in every ATAC-seq sample and would hide real peaks. Leave empty to use every chromosome."
+        }
+      ],
+      "command": "T=$(printf '%s,' {alignments}); C=\"{control}\"; K=\"{blacklist}\"; E={skip_chroms}; Genrich -t \"${T%,}\" ${C:+-c \"$C\"} ${K:+-E \"$K\"} ${E:+-e \"$E\"} -o {peaks} -q {qvalue} -a {min_auc} -l {min_length} -g {max_gap} -m {min_mapq} {atac_mode} {remove_duplicates}",
+      "threads": 1,
+      "docs": "https://github.com/jsh58/Genrich"
+    },
+    {
+      "id": "deeptools-bamcoverage",
+      "name": "deepTools bamCoverage",
+      "description": "Turns alignments into a signal track (bigWig) that shows how many reads cover each stretch of the genome, scaled so that samples can be compared.",
+      "category": "signal",
+      "subcategory": "Signal tracks",
+      "install": {
+        "kind": "conda",
+        "package": "deeptools",
+        "channel": "bioconda",
+        "version": "3.5.6"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM sorted by genome position.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        },
+        {
+          "name": "bai",
+          "label": "BAM index",
+          "description": "The .bai file of this BAM (make it with samtools index). It must sit next to the BAM and be named like it, ending in .bam.bai.",
+          "types": [
+            "bai"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam.bai"
+        },
+        {
+          "name": "blacklist",
+          "label": "Regions to leave out",
+          "description": "Optional. A BED file of regions that should have no signal.",
+          "types": [
+            "bed"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "blacklist.bed"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "coverage",
+          "label": "Signal track",
+          "description": "The signal in bigWig format. Load it in a genome browser or give it to computeMatrix.",
+          "types": [
+            "bigwig"
+          ],
+          "pattern": "coverage.bw",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "normalize",
+          "label": "Scale the signal",
+          "type": "select",
+          "default": "CPM",
+          "options": [
+            "CPM",
+            "RPKM",
+            "BPM",
+            "None"
+          ],
+          "description": "Scaling makes samples with different numbers of reads comparable.",
+          "option_labels": {
+            "CPM": "Reads per million (the usual choice)",
+            "RPKM": "Reads per kilobase per million",
+            "BPM": "Bins per million (like TPM)",
+            "None": "Do not scale (raw read counts)"
+          }
+        },
+        {
+          "id": "bin_size",
+          "label": "Bin size (bases)",
+          "type": "number",
+          "default": 50,
+          "description": "The signal is averaged in bins of this size. Smaller bins are sharper and make bigger files.",
+          "min": 1
+        },
+        {
+          "id": "extend",
+          "label": "Read length used",
+          "type": "select",
+          "default": "",
+          "options": [
+            "",
+            "--extendReads"
+          ],
+          "description": "Paired-end data only. Extending covers the whole DNA fragment between the two reads, which is what you want for ChIP-seq. Leave it as sequenced for single-end data.",
+          "option_labels": {
+            "": "Reads as sequenced",
+            "--extendReads": "Paired-end: cover the whole fragment between the two reads"
+          }
+        },
+        {
+          "id": "min_mapq",
+          "label": "Minimum mapping quality",
+          "type": "number",
+          "default": 0,
+          "description": "Reads that map with less confidence than this are not counted.",
+          "min": 0,
+          "max": 255
+        },
+        {
+          "id": "ignore_dup",
+          "label": "Count duplicate reads once",
+          "type": "boolean",
+          "default": false,
+          "flag": "--ignoreDuplicates",
+          "description": "Reads with the same start and direction are counted only once."
+        }
+      ],
+      "command": "B=\"{blacklist}\"; test -s {bai} && MPLBACKEND=Agg bamCoverage -b {bam} -o {coverage} --numberOfProcessors {threads} --binSize {bin_size} --normalizeUsing {normalize} --minMappingQuality {min_mapq} {extend} {ignore_dup} ${B:+--blackListFileName \"$B\"}",
+      "threads": 2,
+      "docs": "https://deeptools.readthedocs.io/en/latest/content/tools/bamCoverage.html"
+    },
+    {
+      "id": "deeptools-computematrix",
+      "name": "deepTools computeMatrix",
+      "description": "Collects the signal around one point of every region (the centre of each peak, or the start of each gene) into a table. plotHeatmap draws it.",
+      "category": "signal",
+      "subcategory": "Signal around regions",
+      "install": {
+        "kind": "conda",
+        "package": "deeptools",
+        "channel": "bioconda",
+        "version": "3.5.6"
+      },
+      "inputs": [
+        {
+          "name": "signal",
+          "label": "Signal tracks (bigWig)",
+          "description": "One or more tracks from bamCoverage. Connect several steps to compare samples in one picture.",
+          "types": [
+            "bigwig"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "coverage.bw"
+        },
+        {
+          "name": "regions",
+          "label": "Regions",
+          "description": "The regions to look around, for example peaks or genes. Each file becomes its own group in the heatmap.",
+          "types": [
+            "bed",
+            "peaks",
+            "gtf"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "peaks.bed"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "matrix",
+          "label": "Signal matrix",
+          "description": "The collected signal, ready for plotHeatmap.",
+          "types": [
+            "matrix"
+          ],
+          "pattern": "matrix.mat.gz",
+          "is_dir": false
+        },
+        {
+          "name": "sorted_regions",
+          "label": "Regions in matrix order",
+          "description": "The regions as they appear in the matrix (BED). Regions with no signal may have been skipped.",
+          "types": [
+            "bed"
+          ],
+          "pattern": "matrix_regions.bed",
+          "is_dir": false
+        },
+        {
+          "name": "values",
+          "label": "Matrix as a table",
+          "description": "The same numbers as plain text: one row per region, one column per bin (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "matrix_values.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "reference_point",
+          "label": "Look around",
+          "type": "select",
+          "default": "center",
+          "options": [
+            "center",
+            "TSS",
+            "TES"
+          ],
+          "description": "The point of each region that the signal is centred on.",
+          "option_labels": {
+            "center": "The centre of each region",
+            "TSS": "The start of each region (the transcription start of a gene)",
+            "TES": "The end of each region"
+          }
+        },
+        {
+          "id": "upstream",
+          "label": "Distance before the point (bases)",
+          "type": "number",
+          "default": 1000,
+          "description": "How far to look in front of the point.",
+          "min": 0
+        },
+        {
+          "id": "downstream",
+          "label": "Distance after the point (bases)",
+          "type": "number",
+          "default": 1000,
+          "description": "How far to look behind the point.",
+          "min": 0
+        },
+        {
+          "id": "bin_size",
+          "label": "Bin size (bases)",
+          "type": "number",
+          "default": 50,
+          "description": "The signal is averaged in bins of this size. It should be at least the bin size of the tracks.",
+          "min": 1
+        },
+        {
+          "id": "skip_zeros",
+          "label": "Leave out regions with no signal",
+          "type": "boolean",
+          "default": false,
+          "flag": "--skipZeros",
+          "description": "Regions that have no signal in any track are not put in the matrix."
+        },
+        {
+          "id": "missing_as_zero",
+          "label": "Count missing data as zero",
+          "type": "boolean",
+          "default": true,
+          "flag": "--missingDataAsZero",
+          "description": "Regions that run past the end of a chromosome, or have no data, count as zero instead of leaving gaps."
+        }
+      ],
+      "command": "computeMatrix reference-point -S {signal} -R {regions} --referencePoint {reference_point} -b {upstream} -a {downstream} --binSize {bin_size} --numberOfProcessors {threads} {skip_zeros} {missing_as_zero} -o {matrix} --outFileSortedRegions {sorted_regions} --outFileNameMatrix {values}",
+      "threads": 2,
+      "docs": "https://deeptools.readthedocs.io/en/latest/content/tools/computeMatrix.html"
+    },
+    {
+      "id": "deeptools-plotheatmap",
+      "name": "deepTools plotHeatmap",
+      "description": "Draws a heatmap of the signal around your regions, one row per region, with an average profile on top.",
+      "category": "signal",
+      "subcategory": "Plots",
+      "install": {
+        "kind": "conda",
+        "package": "deeptools",
+        "channel": "bioconda",
+        "version": "3.5.6"
+      },
+      "inputs": [
+        {
+          "name": "matrix",
+          "label": "Signal matrix",
+          "description": "The matrix made by computeMatrix.",
+          "types": [
+            "matrix"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "matrix.mat.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "heatmap",
+          "label": "Heatmap",
+          "description": "The picture. The ending of the name sets the format: .png, .pdf or .svg.",
+          "types": [
+            "image"
+          ],
+          "pattern": "heatmap.png",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "color_map",
+          "label": "Colour scheme",
+          "type": "select",
+          "default": "Blues",
+          "options": [
+            "Blues",
+            "Reds",
+            "YlOrRd",
+            "viridis",
+            "RdBu_r",
+            "Greys"
+          ],
+          "description": "The colours of the signal, from low to high.",
+          "option_labels": {
+            "Blues": "White to blue",
+            "Reds": "White to red",
+            "YlOrRd": "Yellow to red",
+            "viridis": "Purple to yellow (easy to read in black and white)",
+            "RdBu_r": "Blue to red (for values above and below zero)",
+            "Greys": "White to black"
+          }
+        },
+        {
+          "id": "sort_regions",
+          "label": "Order of the rows",
+          "type": "select",
+          "default": "descend",
+          "options": [
+            "descend",
+            "ascend",
+            "keep"
+          ],
+          "description": "How the regions are ordered from top to bottom.",
+          "option_labels": {
+            "descend": "Strongest signal first",
+            "ascend": "Weakest signal first",
+            "keep": "As in the region files"
+          }
+        },
+        {
+          "id": "sort_using",
+          "label": "Measure the signal by",
+          "type": "select",
+          "default": "mean",
+          "options": [
+            "mean",
+            "median",
+            "max",
+            "sum"
+          ],
+          "description": "Which number of each region decides its place when the rows are ordered by signal.",
+          "option_labels": {
+            "mean": "Average",
+            "median": "Median",
+            "max": "Highest value",
+            "sum": "Total"
+          }
+        },
+        {
+          "id": "title",
+          "label": "Title",
+          "type": "string",
+          "default": "",
+          "description": "Optional text above the picture."
+        },
+        {
+          "id": "dpi",
+          "label": "Resolution (dots per inch)",
+          "type": "number",
+          "default": 200,
+          "description": "Higher is sharper and makes a bigger file. 200 is fine for slides, 300 for print.",
+          "min": 50,
+          "max": 600
+        }
+      ],
+      "command": "T={title}; MPLBACKEND=Agg plotHeatmap -m {matrix} -out {heatmap} --colorMap {color_map} --sortRegions {sort_regions} --sortUsing {sort_using} --dpi {dpi} ${T:+--plotTitle \"$T\"}",
+      "threads": 1,
+      "docs": "https://deeptools.readthedocs.io/en/latest/content/tools/plotHeatmap.html"
+    },
+    {
+      "id": "deeptools-plotfingerprint",
+      "name": "deepTools plotFingerprint",
+      "description": "Shows how well a ChIP-seq or ATAC-seq sample is enriched: a good ChIP puts most of its reads into a small part of the genome, an input control spreads them evenly.",
+      "category": "qc",
+      "subcategory": "Enrichment",
+      "install": {
+        "kind": "conda",
+        "package": "deeptools",
+        "channel": "bioconda",
+        "version": "3.5.6"
+      },
+      "inputs": [
+        {
+          "name": "bams",
+          "label": "Alignments (BAM)",
+          "description": "The samples to compare, usually the ChIP and its input control. Sorted by genome position.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "chip.sorted.bam"
+        },
+        {
+          "name": "bais",
+          "label": "BAM indexes",
+          "description": "The .bai file of every BAM above (make them with samtools index). Each must sit next to its BAM and be named like it, ending in .bam.bai.",
+          "types": [
+            "bai"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "chip.sorted.bam.bai"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "plot",
+          "label": "Fingerprint plot",
+          "description": "The picture: one curve per sample. The ending of the name sets the format: .png, .pdf or .svg.",
+          "types": [
+            "image"
+          ],
+          "pattern": "fingerprint.png",
+          "is_dir": false
+        },
+        {
+          "name": "metrics",
+          "label": "Quality numbers",
+          "description": "The numbers behind the curves, one row per sample (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "fingerprint_metrics.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "sample_regions",
+          "label": "Places to count",
+          "type": "number",
+          "default": 500000,
+          "description": "How many places in the genome are sampled. Use a few hundred for a very small genome.",
+          "min": 10
+        },
+        {
+          "id": "bin_size",
+          "label": "Bin size (bases)",
+          "type": "number",
+          "default": 500,
+          "description": "Each place is this many bases wide.",
+          "min": 1
+        },
+        {
+          "id": "extend",
+          "label": "Read length used",
+          "type": "select",
+          "default": "",
+          "options": [
+            "",
+            "--extendReads"
+          ],
+          "description": "Paired-end data only. Extending covers the whole DNA fragment between the two reads, which is what you want for ChIP-seq. Leave it as sequenced for single-end data.",
+          "option_labels": {
+            "": "Reads as sequenced",
+            "--extendReads": "Paired-end: cover the whole fragment between the two reads"
+          }
+        },
+        {
+          "id": "skip_zeros",
+          "label": "Leave out empty places",
+          "type": "boolean",
+          "default": false,
+          "flag": "--skipZeros",
+          "description": "Places where no sample has reads are not counted."
+        }
+      ],
+      "command": "for f in {bais}; do test -s \"$f\" || { echo \"missing BAM index: $f\" >&2; exit 1; }; done; MPLBACKEND=Agg plotFingerprint -b {bams} -plot {plot} --outQualityMetrics {metrics} --numberOfProcessors {threads} --numberOfSamples {sample_regions} --binSize {bin_size} {extend} {skip_zeros}",
+      "threads": 2,
+      "docs": "https://deeptools.readthedocs.io/en/latest/content/tools/plotFingerprint.html"
+    },
+    {
+      "id": "bedtools-intersect",
+      "name": "bedtools intersect",
+      "description": "Compares two sets of regions: keeps the ones that overlap, the ones that do not, or just the overlapping stretches. For example, which peaks of one sample are also peaks in another.",
+      "category": "intervals",
+      "subcategory": "Compare regions",
+      "install": {
+        "kind": "conda",
+        "package": "bedtools",
+        "channel": "bioconda",
+        "version": "2.31.1"
+      },
+      "inputs": [
+        {
+          "name": "a",
+          "label": "Regions to check (A)",
+          "description": "The regions you want to keep or drop, for example your peaks.",
+          "types": [
+            "bed",
+            "peaks",
+            "gtf",
+            "vcf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "peaks_sample1.bed"
+        },
+        {
+          "name": "b",
+          "label": "Regions to compare with (B)",
+          "description": "The regions A is compared with, for example the peaks of another sample or the promoters of your genes.",
+          "types": [
+            "bed",
+            "peaks",
+            "gtf",
+            "vcf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "peaks_sample2.bed"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "label": "Result",
+          "description": "The regions that were kept, in the same format as A.",
+          "types": [
+            "bed",
+            "peaks"
+          ],
+          "pattern": "intersect.bed",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "mode",
+          "label": "What to report",
+          "type": "select",
+          "default": "-u",
+          "options": [
+            "-u",
+            "",
+            "-v",
+            "-c",
+            "-wa -wb"
+          ],
+          "description": "Which regions end up in the result.",
+          "option_labels": {
+            "-u": "Each A region that overlaps B",
+            "": "Only the overlapping stretch of each A region",
+            "-v": "Each A region that does NOT overlap B",
+            "-c": "Every A region, with the number of B regions it overlaps added",
+            "-wa -wb": "Each overlapping pair, A and B side by side"
+          }
+        },
+        {
+          "id": "min_overlap",
+          "label": "Minimum overlap",
+          "type": "string",
+          "default": "",
+          "description": "Leave empty to count any overlap of at least one base. Or enter a fraction of A between 0 and 1: 0.5 means at least half of the A region must be covered."
+        },
+        {
+          "id": "reciprocal",
+          "label": "The overlap must be just as large for B",
+          "type": "boolean",
+          "default": false,
+          "flag": "-r",
+          "description": "With a minimum overlap, B must be covered by that fraction as well, not only A."
+        },
+        {
+          "id": "strand",
+          "label": "Strand",
+          "type": "select",
+          "default": "",
+          "options": [
+            "",
+            "-s",
+            "-S"
+          ],
+          "description": "Whether the direction of the regions matters.",
+          "option_labels": {
+            "": "Ignore the strand",
+            "-s": "Same strand only",
+            "-S": "Opposite strand only"
+          }
+        }
+      ],
+      "command": "F={min_overlap}; bedtools intersect -a {a} -b {b} {mode} ${F:+-f $F} {reciprocal} {strand} > {result}",
+      "threads": 1,
+      "docs": "https://bedtools.readthedocs.io/en/latest/content/tools/intersect.html"
+    },
+    {
+      "id": "bedtools-merge",
+      "name": "bedtools merge",
+      "description": "Joins regions that overlap (or lie close together) into single regions. Give it the peaks of several samples to get one combined set.",
+      "category": "intervals",
+      "subcategory": "Combine regions",
+      "install": {
+        "kind": "conda",
+        "package": "bedtools",
+        "channel": "bioconda",
+        "version": "2.31.1"
+      },
+      "inputs": [
+        {
+          "name": "intervals",
+          "label": "Regions",
+          "description": "Peaks or other regions. Connect several steps to combine samples. They do not need to be sorted.",
+          "types": [
+            "bed",
+            "peaks"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "peaks.bed"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "merged",
+          "label": "Merged regions",
+          "description": "One line per joined region: chromosome, start and end (BED).",
+          "types": [
+            "bed"
+          ],
+          "pattern": "merged.bed",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "distance",
+          "label": "Join regions closer than (bases)",
+          "type": "number",
+          "default": 0,
+          "description": "0 joins only regions that overlap or touch. 100 also joins regions up to 100 bases apart.",
+          "min": 0
+        },
+        {
+          "id": "count",
+          "label": "Add how many regions were joined",
+          "type": "boolean",
+          "default": false,
+          "flag": "-c 1 -o count",
+          "description": "Adds a column with the number of regions that make up each merged region."
+        }
+      ],
+      "command": "awk 'BEGIN{FS=OFS=\"\\t\"} !/^(#|track|browser)/ && NF>=3 {print $1,$2,$3}' {intervals} | LC_ALL=C sort -k1,1 -k2,2n | bedtools merge -i - -d {distance} {count} > {merged}",
+      "threads": 1,
+      "docs": "https://bedtools.readthedocs.io/en/latest/content/tools/merge.html"
+    },
+    {
+      "id": "bedtools-genomecov",
+      "name": "bedtools genomecov",
+      "description": "Measures how deeply every stretch of the genome is covered by reads and writes it as a bedGraph track.",
+      "category": "intervals",
+      "subcategory": "Coverage",
+      "install": {
+        "kind": "conda",
+        "package": "bedtools",
+        "channel": "bioconda",
+        "version": "2.31.1"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM sorted by genome position.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "coverage",
+          "label": "Coverage track",
+          "description": "Chromosome, start, end and depth of each stretch (bedGraph).",
+          "types": [
+            "bedgraph"
+          ],
+          "pattern": "coverage.bedgraph",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "mode",
+          "label": "Stretches to write",
+          "type": "select",
+          "default": "-bg",
+          "options": [
+            "-bg",
+            "-bga"
+          ],
+          "description": "Whether stretches with no reads are written.",
+          "option_labels": {
+            "-bg": "Only the covered stretches",
+            "-bga": "Every stretch, including those with no reads"
+          }
+        },
+        {
+          "id": "fragments",
+          "label": "Count paired reads as whole fragments",
+          "type": "boolean",
+          "default": false,
+          "flag": "-pc",
+          "description": "Paired-end only: the whole stretch between the two reads counts as covered, not just the reads themselves."
+        },
+        {
+          "id": "split",
+          "label": "Do not count gaps inside reads",
+          "type": "boolean",
+          "default": false,
+          "flag": "-split",
+          "description": "For RNA-seq: spliced reads cover their exons, not the introns they skip."
+        },
+        {
+          "id": "scale",
+          "label": "Multiply the depth by",
+          "type": "number",
+          "default": 1,
+          "description": "1 gives raw read depth. For reads per million, use 1000000 divided by the number of reads in the BAM.",
+          "min": 0
+        }
+      ],
+      "command": "bedtools genomecov -ibam {bam} {mode} {fragments} {split} -scale {scale} > {coverage}",
+      "threads": 1,
+      "docs": "https://bedtools.readthedocs.io/en/latest/content/tools/genomecov.html"
+    },
+    {
+      "id": "bedtools-getfasta",
+      "name": "bedtools getfasta",
+      "description": "Cuts the DNA sequence of every region out of a genome FASTA, for example the sequences under your peaks for a motif search.",
+      "category": "intervals",
+      "subcategory": "Sequences",
+      "install": {
+        "kind": "conda",
+        "package": "bedtools",
+        "channel": "bioconda",
+        "version": "2.31.1"
+      },
+      "inputs": [
+        {
+          "name": "genome",
+          "label": "Genome sequence (FASTA)",
+          "description": "The genome the regions refer to. bedtools writes a .fai index next to it the first time; connect the Indexed reference of samtools faidx to keep your own folder clean.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        },
+        {
+          "name": "regions",
+          "label": "Regions",
+          "description": "The regions to cut out, for example peaks.",
+          "types": [
+            "bed",
+            "peaks",
+            "gtf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "peaks.bed"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "sequences",
+          "label": "Sequences",
+          "description": "One sequence per region (FASTA).",
+          "types": [
+            "fasta"
+          ],
+          "pattern": "regions.fa",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "names",
+          "label": "Name each sequence by",
+          "type": "select",
+          "default": "",
+          "options": [
+            "",
+            "-nameOnly"
+          ],
+          "description": "What is written in the header line of every sequence.",
+          "option_labels": {
+            "": "Its position, such as chr1:100-400",
+            "-nameOnly": "The name column of the region file"
+          }
+        },
+        {
+          "id": "strand",
+          "label": "Reverse-complement regions on the minus strand",
+          "type": "boolean",
+          "default": false,
+          "flag": "-s",
+          "description": "Reads each region in the direction of its gene or feature. Needs a region file with a strand column."
+        }
+      ],
+      "command": "bedtools getfasta -fi {genome} -bed {regions} -fo {sequences} {names} {strand}",
+      "threads": 1,
+      "docs": "https://bedtools.readthedocs.io/en/latest/content/tools/getfasta.html"
+    },
+    {
+      "id": "homer-annotatepeaks",
+      "name": "HOMER annotatePeaks",
+      "description": "Tells you where each peak lies: in a promoter, an exon, an intron or between genes, and which gene is closest. Uses the genome FASTA and gene annotation you connect.",
+      "category": "peak_calling",
+      "subcategory": "Peak annotation",
+      "install": {
+        "kind": "conda",
+        "package": "homer",
+        "channel": "bioconda",
+        "version": "5.1"
+      },
+      "inputs": [
+        {
+          "name": "peaks",
+          "label": "Peaks",
+          "description": "The regions to annotate (BED or narrowPeak).",
+          "types": [
+            "bed",
+            "peaks"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "peaks.bed"
+        },
+        {
+          "name": "genome",
+          "label": "Genome sequence (FASTA)",
+          "description": "The genome the peaks refer to.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        },
+        {
+          "name": "annotation",
+          "label": "Gene annotation",
+          "description": "A GTF file of the genes of this genome.",
+          "types": [
+            "gtf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.gtf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "annotated",
+          "label": "Annotated peaks",
+          "description": "One row per peak: position, the kind of place it lies in, the distance to the nearest gene start and that gene (tab-separated).",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "annotated_peaks.tsv",
+          "is_dir": false
+        },
+        {
+          "name": "stats",
+          "label": "Summary by place",
+          "description": "How many peaks lie in promoters, exons, introns and other places, compared with what chance would give.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "annotation_summary.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "size",
+          "label": "Region size",
+          "type": "string",
+          "default": "given",
+          "description": "given uses every peak as it is. A number such as 200 looks at that many bases around the centre of each peak instead."
+        }
+      ],
+      "command": "annotatePeaks.pl {peaks} {genome} -gtf {annotation} -size {size} -annStats {stats} -cpu {threads} > {annotated}",
+      "threads": 1,
+      "needs_database": {
+        "label": "Genome FASTA and gene annotation",
+        "hint": "HOMER works from the genome FASTA and the GTF you connect, so nothing is downloaded. Use a GTF whose chromosome names match the FASTA. HOMER's own premade genomes (hg38, mm10, ...) are not used here."
+      },
+      "docs": "https://bioconda.github.io/recipes/homer/README.html"
     }
   ]
 }

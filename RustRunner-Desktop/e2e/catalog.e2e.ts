@@ -46,7 +46,7 @@ test('the palette searches by name and category, and closes with Escape', async 
   await page.getByTestId('open-palette').click();
   const items = page.locator('[data-testid^="palette-item-"]');
   const all = await items.count();
-  expect(all).toBeGreaterThanOrEqual(46);
+  expect(all).toBeGreaterThanOrEqual(57);
 
   await page.getByTestId('palette-search').fill('BWA');
   await expect(items).toHaveCount(2);
@@ -311,6 +311,30 @@ test('transcript sequences from gffread go straight into an index builder, and t
   await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
   await expect(page.getByTestId('prop-slot-index')).toHaveText('kallisto.idx');
   await expect(page.getByTestId('prop-slot-reads2-row')).toContainText('optional');
+});
+
+test('a peak caller takes the ChIP, then the input as its control, and a peak annotator says nothing is downloaded', async ({
+  page,
+}) => {
+  await addFromPalette(page, 'samtools sort', 'samtools-sort');
+  await addFromPalette(page, 'samtools sort', 'samtools-sort');
+  await addFromPalette(page, 'macs3', 'macs3-callpeak');
+  await connect(page, 'samtools sort', 'MACS3 callpeak');
+  await connect(page, 'samtools sort 2', 'MACS3 callpeak');
+  await selectNode(page, 'MACS3 callpeak');
+  // Nobody is asked: the first BAM is the ChIP, the second the control.
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-treatment')).toHaveText('sorted.bam');
+  await expect(page.getByTestId('prop-slot-control')).toHaveText('sorted.bam');
+  await expect(page.getByTestId('catalog-param-format').locator('option')).toHaveText(['Paired-end reads', 'Single-end reads']);
+  await expect(page.getByTestId('catalog-types')).toContainText('macs3 3.0.5');
+  // The peaks, their summits and the signal track are files the next step can take.
+  await expect(page.getByTestId('prop-slot-peaks')).toContainText('sample_peaks.narrowPeak');
+
+  await addFromPalette(page, 'homer', 'homer-annotatepeaks');
+  await expect(page.getByTestId('catalog-needs-database')).toContainText('nothing is downloaded');
+  await expect(page.getByTestId('catalog-needs-database')).toContainText('Genome FASTA and gene annotation');
+  await expect(page.getByTestId('prop-slot-genome-row')).not.toContainText('optional');
 });
 
 test('MultiQC follows several steps at once, and asks which of a step\'s files to use', async ({ page }) => {

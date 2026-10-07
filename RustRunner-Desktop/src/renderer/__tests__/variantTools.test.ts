@@ -164,6 +164,9 @@ describe('the DNA-seq and variant tools in the catalog', () => {
       'variant_calling',
       'annotation',
       'quantification',
+      'peak_calling',
+      'signal',
+      'intervals',
     ]);
   });
 });

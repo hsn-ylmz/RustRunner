@@ -26,6 +26,19 @@ Writes into OUTDIR:
                       from the spliced transcripts at RNA_WEIGHTS abundance, from a
                       third random stream (earlier files unchanged)
   rna_truth.tsv       transcript id and the number of pairs drawn from it
+  chip_R1/R2.fastq.gz   paired-end 50 bp ChIP-seq reads: CHIP_BACKGROUND_PAIRS
+                      fragments spread evenly over the genome plus extra fragments
+                      piled up on four enriched regions (CHIP_PEAKS)
+  input_R1/R2.fastq.gz  the matching input control: background fragments only
+  atac_R1/R2.fastq.gz   paired-end 50 bp ATAC-seq reads: mostly short, nucleosome-free
+                      fragments at three open regions (ATAC_REGIONS) with some
+                      single-nucleosome fragments and an even background
+  blacklist.bed       one region at the start of chr1 that covers the first ChIP peak and the
+                      first open ATAC region (for "regions to ignore" options)
+  chip_peaks_truth.bed / atac_regions_truth.bed   the planted regions (BED, 0-based
+                      start, end exclusive), with the number of fragments in the name
+                      Made from a fourth random stream, so the files above are the
+                      same as before these were added.
 """
 import gzip
 import os
@@ -37,6 +50,17 @@ DUP_UNIQUE_PAIRS = 600
 DUP_COPIES = 200
 RNA_PAIRS = 2000
 RNA_WEIGHTS = (6, 3, 1)  # tx1 : tx2 : tx3 abundance
+READ_LEN = 50
+CHIP_BACKGROUND_PAIRS = 700
+# (contig, centre of the enriched region, 1-based; fragments piled on it). The
+# centres sit on the promoter of geneA, an intron of geneA, an exon of geneC and
+# the promoter of geneB, so annotating the peaks has something to tell apart.
+CHIP_PEAKS = (("chr1", 150, 450), ("chr1", 700, 250), ("chr2", 1050, 300), ("chr1", 2620, 400))
+CHIP_HALF_WIDTH = 150  # the truth region is centre +/- this
+# Open chromatin at the start of geneA, geneB and geneC (centre, nucleosome-free pairs).
+ATAC_REGIONS = (("chr1", 210, 450), ("chr1", 2490, 350), ("chr2", 310, 300))
+ATAC_NUCLEOSOME_PAIRS = 120
+ATAC_BACKGROUND_PAIRS = 700
 COMP = str.maketrans("ACGT", "TGCA")
 
 
@@ -147,6 +171,73 @@ def main():
     write_duplicate_pairs(outdir, sample, random.Random(seed + 1))
     write_unnormalized_vcf(outdir, ref)
     write_stranded_rna_pairs(outdir, transcripts, random.Random(seed + 2))
+    write_epigenomics(outdir, ref, random.Random(seed + 3))
+
+
+def write_pairs(outdir, prefix, ref, fragments, rng):
+    """Writes `<prefix>_R1/R2.fastq.gz` from `(contig, start, length)` fragments, either strand."""
+    r1, r2 = [], []
+    for i, (contig, start, length) in enumerate(fragments):
+        frag = ref[contig][start:start + length]
+        if rng.random() < 0.5:
+            frag = revcomp(frag)
+        r1.append((f"{prefix}{i}/1", frag[:READ_LEN]))
+        r2.append((f"{prefix}{i}/2", revcomp(frag)[:READ_LEN]))
+    write_fastq(os.path.join(outdir, f"{prefix}_R1.fastq.gz"), r1)
+    write_fastq(os.path.join(outdir, f"{prefix}_R2.fastq.gz"), r2)
+
+
+def background_fragments(ref, rng, count, low, high):
+    """Fragments whose start is uniform over the genome (the contigs weighted by length)."""
+    contigs = list(ref)
+    weights = [len(ref[c]) for c in contigs]
+    out = []
+    for _ in range(count):
+        contig = rng.choices(contigs, weights=weights)[0]
+        length = rng.randint(low, high)
+        out.append((contig, rng.randrange(0, len(ref[contig]) - length + 1), length))
+    return out
+
+
+def piled_fragments(ref, rng, contig, centre, count, low, high, spread):
+    """Fragments whose midpoint falls near `centre` (1-based), normally distributed."""
+    out = []
+    while len(out) < count:
+        length = rng.randint(low, high)
+        mid = int(rng.gauss(centre - 1, spread))
+        start = mid - length // 2
+        if 0 <= start and start + length <= len(ref[contig]):
+            out.append((contig, start, length))
+    return out
+
+
+def write_epigenomics(outdir, ref, rng):
+    """ChIP-seq, input control and ATAC-seq reads with known enriched regions (see the module doc)."""
+    chip = background_fragments(ref, rng, CHIP_BACKGROUND_PAIRS, 150, 300)
+    truth = []
+    for contig, centre, count in CHIP_PEAKS:
+        chip += piled_fragments(ref, rng, contig, centre, count, 150, 300, 35)
+        truth.append((contig, centre - 1 - CHIP_HALF_WIDTH, centre - 1 + CHIP_HALF_WIDTH, count))
+    rng.shuffle(chip)
+    write_pairs(outdir, "chip", ref, chip, rng)
+    write_pairs(outdir, "input", ref, background_fragments(ref, rng, CHIP_BACKGROUND_PAIRS, 150, 300), rng)
+
+    atac = background_fragments(ref, rng, ATAC_BACKGROUND_PAIRS, 50, 300)
+    atac_truth = []
+    for contig, centre, count in ATAC_REGIONS:
+        atac += piled_fragments(ref, rng, contig, centre, count, 50, 110, 50)
+        atac += piled_fragments(ref, rng, contig, centre, ATAC_NUCLEOSOME_PAIRS // len(ATAC_REGIONS), 180, 250, 60)
+        atac_truth.append((contig, centre - 1 - 150, centre - 1 + 150, count))
+    rng.shuffle(atac)
+    write_pairs(outdir, "atac", ref, atac, rng)
+
+    with open(os.path.join(outdir, "blacklist.bed"), "w") as fh:
+        fh.write("chr1\t0\t450\tblacklisted_start_of_chr1\n")
+
+    for name, rows, prefix in (("chip_peaks_truth.bed", truth, "chip"), ("atac_regions_truth.bed", atac_truth, "atac")):
+        with open(os.path.join(outdir, name), "w") as fh:
+            for contig, start, end, count in rows:
+                fh.write(f"{contig}\t{max(start, 0)}\t{end}\t{prefix}_{contig}_{end - CHIP_HALF_WIDTH}_n{count}\n")
 
 
 def write_stranded_rna_pairs(outdir, transcripts, rng):
