@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { CATALOG } from '../src/renderer/tools/catalog';
+import { bundledTemplates } from '../src/renderer/templates/registry';
 import { ENABLED, registeredDomains, setCollectOnly, writeReport } from './harness';
 
 const CHAIN_DIR = path.join(__dirname, 'chains');
@@ -47,6 +48,13 @@ describe.skipIf(!ENABLED)('real-tool suite layout', () => {
   it('has unique chain names across domains', () => {
     const names = registeredDomains().flatMap((d) => d.chains.map((c) => c.name));
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('runs every bundled template for real', () => {
+    const names = new Set(registeredDomains().flatMap((d) => d.chains.map((c) => c.name)));
+    for (const template of bundledTemplates()) {
+      expect(names.has(`template-${template.id}`), `bundled template ${template.id} has no chain: add it to SETUPS in chains/templates.tools.ts`).toBe(true);
+    }
   });
 
   it('writes the results table of what has been run so far', () => {

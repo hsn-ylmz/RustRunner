@@ -6,6 +6,7 @@
  */
 
 import path from 'path';
+import os from 'os';
 import fs from 'fs';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import {
@@ -27,6 +28,15 @@ import { readResumeInfoFor, workflowFileStem } from './resumeState';
 import { readRunHistory, resolveReportPath, type RunHistoryEntry } from './runHistory';
 import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
 import { safeDocsUrl } from './docsUrl';
+import {
+  deleteUserTemplate,
+  listUserTemplates,
+  renameUserTemplate,
+  saveUserTemplate,
+  templatesDir,
+  type StoredTemplate,
+  type StoreResult,
+} from './userTemplates';
 import { readSettings, sanitizeSettings, writeSettings, type AppSettings } from './appSettings';
 
 // =============================================================================
@@ -158,16 +168,39 @@ function resolveRustExecutable(): string {
 // IPC Handlers
 // =============================================================================
 
-// File selection for wildcards
-ipcMain.handle('select-files', async (): Promise<string[] | null> => {
+/** What the file picker may be asked for (the renderer's request is cleaned before use). */
+interface SelectFilesOptions {
+  title?: string;
+  /** False: one file only. Default true. */
+  multiple?: boolean;
+  /** File name endings without the dot ('fastq', 'fq'); the picker offers them first. */
+  extensions?: string[];
+  /** Name for the extension filter ("FASTQ reads"). */
+  typeName?: string;
+}
+
+// File selection for wildcards and for template inputs
+ipcMain.handle('select-files', async (_event, options?: SelectFilesOptions): Promise<string[] | null> => {
   if (!mainWindow) return null;
 
+  const title =
+    typeof options?.title === 'string' && options.title.length <= 120
+      ? options.title
+      : 'Select Files for Batch Processing';
+  const extensions = Array.isArray(options?.extensions)
+    ? options!.extensions.filter((e): e is string => typeof e === 'string' && /^[A-Za-z0-9.]{1,12}$/.test(e))
+    : [];
+  const typeName =
+    typeof options?.typeName === 'string' && options.typeName.length <= 40 ? options.typeName : 'Expected files';
+  const multiple = options?.multiple !== false;
+
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile', 'multiSelections'],
-    title: 'Select Files for Batch Processing',
-    message: 'Choose multiple files to process with wildcards',
-    buttonLabel: 'Select Files',
+    properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+    title,
+    message: multiple ? 'Choose one or more files' : 'Choose a file',
+    buttonLabel: 'Select',
     filters: [
+      ...(extensions.length > 0 ? [{ name: typeName, extensions }] : []),
       { name: 'All Files', extensions: ['*'] },
       { name: 'FASTQ Files', extensions: ['fastq', 'fq'] },
       { name: 'Text Files', extensions: ['txt', 'csv', 'tsv'] },
@@ -675,6 +708,28 @@ app
     });
   })
   .catch(log.error);
+
+// -----------------------------------------------------------------------------
+// The person's own workflow templates: <home>/.rustrunner/templates/<id>.json
+// -----------------------------------------------------------------------------
+
+ipcMain.handle('list-user-templates', (): StoredTemplate[] => listUserTemplates(templatesDir(os.homedir())));
+
+ipcMain.handle('save-user-template', (_event, raw: unknown): StoreResult => {
+  const result = saveUserTemplate(templatesDir(os.homedir()), raw);
+  if (result.ok === false) log.warn('Could not save a template', result.error);
+  return result;
+});
+
+ipcMain.handle('delete-user-template', (_event, id: unknown): StoreResult =>
+  typeof id === 'string' ? deleteUserTemplate(templatesDir(os.homedir()), id) : { ok: false, error: 'Not a template id.' }
+);
+
+ipcMain.handle('rename-user-template', (_event, id: unknown, name: unknown): StoreResult =>
+  typeof id === 'string' && typeof name === 'string'
+    ? renameUserTemplate(templatesDir(os.homedir()), id, name)
+    : { ok: false, error: 'Not a template.' }
+);
 
 /** The per-person settings file, in the app's own data folder. */
 function settingsFile(): string {

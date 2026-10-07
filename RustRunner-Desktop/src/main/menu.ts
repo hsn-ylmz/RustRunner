@@ -33,7 +33,9 @@ export type MenuAction =
   | 'save'
   | 'save-as'
   | 'undo'
-  | 'redo';
+  | 'redo'
+  | 'new-from-template'
+  | 'save-as-template';
 
 export default class MenuBuilder {
   mainWindow: BrowserWindow;
@@ -64,6 +66,11 @@ export default class MenuBuilder {
           click: () => this.send('new'),
         },
         {
+          label: 'New from Template…',
+          accelerator: `Shift+${mod}+N`,
+          click: () => this.send('new-from-template'),
+        },
+        {
           label: 'Open…',
           accelerator: `${mod}+O`,
           click: () => this.send('open'),
@@ -78,6 +85,10 @@ export default class MenuBuilder {
           label: 'Save As…',
           accelerator: `Shift+${mod}+S`,
           click: () => this.send('save-as'),
+        },
+        {
+          label: 'Save as Template…',
+          click: () => this.send('save-as-template'),
         },
         { type: 'separator' },
         {

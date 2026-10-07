@@ -585,6 +585,21 @@
   box-shadow: var(--shadow-lg);
 }
 
+.dialog-box.dialog-lg {
+  width: min(920px, 100%);
+  overflow: hidden;
+}
+
+.dialog-lg .dialog-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.dialog-lg .dialog-footer {
+  flex: 0 0 auto;
+}
+
 .dialog-title {
   margin: 0;
   font-size: var(--text-xl);

@@ -365,5 +365,53 @@ for (const scheme of SCHEMES) {
     await page.getByTestId('command-preview').scrollIntoViewIfNeeded();
     await shoot('preview');
   });
+
+  for (const compact of [false, true]) {
+    test(`${scheme}: templates${compact ? ' in the compact window (1024x700)' : ''}`, async ({ page, app }) => {
+      await prepare(page, app, scheme, compact ? { width: 1024, height: 700 } : { width: 1440, height: 900 });
+      const shoot = shooter(page, scheme, compact ? 'templates-compact' : 'templates');
+
+      await shoot('empty-canvas');
+      await page.getByTestId('empty-templates').click();
+      await expect(page.getByTestId('template-card-basic-read-qc')).toBeVisible();
+      await shoot('gallery');
+      await page.getByTestId('template-search').fill('zzzz');
+      await shoot('gallery-no-match');
+      await page.getByTestId('template-search').fill('');
+      await page.getByTestId('template-card-basic-read-qc').click();
+      await shoot('setup-empty');
+      await page.getByTestId('template-input-field-reads').fill('/data/run1.bam');
+      await shoot('setup-file-of-another-kind');
+      await page.getByTestId('template-input-field-reads').fill('/data/run1.fastq.gz');
+      await page.getByTestId('template-create').click();
+      await expect(nodes(page)).toHaveCount(4);
+      await shoot('created-canvas');
+
+      await page.getByTestId('new-from-template').click();
+      await page.getByTestId('template-save-current').click();
+      await shoot('save-as-template');
+      await page.getByTestId('save-template-name').fill('My lab QC');
+      await page.getByTestId('save-template-confirm').click();
+      await page.getByTestId('new-from-template').click();
+      await expect(page.getByTestId('template-grid-user')).toBeVisible();
+      await shoot('gallery-my-templates');
+      await page.keyboard.press('Escape');
+
+      // Left empty: the workflow says what is missing.
+      await page.getByTestId('new-from-template').click();
+      await page.getByTestId('template-card-basic-read-qc').click();
+      await page.getByTestId('template-create').click();
+      await page.getByTestId('confirm-accept').click();
+      await expect(page.getByTestId('problems-toggle')).toBeVisible();
+      if (compact) {
+        // A narrow window keeps the list closed so it never hides the steps.
+        await expect(page.getByTestId('problems-panel')).toHaveCount(0);
+        await shoot('created-with-missing-file-list-closed');
+        await page.getByTestId('problems-toggle').click();
+      }
+      await expect(page.getByTestId('problems-panel')).toBeVisible();
+      await shoot('created-with-missing-file');
+    });
+  }
 }
 

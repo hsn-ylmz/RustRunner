@@ -7,7 +7,7 @@
 import { Button } from '../ui';
 
 const STEPS: { title: string; text: string }[] = [
-  { title: 'Add steps', text: 'Pick tools from the catalog, or write your own command.' },
+  { title: 'Add steps', text: 'Start from a template, pick tools from the catalog, or write your own command.' },
   {
     title: 'Connect them',
     text: 'Drag from the dot under one step to the dot above the next, so results flow along.',
@@ -17,12 +17,14 @@ const STEPS: { title: string; text: string }[] = [
 
 export function EmptyState({
   modifier,
+  onOpenTemplates,
   onOpenCatalog,
   onAddCustom,
   onOpenWorkflow,
 }: {
   /** "Cmd" or "Ctrl", for the tip line. */
   modifier: string;
+  onOpenTemplates: () => void;
   onOpenCatalog: () => void;
   onAddCustom: () => void;
   onOpenWorkflow: () => void;
@@ -41,11 +43,14 @@ export function EmptyState({
           <Button
             variant="primary"
             size="lg"
-            icon="plus"
+            icon="template"
             fullWidth
-            data-testid="empty-add-catalog"
-            onClick={onOpenCatalog}
+            data-testid="empty-templates"
+            onClick={onOpenTemplates}
           >
+            Start from a template
+          </Button>
+          <Button fullWidth icon="plus" data-testid="empty-add-catalog" onClick={onOpenCatalog}>
             Add a tool from the catalog
           </Button>
           <Button fullWidth icon="plus" data-testid="empty-add-custom" onClick={onAddCustom}>

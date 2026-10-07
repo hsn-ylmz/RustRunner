@@ -1,0 +1,91 @@
+{
+  "formatVersion": 1,
+  "id": "basic-read-qc",
+  "name": "Basic read quality check",
+  "description": "Check the quality of sequencing reads, trim them, check again and get one combined report.",
+  "details": "Start here if you have just received sequencing data. The pipeline checks your reads with FastQC, removes adapters and poor-quality bases with fastp, checks the trimmed reads with FastQC again, and gathers all of it into a single MultiQC report you can open in a browser. Comparing the two quality checks shows whether trimming helped. You only need one FASTQ file; other samples can be run later by choosing a different file.",
+  "domain": "qc",
+  "difficulty": "beginner",
+  "minCatalogVersion": "2026.15.0",
+  "inputs": [
+    {
+      "id": "reads",
+      "label": "Sequencing reads",
+      "hint": "One FASTQ file of single-end reads, plain or compressed (.fastq or .fastq.gz).",
+      "types": ["fastq"],
+      "multiple": false,
+      "required": true,
+      "example": "sample.fastq.gz",
+      "targets": [
+        { "step": "fastqc_raw", "slot": "reads" },
+        { "step": "fastp", "slot": "reads" }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "fastqc_raw",
+      "tool": "fastqc",
+      "label": "FastQC (raw reads)",
+      "files": { "report_dir": "qc_raw/" },
+      "position": { "x": 0, "y": 0 }
+    },
+    {
+      "key": "fastp",
+      "tool": "fastp",
+      "label": "Trim reads (fastp)",
+      "position": { "x": 260, "y": 0 }
+    },
+    {
+      "key": "fastqc_trimmed",
+      "tool": "fastqc",
+      "label": "FastQC (trimmed reads)",
+      "files": { "report_dir": "qc_trimmed/" },
+      "position": { "x": 520, "y": 160 }
+    },
+    {
+      "key": "multiqc",
+      "tool": "multiqc",
+      "label": "MultiQC report",
+      "files": { "report_dir": "multiqc/" },
+      "position": { "x": 260, "y": 320 }
+    }
+  ],
+  "edges": [
+    { "from": "fastp", "to": "fastqc_trimmed", "bind": [{ "slot": "reads", "output": "trimmed" }] },
+    { "from": "fastqc_raw", "to": "multiqc", "bind": [{ "slot": "reports", "output": "report_dir" }] },
+    { "from": "fastp", "to": "multiqc", "bind": [{ "slot": "reports", "output": "json_report" }] },
+    { "from": "fastqc_trimmed", "to": "multiqc", "bind": [{ "slot": "reports", "output": "report_dir" }] }
+  ],
+  "outputs": [
+    {
+      "label": "Combined quality report",
+      "step": "multiqc",
+      "slot": "report",
+      "hint": "Open multiqc_report.html in a browser to see every check on one page."
+    },
+    {
+      "label": "Trimmed reads",
+      "step": "fastp",
+      "slot": "trimmed",
+      "hint": "Cleaned reads, ready for alignment."
+    },
+    {
+      "label": "Trimming summary",
+      "step": "fastp",
+      "slot": "html_report",
+      "hint": "What fastp removed, before and after."
+    }
+  ],
+  "references": [
+    { "label": "FastQC, Babraham Bioinformatics", "url": "https://www.bioinformatics.babraham.ac.uk/projects/fastqc/" },
+    {
+      "label": "Chen S, Zhou Y, Chen Y, Gu J. fastp: an ultra-fast all-in-one FASTQ preprocessor. Bioinformatics 2018;34:i884-i890.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty560"
+    },
+    {
+      "label": "Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.",
+      "url": "https://doi.org/10.1093/bioinformatics/btw354"
+    }
+  ]
+}

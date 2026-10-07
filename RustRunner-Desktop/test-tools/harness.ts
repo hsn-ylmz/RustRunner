@@ -108,6 +108,11 @@ export interface Chain {
    * fails the chain, so a connection that became ambiguous is noticed.
    */
   bindings?: Record<string, Array<{ slot: string; output: string }>>;
+  /**
+   * Builds the workflow by some other way than `nodes` and `edges` (a template
+   * made into steps by the code the gallery uses). `nodes` and `edges` are then empty.
+   */
+  build?: () => BuiltChain;
   verify?: (dir: string) => Check[];
 }
 
@@ -477,7 +482,7 @@ export function defineDomain(definition: DomainDefinition): void {
         fs.mkdirSync(dir, { recursive: true });
         for (const f of chain.files) fs.copyFileSync(path.join(DATA, f), path.join(dir, f));
 
-        const { workflow, toolOf } = buildWorkflow(chain);
+        const { workflow, toolOf } = chain.build ? chain.build() : buildWorkflow(chain);
         const workflowPath = path.join(dir, `${chain.name}.yaml`);
         fs.writeFileSync(workflowPath, yaml.dump(workflow));
 

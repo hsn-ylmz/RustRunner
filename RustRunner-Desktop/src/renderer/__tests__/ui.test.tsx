@@ -257,6 +257,13 @@ describe('Dialog', () => {
     expect(m).toContain('New workflow');
     expect(m).toContain('dialog-footer');
   });
+
+  it('is the standard width unless asked to be wide', () => {
+    const plain = html(<Dialog title="A" onClose={() => {}}>x</Dialog>);
+    const wide = html(<Dialog title="A" size="lg" onClose={() => {}}>x</Dialog>);
+    expect(plain).toContain('class="dialog-box"');
+    expect(wide).toContain('class="dialog-box dialog-lg"');
+  });
 });
 
 describe('trapTarget', () => {

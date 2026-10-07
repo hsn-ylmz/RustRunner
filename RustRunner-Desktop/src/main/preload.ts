@@ -44,7 +44,15 @@ interface WorkflowData {
 }
 
 /** Menu selections forwarded from the main process. */
-type MenuAction = 'new' | 'open' | 'save' | 'save-as' | 'undo' | 'redo';
+type MenuAction =
+  | 'new'
+  | 'open'
+  | 'save'
+  | 'save-as'
+  | 'undo'
+  | 'redo'
+  | 'new-from-template'
+  | 'save-as-template';
 
 /**
  * Subscribes to `channel` and returns an unsubscribe function.
@@ -152,8 +160,30 @@ const electronHandler = {
     },
 
     // File selection for wildcards
-    selectFiles(): Promise<string[] | null> {
-      return ipcRenderer.invoke('select-files');
+    selectFiles(options?: {
+      title?: string;
+      multiple?: boolean;
+      extensions?: string[];
+      typeName?: string;
+    }): Promise<string[] | null> {
+      return ipcRenderer.invoke('select-files', options);
+    },
+
+    // The person's own workflow templates (files in <home>/.rustrunner/templates).
+    listUserTemplates(): Promise<Array<{ id: string; raw?: unknown; error?: string }>> {
+      return ipcRenderer.invoke('list-user-templates');
+    },
+
+    saveUserTemplate(raw: unknown): Promise<{ ok: true } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('save-user-template', raw);
+    },
+
+    deleteUserTemplate(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('delete-user-template', id);
+    },
+
+    renameUserTemplate(id: string, name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('rename-user-template', id, name);
     },
 
     // Workflow file persistence. Pass filePath = null to prompt for a

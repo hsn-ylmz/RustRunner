@@ -54,7 +54,15 @@ export interface ResumeInfo {
 }
 
 /** Menu selections forwarded from the main process over 'menu-action'. */
-export type MenuAction = 'new' | 'open' | 'save' | 'save-as' | 'undo' | 'redo';
+export type MenuAction =
+  | 'new'
+  | 'open'
+  | 'save'
+  | 'save-as'
+  | 'undo'
+  | 'redo'
+  | 'new-from-template'
+  | 'save-as-template';
 
 /** How a run ended, so the renderer can style a user-stop distinctly. */
 export type WorkflowOutcome = 'success' | 'failed' | 'stopped';
@@ -129,7 +137,19 @@ interface ElectronAPI {
     resumeWorkflow(): void;
     stopWorkflow(): void;
     selectDirectory(): Promise<string | null>;
-    selectFiles(): Promise<string[] | null>;
+    /** Asks for files. `extensions` (no dots) are offered first; `multiple` defaults to true. */
+    selectFiles(options?: {
+      title?: string;
+      multiple?: boolean;
+      extensions?: string[];
+      typeName?: string;
+    }): Promise<string[] | null>;
+
+    /** The person's own workflow templates: the files of <home>/.rustrunner/templates, not yet checked. */
+    listUserTemplates(): Promise<Array<{ id: string; raw?: unknown; error?: string }>>;
+    saveUserTemplate(raw: unknown): Promise<{ ok: true } | { ok: false; error: string }>;
+    deleteUserTemplate(id: string): Promise<{ ok: true } | { ok: false; error: string }>;
+    renameUserTemplate(id: string, name: string): Promise<{ ok: true } | { ok: false; error: string }>;
 
     // Workflow persistence. filePath = null prompts for a location;
     // resolves to the path written, or null if the user cancelled.

@@ -15,6 +15,7 @@ export function Dialog({
   footer,
   children,
   testId,
+  size = 'md',
 }: {
   title: string;
   onClose: () => void;
@@ -23,6 +24,8 @@ export function Dialog({
   footer?: ReactNode;
   children: ReactNode;
   testId?: string;
+  /** `lg` is wide and keeps the footer in view while the body scrolls (galleries, long forms). */
+  size?: 'md' | 'lg';
 }) {
   const titleId = useId();
   const boxRef = useRef<HTMLDivElement>(null);
@@ -66,7 +69,7 @@ export function Dialog({
       }}
     >
       <div
-        className="dialog-box"
+        className={size === 'lg' ? 'dialog-box dialog-lg' : 'dialog-box'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

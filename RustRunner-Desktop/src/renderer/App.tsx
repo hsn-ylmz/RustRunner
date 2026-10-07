@@ -71,6 +71,11 @@ import { UpdateBanner, type UpdateStatus } from './components/UpdateBanner';
 import { PropertiesPanel, type FocusRequest } from './components/PropertiesPanel';
 import { EmptyState } from './components/EmptyState';
 import { ProblemsPanel } from './components/ProblemsPanel';
+import { TemplateGallery } from './components/TemplateGallery';
+import { SaveTemplateDialog } from './components/SaveTemplateDialog';
+import { instantiateTemplate, valuesFromText } from './templates/instantiate';
+import { templateBlockers } from './templates/fromWorkflow';
+import type { WorkflowTemplate } from './templates/schema';
 import { ExecutionLogs, type ExecutionTab } from './components/ExecutionLogs';
 import { StepStatusPanel } from './components/StepStatusPanel';
 import { RunHistoryPanel } from './components/RunHistoryPanel';
@@ -139,6 +144,13 @@ import type { LogFilter } from './logLines';
  */
 const MAX_LOG_LINES = 5000;
 
+/** Space the run controls take at the left of the canvas, in pixels (for fitting a new template). */
+const TEMPLATE_INSET_LEFT = 216;
+/** The same with the problem list open beside them. */
+const TEMPLATE_INSET_WITH_LIST = 600;
+/** Narrowest canvas that opens the problem list after creating from a template. */
+const TEMPLATE_LIST_MIN_WIDTH = 1100;
+
 /** The Mac check decides which key is "Mod" in shortcuts and their labels. */
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent);
 
@@ -197,6 +209,9 @@ function WorkflowEditorInner() {
   const { screenToFlowPosition, fitView, getViewport, setViewport } = useReactFlow();
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** The "New from template" gallery, and the "Save as template" dialog. */
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   /** The problem list is open (the person asked, or tried to run with problems). */
   const [problemsOpen, setProblemsOpen] = useState(false);
   /** Show every problem on its field, not only on fields already visited. */
@@ -879,6 +894,89 @@ function WorkflowEditorInner() {
     setRevealProblems(false);
   }, [tempWorkflowName, tempWorkflowVersion, tempKeepGoing, addLog, resetHistory]);
 
+  /**
+   * Replaces the canvas with the steps of a template. The files the person
+   * chose are already in the steps' slots, and whatever is still missing shows
+   * in the problem list. Resolves false when the person keeps their current
+   * workflow instead.
+   */
+  const handleCreateFromTemplate = useCallback(
+    async (template: WorkflowTemplate, texts: Record<string, string>, name: string): Promise<boolean> => {
+      const made = instantiateTemplate(template, valuesFromText(template, texts), {
+        edgeDefaults: DEFAULT_EDGE_OPTIONS,
+      });
+      if (made.ok === false) {
+        notify('danger', made.errors[0]);
+        return false;
+      }
+      if (
+        !(await confirmDiscardIfDirty({
+          title: 'Replace the current workflow?',
+          message: 'This workflow has unsaved changes. Creating one from the template discards them.',
+          confirmLabel: 'Discard changes',
+        }))
+      ) {
+        return false;
+      }
+      setWorkflowName(name);
+      setWorkflowVersion('');
+      setKeepGoing(false);
+      // A workflow made from a template is a new identity, like New.
+      setWorkflowId(generateWorkflowId());
+      setNodes(made.nodes);
+      setEdges(made.edges);
+      setSelectedNodeId(null);
+      setExecutionState('idle');
+      setNodeWildcardFiles({});
+      setStepRuns({});
+      setRunPhase('none');
+      setCurrentFilePath(null);
+      // Nothing is saved yet, so closing now should ask first.
+      setIsDirty(true);
+      resetHistory();
+      setRunOutcome(null);
+      setRevealProblems(false);
+      // The list opens when there is room beside the run controls; a narrow window keeps its "problems" button.
+      const roomForList = (flowWrapperRef.current?.getBoundingClientRect().width ?? 0) >= TEMPLATE_LIST_MIN_WIDTH;
+      setProblemsOpen(made.missing.length > 0 && roomForList);
+      addLog(`New workflow created from template "${template.name}": ${made.nodes.length} steps`);
+      notify(
+        'success',
+        made.missing.length === 0
+          ? `Created "${name}" with ${made.nodes.length} steps.`
+          : `Created "${name}". ${made.missing.length === 1 ? 'One file is' : `${made.missing.length} files are`} still missing: the problem list shows where.`
+      );
+      // Fit the steps into the part of the canvas the run controls and the problem list leave free.
+      const left = made.missing.length > 0 && roomForList ? TEMPLATE_INSET_WITH_LIST : TEMPLATE_INSET_LEFT;
+      window.setTimeout(
+        () =>
+          fitView({
+            maxZoom: 1,
+            padding: { top: '24px', right: '24px', bottom: '24px', left: `${left}px` },
+            duration: 200,
+          }),
+        50
+      );
+      return true;
+    },
+    [notify, confirmDiscardIfDirty, resetHistory, addLog, fitView]
+  );
+
+  const saveBlockedReason = useMemo(() => templateBlockers(nodes)[0], [nodes]);
+
+  /** Stores the template and says where to find it; resolves a problem sentence or null. */
+  const handleSaveTemplate = useCallback(
+    async (template: WorkflowTemplate): Promise<string | null> => {
+      const result = await window.electron.ipcRenderer.saveUserTemplate(template);
+      if (result.ok === false) return result.error;
+      setSaveTemplateOpen(false);
+      addLog(`Saved template "${template.name}"`);
+      notify('success', `Saved "${template.name}". It is under New from template, My templates.`);
+      return null;
+    },
+    [addLog, notify]
+  );
+
   const handleOpen = useCallback(async () => {
     if (
       !(await confirmDiscardIfDirty({
@@ -1334,7 +1432,8 @@ function WorkflowEditorInner() {
   // the same key press too (the page may see it first), so one action is not
   // run twice within a moment.
   const shortcutActions = useRef<Record<ShortcutAction, () => void>>(null as never);
-  const modalOpen = nameDialog !== null || confirmRequest !== null || shortcutsOpen;
+  const modalOpen =
+    nameDialog !== null || confirmRequest !== null || shortcutsOpen || templatesOpen || saveTemplateOpen;
   const modalOpenRef = useRef(false);
   modalOpenRef.current = modalOpen;
   shortcutActions.current = {
@@ -1391,6 +1490,12 @@ function WorkflowEditorInner() {
           break;
         case 'save-as':
           handleSaveAs();
+          break;
+        case 'new-from-template':
+          setTemplatesOpen(true);
+          break;
+        case 'save-as-template':
+          setSaveTemplateOpen(true);
           break;
         case 'undo':
           handleUndo();
@@ -1596,6 +1701,14 @@ function WorkflowEditorInner() {
 
         <div className="file-buttons" role="group" aria-label="File">
           <Button variant="ghost" onClick={handleNew}>New</Button>
+          <Button
+            variant="ghost"
+            onClick={() => setTemplatesOpen(true)}
+            data-testid="new-from-template"
+            tooltip="Start from a ready-made pipeline, or one you saved"
+          >
+            Templates
+          </Button>
           <Button variant="ghost" onClick={handleOpen}>Open</Button>
           <Button variant="ghost" onClick={handleSave}>Save</Button>
           <Button variant="ghost" onClick={handleSaveAs}>Save as</Button>
@@ -1828,6 +1941,7 @@ function WorkflowEditorInner() {
           {nodes.length === 0 && !paletteOpen && (
             <EmptyState
               modifier={formatKeys('Mod', IS_MAC)}
+              onOpenTemplates={() => setTemplatesOpen(true)}
               onOpenCatalog={openPalette}
               onAddCustom={addNode}
               onOpenWorkflow={handleOpen}
@@ -2002,7 +2116,43 @@ function WorkflowEditorInner() {
           {nameDialog === 'new' && (
             <p className="dialog-note">You will choose a working directory when you click Run.</p>
           )}
+          {nameDialog === 'new' && (
+            <Button
+              icon="template"
+              data-testid="new-dialog-templates"
+              onClick={() => {
+                setNameDialog(null);
+                setTemplatesOpen(true);
+              }}
+            >
+              Start from a template instead
+            </Button>
+          )}
         </Dialog>
+      )}
+
+      {templatesOpen && (
+        <TemplateGallery
+          onClose={() => setTemplatesOpen(false)}
+          onCreate={handleCreateFromTemplate}
+          onSaveCurrent={() => {
+            setTemplatesOpen(false);
+            setSaveTemplateOpen(true);
+          }}
+          saveBlockedReason={saveBlockedReason}
+          onConfirm={askConfirm}
+          notify={notify}
+        />
+      )}
+
+      {saveTemplateOpen && (
+        <SaveTemplateDialog
+          nodes={nodes}
+          edges={edges}
+          defaultName={workflowName}
+          onClose={() => setSaveTemplateOpen(false)}
+          onSave={handleSaveTemplate}
+        />
       )}
 
       {confirmRequest && <ConfirmDialog request={confirmRequest} onResolve={resolveConfirm} />}
