@@ -324,8 +324,31 @@ describe.skipIf(process.platform === 'win32')('the shell logic of the commands',
     if (result.status !== 0) throw new Error(`${result.stderr}`);
     return result.stdout.trim().split('\n');
   };
+  /**
+   * Like argsGiven for a command that redirects to its `outSlot`: the slot gets a
+   * temporary file whose lines are returned. A redirect to /dev/stdout fails on
+   * CI runners whose stdout is a socket.
+   */
+  const linesWritten = (
+    toolId: string,
+    standIn: string,
+    slots: Record<string, Files>,
+    outSlot: string,
+    params: Record<string, any> = {},
+    prelude = ''
+  ): string[] => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'epi-out-'));
+    try {
+      const file = path.join(dir, 'out.txt');
+      const result = run(toolId, standIn, { ...slots, [outSlot]: file }, params, prelude);
+      if (result.status !== 0) throw new Error(`${result.stderr}`);
+      return fs.readFileSync(file, 'utf8').trim().split('\n');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
 
-  const macs = { treatment: 'chip.bam', control: '', out_dir: 'macs3/' };
+  const macs ={ treatment: 'chip.bam', control: '', out_dir: 'macs3/' };
 
   it('gives MACS3 a control only when there is one, and fragment settings only for single-end reads', () => {
     const slots = { ...macs };
@@ -402,9 +425,9 @@ describe.skipIf(process.platform === 'win32')('the shell logic of the commands',
   });
 
   it('asks bedtools intersect for a minimum overlap only when one is typed', () => {
-    const slots = { a: 'a.bed', b: 'b.bed', result: '/dev/stdout' };
-    expect(argsGiven('bedtools-intersect', 'bedtools', slots)).not.toContain('-f');
-    const args = argsGiven('bedtools-intersect', 'bedtools', slots, { min_overlap: '0.25', mode: '-v' });
+    const slots = { a: 'a.bed', b: 'b.bed' };
+    expect(linesWritten('bedtools-intersect', 'bedtools', slots, 'result')).not.toContain('-f');
+    const args = linesWritten('bedtools-intersect', 'bedtools', slots, 'result', { min_overlap: '0.25', mode: '-v' });
     expect(args[args.indexOf('-f') + 1]).toBe('0.25');
     expect(args).toContain('-v');
   });
@@ -416,10 +439,11 @@ describe.skipIf(process.platform === 'win32')('the shell logic of the commands',
       const other = path.join(dir, 'other.bed');
       fs.writeFileSync(peaks, 'track name=peaks\nchr2\t50\t90\tp2\t1\t.\t5\t5\t5\t3\nchr1\t300\t400\tp1\t1\t.\t5\t5\t5\t3\n');
       fs.writeFileSync(other, '#header\nchr1\t100\t200\n');
-      const out = argsGiven(
+      const out = linesWritten(
         'bedtools-merge',
         'bedtools',
-        { intervals: [peaks, other], merged: '/dev/stdout' },
+        { intervals: [peaks, other] },
+        'merged',
         { distance: 5 },
         // The stand-in prints its arguments, then passes the sorted regions through.
         'bedtools() { echo "ARGS $*"; cat; }'
