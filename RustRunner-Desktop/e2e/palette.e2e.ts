@@ -108,7 +108,7 @@ test('favourites and recently used tools are saved in the app settings and survi
   await page.getByTestId('palette-search').fill('fastqc');
   await page.getByTestId('palette-favourite').click();
   await expect(page.getByTestId('palette-favourite')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('palette-favourite')).toContainText('Remove from favourites');
+  await expect(page.getByTestId('palette-favourite')).toHaveAttribute('aria-label', 'Remove from favourites');
   // Use another tool, so it is listed as recent.
   await page.getByTestId('palette-search').fill('fastp');
   await page.getByTestId('palette-item-fastp').click();
@@ -127,7 +127,7 @@ test('favourites and recently used tools are saved in the app settings and survi
     await expect(again.getByTestId('palette-fav-fastqc')).toBeVisible();
     await expect(again.getByTestId('palette-recent-fastp')).toBeVisible();
     // Keyboard: the first row is the favourite; its preview offers to remove it.
-    await expect(again.getByTestId('palette-favourite')).toContainText('Remove from favourites');
+    await expect(again.getByTestId('palette-favourite')).toHaveAttribute('aria-label', 'Remove from favourites');
     // Removing it saves too.
     await again.getByTestId('palette-favourite').click();
     await expect(again.getByTestId('palette-fav-fastqc')).toHaveCount(0);
@@ -219,3 +219,46 @@ test('the overview map is small, themed, and can be hidden', async ({ page }) =>
   await page.getByTestId('minimap-toggle').click();
   await expect(map).toBeVisible();
 });
+
+for (const size of [
+  { width: 1440, height: 900 },
+  { width: 1024, height: 700 },
+]) {
+  test(`the preview keeps its actions in view and its database note readable at ${size.width}x${size.height}`, async ({
+    page,
+    app,
+  }) => {
+    await setWindow(app, size.width, size.height);
+    await page.getByTestId('open-palette').click();
+    await page.getByTestId('palette-search').fill('kraken2');
+    await page.getByTestId('palette-item-kraken2').hover();
+    const preview = page.getByTestId('palette-preview');
+    await expect(preview).toBeVisible();
+
+    // The Add, favourite and documentation buttons are in the window without any scrolling.
+    for (const id of ['palette-preview-add', 'palette-favourite', 'palette-preview-docs']) {
+      await expect(page.getByTestId(id), id).toBeInViewport({ ratio: 1 });
+    }
+    const details = page.getByTestId('palette-preview-details');
+    const actions = (await page.getByTestId('palette-preview-actions').boundingBox())!;
+    const detailsBox = (await details.boundingBox())!;
+    expect(actions.y).toBeGreaterThanOrEqual(detailsBox.y + detailsBox.height - 1);
+
+    // The note is whole: no raw address, a short labelled link, and nothing cut off once scrolled to.
+    const note = page.getByTestId('palette-preview-database');
+    await expect(note).not.toContainText('https://');
+    await expect(note).not.toContainText('benlangmead.github.io');
+    await expect(page.getByTestId('palette-preview-database-docs')).toHaveText('Kraken2 index downloads');
+    await note.scrollIntoViewIfNeeded();
+    const noteBox = (await note.boundingBox())!;
+    const area = (await details.boundingBox())!;
+    expect(noteBox.y).toBeGreaterThanOrEqual(area.y - 1);
+    expect(noteBox.y + noteBox.height).toBeLessThanOrEqual(area.y + area.height + 1);
+    expect(await note.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+    await expect(note).toContainText('70 GB of memory.');
+
+    // The details scroll as a whole, to the end, while the buttons stay put.
+    await details.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await expect(page.getByTestId('palette-preview-add')).toBeInViewport({ ratio: 1 });
+  });
+}

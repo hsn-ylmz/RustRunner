@@ -10,7 +10,7 @@ import {
   normalizeThreads,
   normalizeTimeout,
 } from './workflowConversion';
-import { defaultParams, findTool, missingRequiredParams } from './tools/catalog';
+import { defaultParams, findTool, missingRequiredParams, type CatalogTool } from './tools/catalog';
 import type { IssueField } from './validation';
 
 export type SectionId = 'basics' | 'io' | 'options' | 'reliability' | 'checks' | 'advanced';
@@ -102,6 +102,39 @@ function clip(text: string, max = 28): string {
 /** A catalog step whose command is generated: its files are all named slots. */
 function usesOnlySlots(data: Record<string, any>): boolean {
   return Boolean(findTool(data.catalogId)) && data.catalogCommandCustom !== true && !data.input && !data.output;
+}
+
+/** Whether a catalog tool reads one file per run, so running it once per chosen file is meaningful. */
+export function takesOneFileAtATime(tool: CatalogTool): boolean {
+  return tool.inputs.some((slot) => slot.required && !slot.multiple);
+}
+
+/** How "Inputs and outputs" is laid out for a step. */
+export interface IoLayout {
+  /** The named file slots come before the batch ("run once per file") controls. */
+  slotsFirst: boolean;
+  /** Offer the batch controls at all. */
+  showBatch: boolean;
+  /** Offer the "name for each file" field: only once a batch is in use for a catalog step. */
+  showBatchName: boolean;
+}
+
+/**
+ * A catalog step is about its tool's files, so the slots (reference, reads 1,
+ * reads 2, ...) come first and batch mode is a secondary option below them,
+ * offered only when the tool takes one file at a time (or a batch is already
+ * set up, so it can be undone). A custom step has no slots to lead with: its
+ * batch choice stays first and its main input and output follow.
+ */
+export function ioLayout(data: Record<string, any>, fileCount: number): IoLayout {
+  const tool = findTool(data.catalogId);
+  if (!tool) return { slotsFirst: false, showBatch: true, showBatchName: true };
+  const inUse = fileCount > 0 || String(data.wildcardName ?? '').trim() !== '';
+  return {
+    slotsFirst: true,
+    showBatch: inUse || takesOneFileAtATime(tool),
+    showBatchName: inUse,
+  };
 }
 
 /** What the summary of a section needs besides the node's data. */

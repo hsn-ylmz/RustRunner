@@ -55,6 +55,7 @@ import { useEffect, useState } from 'react';
 import {
   SECTION_TITLES,
   isSectionOpen,
+  ioLayout,
   loadOpenState,
   saveOpenState,
   sectionForField,
@@ -407,6 +408,24 @@ export function PropertiesPanel({
     addLog(`Cleared files for ${selectedNode.data.label}`);
   };
 
+  const layout = ioLayout(selectedNode.data, nodeFiles?.length ?? 0);
+
+  const slotFields = (
+    <SlotFields
+      slots={slots}
+      choices={slotChoices}
+      prompt={bindingPrompt}
+      errorFor={(slot) => errorFor(`slot:${slot}`)}
+      onVisit={(slot) => visit(`slot:${slot}`)}
+      onFile={(slot, value) => onSlotFile?.(slot, value)}
+      onKind={(slot, kind) => onSlotKind?.(slot, kind)}
+      onLink={(slot, choice) => onSlotLink?.(slot, choice.nodeId, choice.outputKey)}
+      onUnlink={(slot, fromNodeId) => onSlotUnlink?.(slot, fromNodeId)}
+      onChoose={(option) => onChooseBinding?.(option)}
+      onDismiss={() => onDismissBinding?.()}
+    />
+  );
+
   return (
     <Panel
       className="properties-panel"
@@ -501,15 +520,19 @@ export function PropertiesPanel({
           </FieldGroup>
         )}
 
+        {layout.slotsFirst && slotFields}
+
+        {layout.showBatch && (
+          <>
         <div className="field" role="group" aria-labelledby="prop-input-files-label">
           <span className="field-label" id="prop-input-files-label">
-            Run once per file
+            Run once for each of several files
           </span>
           <Button icon="folder" fullWidth onClick={handleFileSelection} data-testid="prop-choose-files">
-            Choose input files…
+            Choose files…
           </Button>
           <div className="field-hint">
-            Optional. Pick several files and this step runs once for each of them.
+            Optional. For a batch of samples: pick them all and this step runs once for each file.
           </div>
         </div>
 
@@ -546,6 +569,7 @@ export function PropertiesPanel({
           </>
         )}
 
+{layout.showBatchName && (
         <TextField
           label="Name for each file"
           value={selectedNode.data.wildcardName ?? ''}
@@ -563,6 +587,9 @@ export function PropertiesPanel({
             )
           }
         />
+            )}
+          </>
+        )}
 
         {showMainFiles && (
           <>
@@ -598,19 +625,7 @@ export function PropertiesPanel({
           </>
         )}
 
-        <SlotFields
-          slots={slots}
-          choices={slotChoices}
-          prompt={bindingPrompt}
-          errorFor={(slot) => errorFor(`slot:${slot}`)}
-          onVisit={(slot) => visit(`slot:${slot}`)}
-          onFile={(slot, value) => onSlotFile?.(slot, value)}
-          onKind={(slot, kind) => onSlotKind?.(slot, kind)}
-          onLink={(slot, choice) => onSlotLink?.(slot, choice.nodeId, choice.outputKey)}
-          onUnlink={(slot, fromNodeId) => onSlotUnlink?.(slot, fromNodeId)}
-          onChoose={(option) => onChooseBinding?.(option)}
-          onDismiss={() => onDismissBinding?.()}
-        />
+{!layout.slotsFirst && slotFields}
       </CollapsibleSection>
 
       {catalogTool && (
@@ -624,6 +639,19 @@ export function PropertiesPanel({
             <Callout tone="info" data-testid="catalog-needs-database">
               <strong>Needs {catalogTool.needs_database.label}.</strong>{' '}
               {catalogTool.needs_database.hint}
+              {catalogTool.needs_database.link && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="link-button"
+                    data-testid="catalog-needs-database-link"
+                    onClick={() => void window.electron.ipcRenderer.openDocs(catalogTool.needs_database!.link!.url)}
+                  >
+                    {catalogTool.needs_database.link.label}
+                  </button>
+                </>
+              )}
             </Callout>
           )}
 

@@ -206,7 +206,7 @@ describe('the epigenomics tools in the catalog', () => {
   it('asks for a reference that needs no download: HOMER works from the FASTA and GTF that are connected', () => {
     const homer = tool('homer-annotatepeaks');
     expect(homer.needs_database?.label).toMatch(/FASTA and gene annotation/);
-    expect(homer.needs_database?.hint).toMatch(/nothing is downloaded/);
+    expect(homer.needs_database?.hint).toMatch(/Nothing is downloaded/);
     expect(homer.inputs.map((s) => s.name)).toEqual(['peaks', 'genome', 'annotation']);
     expect(homer.inputs.every((s) => s.required)).toBe(true);
   });

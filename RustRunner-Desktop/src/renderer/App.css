@@ -954,19 +954,34 @@
   display: flex;
   flex: 0 0 236px;
   flex-direction: column;
-  gap: var(--space-1);
   min-width: 0;
-  padding: var(--space-2);
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
   font-size: var(--text-xs);
   background-color: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
 }
 
+/* Only the details scroll; the action bar below them is always in view. */
+.tool-preview-details {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-height: 0;
+  padding: var(--space-2);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
 .tool-preview-empty {
   flex-direction: row;
   align-items: flex-start;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  overflow-y: auto;
   color: var(--text-muted);
 }
 
@@ -1033,24 +1048,23 @@
   border-radius: var(--radius-control);
 }
 
+.tool-preview-database-text {
+  flex: 1;
+  min-width: 0;
+}
+
 .tool-preview-actions {
-  /* Stays in view at the bottom of the preview while the details above scroll. */
-  position: sticky;
-  bottom: calc(-1 * var(--space-2));
   display: flex;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
+  align-items: center;
   gap: var(--space-1);
-  margin: var(--space-2) calc(-1 * var(--space-2)) calc(-1 * var(--space-2));
   padding: var(--space-2);
   background-color: var(--surface);
   border-top: 1px solid var(--border);
 }
 
-/* In a short canvas a pinned action row would hide the details; it scrolls with them instead. */
-@container canvas (max-height: 520px) {
-  .tool-preview-actions {
-    position: static;
-  }
+.tool-preview-actions .btn-primary {
+  flex: 1;
 }
 
 .tool-palette-empty,

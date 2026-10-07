@@ -134,6 +134,25 @@ describe('catalog-level rules', () => {
     tool(c, 'fastqc').needs_database = { label: 'Kraken2 database' };
     expect(errorsOf(c)).toContain('needs_database needs a label and a hint');
   });
+
+  it('checks the optional link of a needs_database block', () => {
+    const c = copy();
+    const db = { label: 'Kraken2 database', hint: 'About 50 GB.' };
+    tool(c, 'fastqc').needs_database = { ...db, link: { label: 'Kraken2 index downloads', url: 'https://example.org/k2' } };
+    expect(validateCatalog(c)).toEqual([]);
+    for (const link of [{ label: 'Downloads', url: 'http://example.org' }, { label: '', url: 'https://example.org' }, { url: 'https://example.org' }]) {
+      tool(c, 'fastqc').needs_database = { ...db, link } as never;
+      expect(errorsOf(c)).toContain('needs_database link needs a label and an https:// url');
+    }
+  });
+
+  it('keeps every needs_database note short and free of raw addresses', () => {
+    for (const t of CATALOG.tools) {
+      if (!t.needs_database) continue;
+      expect(t.needs_database.hint.length, `${t.id} hint`).toBeLessThanOrEqual(170);
+      expect(t.needs_database.hint, `${t.id} hint`).not.toMatch(/https?:|www\.|\.io\/|\.org\//);
+    }
+  });
 });
 
 describe('install rules', () => {

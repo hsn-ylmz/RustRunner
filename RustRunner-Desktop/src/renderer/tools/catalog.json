@@ -2386,7 +2386,7 @@
       "threads": 1,
       "needs_database": {
         "label": "snpEff database",
-        "hint": "Build one for your own genome with the snpEff build database step, or download one with snpEff download (a human genome database is about 100 MB)."
+        "hint": "Build one for your genome with the snpEff build database step, or download a ready one (human is about 100 MB)."
       },
       "docs": "https://pcingola.github.io/SnpEff/snpeff/running/"
     },
@@ -4636,7 +4636,7 @@
       "threads": 1,
       "needs_database": {
         "label": "Genome FASTA and gene annotation",
-        "hint": "HOMER works from the genome FASTA and the GTF you connect, so nothing is downloaded. Use a GTF whose chromosome names match the FASTA. HOMER's own premade genomes (hg38, mm10, ...) are not used here."
+        "hint": "Connect your genome FASTA and a GTF with the same chromosome names. Nothing is downloaded."
       },
       "docs": "https://bioconda.github.io/recipes/homer/README.html"
     },
@@ -5933,7 +5933,11 @@
       "docs": "https://github.com/DerrickWood/kraken2/wiki/Manual",
       "needs_database": {
         "label": "Kraken2 database",
-        "hint": "Build a small one with Kraken2 build database, or download a ready-made index from the Kraken2 index page (benlangmead.github.io/aws-indexes/k2). The standard databases need 8 GB to 70 GB of memory."
+        "hint": "Build a small one with Kraken2 build database, or download a ready-made one. Standard databases need 8 to 70 GB of memory.",
+        "link": {
+          "label": "Kraken2 index downloads",
+          "url": "https://benlangmead.github.io/aws-indexes/k2"
+        }
       }
     },
     {
@@ -6000,7 +6004,7 @@
       "docs": "https://github.com/jenniferlu717/Bracken",
       "needs_database": {
         "label": "Kraken2 database",
-        "hint": "A Kraken2 database whose library folder is still there (ready-made indexes that ship the Bracken files do not need this step)."
+        "hint": "Use a Kraken2 database that still has its library folder. Ready-made indexes that include Bracken files do not need this step."
       }
     },
     {
@@ -6114,7 +6118,7 @@
       "docs": "https://github.com/jenniferlu717/Bracken",
       "needs_database": {
         "label": "Bracken database",
-        "hint": "Use Bracken prepare database on your Kraken2 database, or download a ready-made index that lists Bracken files for your read length."
+        "hint": "Run Bracken prepare database on your Kraken2 database, or download an index that includes Bracken files for your read length."
       }
     },
     {
@@ -6545,7 +6549,7 @@
       "docs": "https://github.com/nanoporetech/dorado",
       "needs_database": {
         "label": "Basecalling model",
-        "hint": "Dorado downloads the model it needs the first time (about 30 MB to 300 MB) into your .rustrunner folder, so the first run needs the internet."
+        "hint": "Dorado downloads it on the first run (30 to 300 MB), so that run needs the internet."
       }
     },
     {

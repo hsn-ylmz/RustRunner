@@ -335,7 +335,7 @@ test('a peak caller takes the ChIP, then the input as its control, and a peak an
   await expect(page.getByTestId('prop-slot-peaks')).toContainText('sample_peaks.narrowPeak');
 
   await addFromPalette(page, 'homer', 'homer-annotatepeaks');
-  await expect(page.getByTestId('catalog-needs-database')).toContainText('nothing is downloaded');
+  await expect(page.getByTestId('catalog-needs-database')).toContainText('Nothing is downloaded');
   await expect(page.getByTestId('catalog-needs-database')).toContainText('Genome FASTA and gene annotation');
   await expect(page.getByTestId('prop-slot-genome-row')).not.toContainText('optional');
 });
@@ -504,4 +504,33 @@ test('opening a workflow saved with the version 1 catalog updates its steps', as
   // Sort reads the file the old step named.
   await selectNode(page, 'Sort');
   await expect(page.getByTestId('prop-slot-alignments')).toHaveValue('aligned.sam');
+});
+
+test('a catalog step lists its file slots first and offers batch mode below them, only where it fits', async ({
+  page,
+}) => {
+  const order = async () =>
+    page.evaluate(() => {
+      const y = (id: string) => document.querySelector(`[data-testid="${id}"]`)?.getBoundingClientRect().top ?? null;
+      return { slots: y('prop-slots'), batch: y('prop-choose-files') };
+    });
+
+  // BWA-MEM reads one reads file per run: slots first, batch mode after them.
+  await addFromPalette(page, 'bwa', 'bwa-mem');
+  await expect(page.getByTestId('prop-choose-files')).toBeVisible();
+  const bwa = await order();
+  expect(bwa.slots).not.toBeNull();
+  expect(bwa.slots!).toBeLessThan(bwa.batch!);
+  // The name for each file only appears once a batch is in use.
+  await expect(page.getByTestId('prop-wildcard-name')).toHaveCount(0);
+
+  // FastQC already takes many files in one run: no batch controls.
+  await addFromPalette(page, 'fastqc', 'fastqc');
+  await expect(page.getByTestId('prop-slot-reads')).toBeVisible();
+  await expect(page.getByTestId('prop-choose-files')).toHaveCount(0);
+
+  // A custom step keeps the batch choice first.
+  await page.getByTestId('add-node').click();
+  await expect(page.getByTestId('prop-choose-files')).toBeVisible();
+  await expect(page.getByTestId('prop-wildcard-name')).toBeVisible();
 });

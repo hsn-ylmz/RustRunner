@@ -30,6 +30,8 @@ type Scheme = (typeof SCHEMES)[number];
 test.skip(!OUT, 'set UX_OUT to capture UX screenshots');
 
 /** Takes a numbered, descriptive screenshot of the whole window. */
+const written = new Set<string>();
+
 function shooter(page: Page, scheme: Scheme, group: string) {
   fs.mkdirSync(OUT, { recursive: true });
   let n = 0;
@@ -38,6 +40,9 @@ function shooter(page: Page, scheme: Scheme, group: string) {
     await page.waitForTimeout(350);
     n += 1;
     const file = `${group}-${String(n).padStart(2, '0')}-${name}-${scheme}.png`;
+    // Every name is unique within a capture: a repeat would overwrite a screenshot silently.
+    if (written.has(file)) throw new Error(`duplicate screenshot name ${file}`);
+    written.add(file);
     await page.screenshot({ path: path.join(OUT, file) });
   };
 }
@@ -290,6 +295,11 @@ for (const scheme of SCHEMES) {
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('ArrowDown');
     await shoot('catalog-palette-category-open');
+    // A tool that needs a database: the note is whole and the buttons stay in view.
+    await page.getByTestId('palette-search').fill('kraken2');
+    await page.getByTestId('palette-item-kraken2').hover();
+    await expect(page.getByTestId('palette-preview-add')).toBeInViewport({ ratio: 1 });
+    await shoot('catalog-palette-needs-database');
     await page.getByTestId('palette-search').press('Escape');
 
     await buildChain(page, [
@@ -347,6 +357,10 @@ for (const scheme of SCHEMES) {
     ]);
     await selectNode(page, 'Align');
     await shoot('slots');
+    // A catalog step: its file slots lead, batch mode follows.
+    await addFromPalette(page, 'bwa', 'bwa-mem');
+    await shoot('catalog-step-inputs');
+    await selectNode(page, 'Align');
     await openSection(page, 'advanced');
     await page.getByTestId('command-preview').scrollIntoViewIfNeeded();
     await shoot('preview');

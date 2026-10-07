@@ -3,6 +3,7 @@ import {
   SECTION_ORDER,
   defaultOpen,
   formatTimeout,
+  ioLayout,
   isSectionOpen,
   parseOpenState,
   sectionForField,
@@ -153,5 +154,25 @@ describe('summaries of catalog steps that name every file in a slot', () => {
     expect(sectionSummary('checks', catalogStep)).toBe('Needs an output');
     expect(sectionSummary('checks', catalogStep, { hasOutput: true })).toBe('None');
     expect(sectionSummary('checks', { ...catalogStep, checkExists: true }, { hasOutput: true })).toBe('exists');
+  });
+});
+
+describe('layout of Inputs and outputs', () => {
+  it('leads with the file slots for a catalog step and offers batch mode below them', () => {
+    expect(ioLayout({ catalogId: 'bwa-mem' }, 0)).toEqual({ slotsFirst: true, showBatch: true, showBatchName: false });
+  });
+
+  it('does not offer batch mode to a step that already takes many files in one run', () => {
+    expect(ioLayout({ catalogId: 'fastqc' }, 0)).toEqual({ slotsFirst: true, showBatch: false, showBatchName: false });
+    expect(ioLayout({ catalogId: 'multiqc' }, 0).showBatch).toBe(false);
+  });
+
+  it('keeps batch mode visible once files are chosen or a name is set, so it can be undone', () => {
+    expect(ioLayout({ catalogId: 'fastqc' }, 3)).toEqual({ slotsFirst: true, showBatch: true, showBatchName: true });
+    expect(ioLayout({ catalogId: 'fastqc', wildcardName: 'run' }, 0).showBatch).toBe(true);
+  });
+
+  it('keeps the batch choice first for a custom step', () => {
+    expect(ioLayout({ label: 'A', tool: 'bash' }, 0)).toEqual({ slotsFirst: false, showBatch: true, showBatchName: true });
   });
 });

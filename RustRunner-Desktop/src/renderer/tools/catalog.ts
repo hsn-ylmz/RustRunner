@@ -23,7 +23,7 @@
  *   params    [{ id, label, type, default, description, ... }]
  *   command   template using slot names, parameter ids and `{threads}`
  *   threads   default thread count
- *   needs_database?  { label, hint }  the tool needs reference data to be set up
+ *   needs_database?  { label, hint, link? }  the tool needs reference data to be set up
  * File types come from `file_types`; an input slot may also say `any`.
  */
 
@@ -149,8 +149,10 @@ export type Install = CondaInstall | ExternalInstall | SystemInstall;
 export interface NeedsDatabase {
   /** What to prepare, in plain words: "Kraken2 database". */
   label: string;
-  /** Where to get it and how big it is. */
+  /** Where to get it and how big it is. Short enough to read in a few lines. */
   hint: string;
+  /** A page to download or read about it, shown as a short labelled link. */
+  link?: { label: string; url: string };
 }
 
 export interface CatalogTool {
@@ -502,6 +504,11 @@ export function validateCatalog(raw: unknown): string[] {
       const db = entry.needs_database;
       if (!isRecord(db) || !nonEmpty(db.label) || !nonEmpty(db.hint)) {
         errors.push(`${where}: needs_database needs a label and a hint`);
+      } else if (db.link !== undefined) {
+        const link = db.link;
+        if (!isRecord(link) || !nonEmpty(link.label) || !nonEmpty(link.url) || !link.url.startsWith('https://')) {
+          errors.push(`${where}: needs_database link needs a label and an https:// url`);
+        }
       }
     }
     validateInstall(where, entry.install, errors);

@@ -493,88 +493,100 @@ function ToolPreview({
   const version = tool.install.kind === 'system' ? null : tool.install.version;
   return (
     <div className="tool-preview" data-testid="palette-preview" aria-live="polite">
-      <h4 className="tool-preview-name" data-testid="palette-preview-name">
-        {tool.name}
-      </h4>
-      <p className="tool-preview-text">{tool.description}</p>
-      {previous && (
-        <p className="tool-preview-fit" data-testid="palette-preview-fit">
-          <Icon name="check" size={12} /> Reads what {previous.name} makes ({sharedTypes(tool, previous).join(', ')}).
-        </p>
-      )}
+      <div className="tool-preview-details" data-testid="palette-preview-details" tabIndex={0}>
+        <h4 className="tool-preview-name" data-testid="palette-preview-name">
+          {tool.name}
+        </h4>
+        <p className="tool-preview-text">{tool.description}</p>
+        {previous && (
+          <p className="tool-preview-fit" data-testid="palette-preview-fit">
+            <Icon name="check" size={12} /> Reads what {previous.name} makes ({sharedTypes(tool, previous).join(', ')}).
+          </p>
+        )}
 
-      {tool.needs_database && (
-        <div className="tool-preview-database" data-testid="palette-preview-database">
-          <Icon name="alert" size={14} />
-          <div>
-            <strong>Needs {tool.needs_database.label}.</strong> {tool.needs_database.hint}{' '}
-            <button
-              type="button"
-              className="link-button"
-              data-testid="palette-preview-database-docs"
-              onClick={() => onOpenDocs(tool.docs)}
-            >
-              Open the documentation
-            </button>
+        {tool.needs_database && (
+          <div className="tool-preview-database" data-testid="palette-preview-database">
+            <Icon name="alert" size={14} />
+            <div className="tool-preview-database-text">
+              <strong>Needs {tool.needs_database.label}.</strong> {tool.needs_database.hint}
+              {tool.needs_database.link && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="link-button"
+                    data-testid="palette-preview-database-docs"
+                    onClick={() => onOpenDocs(tool.needs_database!.link!.url)}
+                  >
+                    {tool.needs_database.link.label}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <h5 className="tool-preview-heading">Reads</h5>
-      <ul className="tool-preview-slots">
-        {tool.inputs.map((slot) => (
-          <li key={slot.name}>
-            <span>
-              {slot.label}
-              {!slot.required && <span className="tool-preview-optional"> (optional)</span>}
-            </span>
-            <TypeList types={slot.types} />
-          </li>
-        ))}
-      </ul>
-
-      <h5 className="tool-preview-heading">Makes</h5>
-      <ul className="tool-preview-slots">
-        {tool.outputs
-          .filter((slot) => !slot.derived)
-          .map((slot) => (
+        <h5 className="tool-preview-heading">Reads</h5>
+        <ul className="tool-preview-slots">
+          {tool.inputs.map((slot) => (
             <li key={slot.name}>
-              <span>{slot.is_dir ? `${slot.label} (folder)` : slot.label}</span>
+              <span>
+                {slot.label}
+                {!slot.required && <span className="tool-preview-optional"> (optional)</span>}
+              </span>
               <TypeList types={slot.types} />
             </li>
           ))}
-      </ul>
+        </ul>
 
-      <h5 className="tool-preview-heading">
-        Installation
-        {version && (
-          <span className="tool-preview-version" data-testid="palette-preview-version">
-            {' '}
-            · version {version}
-          </span>
-        )}
-      </h5>
-      <p className="tool-preview-text" data-testid="palette-preview-install">
-        {describeInstall(tool.install)}
-      </p>
+        <h5 className="tool-preview-heading">Makes</h5>
+        <ul className="tool-preview-slots">
+          {tool.outputs
+            .filter((slot) => !slot.derived)
+            .map((slot) => (
+              <li key={slot.name}>
+                <span>{slot.is_dir ? `${slot.label} (folder)` : slot.label}</span>
+                <TypeList types={slot.types} />
+              </li>
+            ))}
+        </ul>
 
-      <div className="tool-preview-actions">
+        <h5 className="tool-preview-heading">
+          Installation
+          {version && (
+            <span className="tool-preview-version" data-testid="palette-preview-version">
+              {' '}
+              · version {version}
+            </span>
+          )}
+        </h5>
+        <p className="tool-preview-text" data-testid="palette-preview-install">
+          {describeInstall(tool.install)}
+        </p>
+
+      </div>
+
+      <div className="tool-preview-actions" data-testid="palette-preview-actions">
         <Button size="sm" variant="primary" icon="plus" data-testid="palette-preview-add" onClick={onAdd}>
           Add to workflow
         </Button>
-        <Button
+        <IconButton
           size="sm"
+          variant="secondary"
           icon={favourite ? 'star-filled' : 'star'}
+          label={favourite ? 'Remove from favourites' : 'Add to favourites'}
           pressed={favourite}
-          aria-pressed={favourite}
           data-testid="palette-favourite"
           onClick={onToggleFavourite}
-        >
-          {favourite ? 'Remove from favourites' : 'Add to favourites'}
-        </Button>
-        <Button size="sm" variant="ghost" icon="link" data-testid="palette-preview-docs" onClick={() => onOpenDocs(tool.docs)}>
-          Documentation
-        </Button>
+        />
+        <IconButton
+          size="sm"
+          variant="secondary"
+          icon="link"
+          label={`Open the ${tool.name} documentation`}
+          data-testid="palette-preview-docs"
+          onClick={() => onOpenDocs(tool.docs)}
+        />
       </div>
     </div>
   );

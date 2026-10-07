@@ -282,7 +282,7 @@ describe('the long-read, assembly, metagenomics and Nanopore tools in the catalo
   it('tells the person what a database tool needs before it can run', () => {
     expect(tool('kraken2').needs_database?.label).toBe('Kraken2 database');
     expect(tool('kraken2').needs_database?.hint).toMatch(/Kraken2 build database/);
-    expect(tool('bracken').needs_database?.hint).toMatch(/Bracken prepare database/);
+    expect(tool('bracken').needs_database?.hint).toMatch(/Bracken prepare database/i);
     expect(tool('bracken-build').needs_database).toBeDefined();
     expect(tool('dorado-basecaller').needs_database?.label).toBe('Basecalling model');
     expect(tool('dorado-basecaller').needs_database?.hint).toMatch(/internet/);
