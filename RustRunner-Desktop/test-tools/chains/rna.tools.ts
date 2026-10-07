@@ -74,7 +74,14 @@ function gtf(text: string): GtfLine[] {
     });
 }
 
-const transcriptsOf = (text: string): GtfLine[] => gtf(text).filter((l) => l.feature === 'transcript');
+/**
+ * The transcript lines of a GTF in genome order. StringTie writes its bundles
+ * in the order its threads finish them, so the file order is not stable.
+ */
+const transcriptsOf = (text: string): GtfLine[] =>
+  gtf(text)
+    .filter((l) => l.feature === 'transcript')
+    .sort((x, y) => (x.contig === y.contig ? x.start - y.start : x.contig < y.contig ? -1 : 1));
 
 /** The share of the total each value makes. */
 function shares(values: number[]): number[] {

@@ -988,6 +988,10 @@
   color: var(--text-muted);
 }
 
+.tool-preview-version {
+  font-weight: var(--weight-regular);
+}
+
 .tool-preview-fit {
   display: flex;
   align-items: flex-start;
@@ -1030,10 +1034,23 @@
 }
 
 .tool-preview-actions {
+  /* Stays in view at the bottom of the preview while the details above scroll. */
+  position: sticky;
+  bottom: calc(-1 * var(--space-2));
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-1);
-  margin-top: var(--space-2);
+  margin: var(--space-2) calc(-1 * var(--space-2)) calc(-1 * var(--space-2));
+  padding: var(--space-2);
+  background-color: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+/* In a short canvas a pinned action row would hide the details; it scrolls with them instead. */
+@container canvas (max-height: 520px) {
+  .tool-preview-actions {
+    position: static;
+  }
 }
 
 .tool-palette-empty,

@@ -52,6 +52,7 @@ export type CommandPart =
 const PROBLEM_ANSI = "it is inside a $'...' string";
 const PROBLEM_HEREDOC = 'it follows a here-document (<<)';
 const PROBLEM_NESTED = 'it follows a double-quoted string that also holds $(...) or a backtick';
+const PROBLEM_BACKTICK = 'it is inside a `...` command; write $(...) instead';
 
 const isNameChar = (c: string) => /[A-Za-z0-9_]/.test(c);
 const isIdentifier = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
@@ -81,6 +82,9 @@ export function scanCommand(command: string): CommandPart[] {
   let sticky: string | undefined;
   let inComment = false;
   let wordStart = true;
+  // Inside an unquoted `...` command. Bash ends it at the next backtick even
+  // within quotes, so no quoting can keep a file name in it literal.
+  let inBacktick = false;
   let i = 0;
   const n = command.length;
 
@@ -127,6 +131,10 @@ export function scanCommand(command: string): CommandPart[] {
     if (quote === 'double' && (c === '`' || (c === '$' && next === '('))) {
       sticky = sticky ?? PROBLEM_NESTED;
     }
+    if (inBacktick && c === '`' && quote !== 'none' && quote !== 'double') {
+      // A backtick inside quotes inside `...`: the quoting can no longer be followed.
+      sticky = sticky ?? PROBLEM_BACKTICK;
+    }
 
     if (c === '{') {
       if (next === '{') {
@@ -146,7 +154,7 @@ export function scanCommand(command: string): CommandPart[] {
           kind: 'hole',
           name: hole.name,
           quote,
-          problem: quote === 'ansi' ? PROBLEM_ANSI : sticky,
+          problem: quote === 'ansi' ? PROBLEM_ANSI : inBacktick ? PROBLEM_BACKTICK : sticky,
         });
         i = hole.end;
         wordStart = false;
@@ -168,6 +176,8 @@ export function scanCommand(command: string): CommandPart[] {
       i += 2;
       wordStart = false;
       continue;
+    } else if (c === '`') {
+      inBacktick = !inBacktick;
     } else if (c === '#' && wordStart) {
       inComment = true;
     } else if (c === '<' && next === '<' && command[i + 2] !== '<' && (i === 0 || command[i - 1] !== '<')) {

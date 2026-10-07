@@ -545,15 +545,18 @@ function ToolPreview({
           ))}
       </ul>
 
-      <h5 className="tool-preview-heading">Installation</h5>
+      <h5 className="tool-preview-heading">
+        Installation
+        {version && (
+          <span className="tool-preview-version" data-testid="palette-preview-version">
+            {' '}
+            · version {version}
+          </span>
+        )}
+      </h5>
       <p className="tool-preview-text" data-testid="palette-preview-install">
         {describeInstall(tool.install)}
       </p>
-      {version && (
-        <p className="tool-preview-text tool-preview-version" data-testid="palette-preview-version">
-          Version {version}
-        </p>
-      )}
 
       <div className="tool-preview-actions">
         <Button size="sm" variant="primary" icon="plus" data-testid="palette-preview-add" onClick={onAdd}>

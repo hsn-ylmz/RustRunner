@@ -121,6 +121,7 @@ const PROBLEM_ANSI: &str = "it is inside a $'...' string";
 const PROBLEM_HEREDOC: &str = "it follows a here-document (<<)";
 const PROBLEM_NESTED: &str =
     "it follows a double-quoted string that also holds $(...) or a backtick";
+const PROBLEM_BACKTICK: &str = "it is inside a `...` command; write $(...) instead";
 
 /// If `chars[i..]` starts with `{identifier}`, returns the identifier and the
 /// index just after the closing brace.
@@ -154,6 +155,9 @@ pub fn scan(command: &str) -> Vec<Part> {
     let mut sticky: Option<&'static str> = None;
     let mut in_comment = false;
     let mut word_start = true;
+    // Inside an unquoted `...` command. Bash ends it at the next backtick even
+    // within quotes, so no quoting can keep a file name in it literal.
+    let mut in_backtick = false;
     let mut i = 0;
 
     while i < chars.len() {
@@ -206,6 +210,10 @@ pub fn scan(command: &str) -> Vec<Part> {
         if quote == Quote::Double && (c == '`' || (c == '$' && next == Some('('))) {
             sticky = sticky.or(Some(PROBLEM_NESTED));
         }
+        if in_backtick && c == '`' && matches!(quote, Quote::Single | Quote::AnsiC) {
+            // A backtick inside quotes inside `...`: the quoting can no longer be followed.
+            sticky = sticky.or(Some(PROBLEM_BACKTICK));
+        }
 
         if c == '{' {
             // {{name}} is an escaped, literal {name}.
@@ -227,6 +235,7 @@ pub fn scan(command: &str) -> Vec<Part> {
                 }
                 let problem = match quote {
                     Quote::AnsiC => Some(PROBLEM_ANSI),
+                    _ if in_backtick => Some(PROBLEM_BACKTICK),
                     _ => sticky,
                 };
                 parts.push(Part::Hole {
@@ -262,6 +271,7 @@ pub fn scan(command: &str) -> Vec<Part> {
                     word_start = false;
                     continue;
                 }
+                '`' => in_backtick = !in_backtick,
                 '#' if word_start => in_comment = true,
                 '<' if next == Some('<')
                     && chars.get(i + 2) != Some(&'<')
@@ -617,6 +627,37 @@ mod tests {
                 ("b".to_string(), Quote::Double, false),
                 ("c".to_string(), Quote::Single, false),
             ]
+        );
+    }
+
+    #[test]
+    fn test_scan_rejects_placeholders_inside_backticks() {
+        // Bash ends `...` at the next backtick even inside single quotes, so a
+        // file name holding a backtick would escape any quoting there.
+        assert_eq!(
+            holes("echo `cat {a}` {b} \"`x`\" {c}"),
+            vec![
+                ("a".to_string(), Quote::None, true),
+                ("b".to_string(), Quote::None, false),
+                ("c".to_string(), Quote::None, true),
+            ]
+        );
+        assert_eq!(
+            holes("echo `printf '%s`' x` {a}"),
+            vec![("a".to_string(), Quote::None, true)]
+        );
+        // An escaped backtick is plain text.
+        assert_eq!(
+            holes("echo \\` {a}"),
+            vec![("a".to_string(), Quote::None, false)]
+        );
+        let s = step("echo `cat {f}`").with_named_input("f", &["x`; touch pwned; `y"]);
+        let errors = render_command(&s).unwrap_err();
+        assert!(errors[0].contains("write $(...) instead"), "{:?}", errors);
+        let s = step("echo $(cat {f})").with_named_input("f", &["x`; touch pwned; `y"]);
+        assert_eq!(
+            render_command(&s).unwrap(),
+            format!("echo $(cat {})", shell_quote("x`; touch pwned; `y"))
         );
     }
 

@@ -521,8 +521,19 @@ impl Install {
             fs::copy(local, &download).map_err(|e| format!("could not read {}: {}", local, e))?;
         } else {
             info!("Downloading {}", address);
+            // https only, also after redirects. The checksum below is what makes
+            // the file trustworthy; this keeps the transfer itself private.
             let output = Command::new("curl")
-                .args(["-fsSL", "--retry", "2", "-o"])
+                .args([
+                    "-fsSL",
+                    "--proto",
+                    "=https",
+                    "--proto-redir",
+                    "=https",
+                    "--retry",
+                    "2",
+                    "-o",
+                ])
                 .arg(&download)
                 .arg(address)
                 .output()

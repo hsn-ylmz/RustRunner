@@ -129,6 +129,21 @@ describe('scanCommand and placeholderNames', () => {
     expect(problem('cat <<< {a}')).toBeUndefined();
   });
 
+  it('flags placeholders inside backticks, which no quoting protects (same rule as the engine)', () => {
+    const holes = (cmd: string) =>
+      scanCommand(cmd)
+        .filter((p) => p.kind === 'hole')
+        .map((p: any) => [p.name, p.problem !== undefined]);
+    expect(holes('echo `cat {a}` {b} "`x`" {c}')).toEqual([
+      ['a', true],
+      ['b', false],
+      ['c', true],
+    ]);
+    expect(holes("echo `printf '%s`' x` {a}")).toEqual([['a', true]]);
+    expect(holes('echo \\` {a}')).toEqual([['a', false]]);
+    expect((scanCommand('echo `cat {a}`')[1] as any).problem).toMatch(/\$\(\.\.\.\) instead/);
+  });
+
   it('turns {{x}} back into {x} for a step without slots', () => {
     expect(unescapeBraces("awk '{{print}}' {{x}} {y} {{a.b}}")).toBe("awk '{print}' {x} {y} {{a.b}}");
   });

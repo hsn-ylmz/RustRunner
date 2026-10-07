@@ -81,7 +81,7 @@ test('categories fold and open with the keys, and the preview says what a tool n
   await page.getByTestId('palette-search').fill('kraken2');
   await page.getByTestId('palette-item-kraken2').hover();
   await expect(page.getByTestId('palette-preview-database')).toContainText('Needs');
-  await expect(page.getByTestId('palette-preview-version')).toContainText('Version');
+  await expect(page.getByTestId('palette-preview-version')).toContainText(/version \d/);
   await page.getByTestId('palette-preview-database-docs').click();
   await expect.poll(() => app.evaluate(() => (globalThis as any).__opened as string[])).toHaveLength(1);
   const opened = await app.evaluate(() => (globalThis as any).__opened as string[]);

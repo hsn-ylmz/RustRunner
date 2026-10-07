@@ -7,7 +7,17 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { CATALOG, describeInstall, installYaml, validateCatalog, type Catalog, type CatalogTool } from '../tools/catalog';
+import {
+  CATALOG,
+  defaultParams,
+  describeInstall,
+  installYaml,
+  renderCommand,
+  validateCatalog,
+  type Catalog,
+  type CatalogTool,
+} from '../tools/catalog';
+import { scanCommand } from '../slots';
 
 /** A deep copy of the bundled catalog that a test may break. */
 function copy(): any {
@@ -39,6 +49,38 @@ describe('the bundled catalog', () => {
         expect(typeof input.multiple, `${t.id}.${input.name}`).toBe('boolean');
       }
       for (const output of t.outputs) expect(typeof output.is_dir, `${t.id}.${output.name}`).toBe('boolean');
+    }
+  });
+
+  it('puts typed text only where its quoting keeps it one literal word', () => {
+    // A text option is quoted by `shellQuote` for plain shell text. Inside "..."
+    // or '...' that quoting would be wrong (and `$(...)` in "..." would run).
+    for (const t of CATALOG.tools as CatalogTool[]) {
+      for (const part of scanCommand(t.command)) {
+        if (part.kind !== 'hole') continue;
+        const param = t.params.find((p) => p.id === part.name);
+        if (param?.type === 'string') expect(part.quote, `${t.id} {${part.name}}`).toBe('none');
+      }
+    }
+  });
+
+  it('only puts plain words into the command from choices and checkboxes', () => {
+    const plain = /^[A-Za-z0-9_@%+=:,./ -]*$/;
+    for (const t of CATALOG.tools as CatalogTool[]) {
+      for (const p of t.params) {
+        if (p.type === 'select') for (const o of p.options ?? []) expect(o, `${t.id}.${p.id}`).toMatch(plain);
+        if (p.type === 'boolean') expect(p.flag, `${t.id}.${p.id}`).toMatch(plain);
+      }
+    }
+  });
+
+  it('leaves the engine only file slots it can fill safely once the options are filled in', () => {
+    for (const t of CATALOG.tools as CatalogTool[]) {
+      for (const part of scanCommand(renderCommand(t, defaultParams(t)))) {
+        if (part.kind !== 'hole') continue;
+        expect(part.problem, `${t.id} {${part.name}}`).toBeUndefined();
+        expect(t.params.some((p) => p.id === part.name), `${t.id} {${part.name}} is an option`).toBe(false);
+      }
     }
   });
 });
