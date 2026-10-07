@@ -19,6 +19,7 @@ use log::{error, info, warn};
 
 use crate::environment::conda::{create_env, create_env_with, ToolEnvMap};
 use crate::environment::install::{current_platform, find_on_path, tools_root, Install};
+use crate::environment::locate::{locate_micromamba, MicromambaLookup};
 use crate::monitoring::{EventType, ExecutionTimeline, ResourceMonitor};
 use crate::workflow::{
     assess, definition_hash, ExecutionPlanner, StaleReason, Workflow, WorkflowState,
@@ -179,6 +180,8 @@ pub struct Engine {
     fresh: bool,
     keep_going: bool,
     events: EventSink,
+    /// How micromamba is looked for; replaced in tests.
+    micromamba_probe: fn() -> MicromambaLookup,
 }
 
 impl Engine {
@@ -194,6 +197,7 @@ impl Engine {
             fresh: false,
             keep_going: false,
             events: EventSink::disabled(),
+            micromamba_probe: locate_micromamba,
         }
     }
 
@@ -418,6 +422,7 @@ impl Engine {
 
         // Setup conda environments for all tools (skip in dry run)
         if !self.dry_run {
+            self.check_micromamba()?;
             self.setup_environments()?;
         }
 
@@ -1014,6 +1019,36 @@ impl Engine {
 
             info!("Resumed");
         }
+    }
+
+    /// Whether any step that will really run needs a conda environment.
+    pub(crate) fn needs_micromamba(&self) -> bool {
+        !self.tools_requiring_environments().is_empty()
+            || self
+                .installs_required()
+                .iter()
+                .any(|install| matches!(install, Install::Conda { .. }))
+    }
+
+    /// Fails before any step when the run needs micromamba and it cannot be
+    /// found, with a message that names every path searched and the fix, and a
+    /// `setup_failed` event the app turns into an install offer. Does nothing
+    /// for a workflow that needs no conda environment.
+    fn check_micromamba(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.needs_micromamba() {
+            return Ok(());
+        }
+        let lookup = (self.micromamba_probe)();
+        if lookup.found.is_some() {
+            return Ok(());
+        }
+        let message = lookup.missing_message();
+        self.events.emit(Event::SetupFailed {
+            kind: "micromamba_missing".to_string(),
+            message: message.clone(),
+            searched: lookup.searched,
+        });
+        Err(message.into())
     }
 
     /// Returns the unique, sorted tools in the workflow that are not system
@@ -2357,6 +2392,131 @@ mod tests {
         let installs = engine.installs_required();
         assert_eq!(installs.len(), 2);
         assert_eq!(installs[0], pinned);
+    }
+
+    // ---- missing micromamba ----------------------------------------------
+
+    fn no_micromamba() -> MicromambaLookup {
+        MicromambaLookup {
+            found: None,
+            searched: vec![
+                "/nowhere/a/micromamba".into(),
+                "/nowhere/b/micromamba".into(),
+            ],
+        }
+    }
+
+    fn some_micromamba() -> MicromambaLookup {
+        MicromambaLookup {
+            found: Some(PathBuf::from("/somewhere/micromamba")),
+            searched: vec!["/somewhere/micromamba".into()],
+        }
+    }
+
+    /// Runs `workflow` with a probe that finds nothing, capturing events.
+    fn run_without_micromamba(
+        workflow: Workflow,
+        dir: &Path,
+        dry_run: bool,
+    ) -> (Result<(), String>, Vec<Value>) {
+        let buf = SharedBuffer::default();
+        let mut engine = Engine::new(workflow);
+        engine.micromamba_probe = no_micromamba;
+        engine.set_working_dir(dir.to_path_buf());
+        engine.set_workflow_path(dir.join("wf.yaml").to_str().unwrap());
+        engine.set_dry_run(dry_run);
+        engine.set_event_sink(EventSink::to_writer(buf.clone()));
+        let result = engine.run().map_err(|e| e.to_string());
+        (result, buf.events())
+    }
+
+    fn conda_workflow(marker: &str) -> Workflow {
+        Workflow::from_steps(vec![
+            Step::new("first", "bash", format!("touch {marker}")),
+            Step::new("align", "bowtie2", "bowtie2 --version"),
+        ])
+    }
+
+    #[test]
+    fn test_a_missing_micromamba_stops_the_run_before_any_step() {
+        let dir = tempdir().unwrap();
+        let (result, events) =
+            run_without_micromamba(conda_workflow("ran.marker"), dir.path(), false);
+        let message = result.unwrap_err();
+        // Nothing ran, not even the system step that comes first.
+        assert!(!dir.path().join("ran.marker").exists());
+        assert_eq!(
+            outline(&events),
+            ["run_started", "setup_failed", "run_finished:failed"]
+        );
+        assert_eq!(events[1]["kind"], "micromamba_missing");
+        assert_eq!(
+            events[1]["searched"],
+            serde_json::json!(["/nowhere/a/micromamba", "/nowhere/b/micromamba"])
+        );
+        assert!(events.iter().all(|e| e["v"] == 1));
+        // The message names every path and the fix, and is the run's error.
+        assert!(message.contains("/nowhere/a/micromamba"));
+        assert!(message.contains("/nowhere/b/micromamba"));
+        assert!(message.contains("Install the tool installer"));
+        assert_eq!(events[2]["summary"]["error"], message);
+        assert_eq!(events[1]["message"], message);
+    }
+
+    #[test]
+    fn test_a_pinned_conda_install_needs_micromamba_too() {
+        let dir = tempdir().unwrap();
+        let wf = Workflow::from_steps(vec![Step::new("s", "samtools", "samtools --version")
+            .with_install(Install::Conda {
+                package: "samtools".into(),
+                version: Some("1.24".into()),
+                channel: None,
+                osx64: false,
+                constraints: Vec::new(),
+            })]);
+        let (result, events) = run_without_micromamba(wf, dir.path(), false);
+        assert!(result.is_err());
+        assert_eq!(events[1]["event"], "setup_failed");
+    }
+
+    #[test]
+    fn test_a_dry_run_does_not_need_micromamba() {
+        let dir = tempdir().unwrap();
+        let (result, events) =
+            run_without_micromamba(conda_workflow("dry.marker"), dir.path(), true);
+        result.unwrap();
+        assert!(events.iter().all(|e| e["event"] != "setup_failed"));
+        assert!(!dir.path().join("dry.marker").exists());
+    }
+
+    #[test]
+    fn test_system_only_and_mocked_workflows_do_not_need_micromamba() {
+        let dir = tempdir().unwrap();
+        let wf = Workflow::from_steps(vec![
+            Step::new("sys", "bash", "echo hi"),
+            Step::new("m", "bowtie2", "bowtie2 x").with_mock(true),
+            Step::new("ext", "minimap2", "echo external").with_install(Install::System {
+                binary: "bash".into(),
+            }),
+        ]);
+        let engine = {
+            let mut e = Engine::new(wf.clone());
+            e.micromamba_probe = no_micromamba;
+            e
+        };
+        assert!(!engine.needs_micromamba());
+        engine.check_micromamba().unwrap();
+        let (result, events) = run_without_micromamba(wf, dir.path(), false);
+        result.unwrap();
+        assert!(events.iter().all(|e| e["event"] != "setup_failed"));
+    }
+
+    #[test]
+    fn test_a_found_micromamba_lets_the_check_pass() {
+        let mut engine = Engine::new(conda_workflow("x.marker"));
+        engine.micromamba_probe = some_micromamba;
+        assert!(engine.needs_micromamba());
+        engine.check_micromamba().unwrap();
     }
 
     #[test]

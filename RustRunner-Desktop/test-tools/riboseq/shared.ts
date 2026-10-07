@@ -12,7 +12,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { DATA, REPO, SANDBOX, exists, read, run, type Check } from '../harness';
+import { DATA, REPO, exists, preparedEnvPrefix, read, run, type Check } from '../harness';
 import { parseReport } from './html';
 
 export const RIBO_DATA = path.join(REPO, 'riboseq-test', 'data');
@@ -126,7 +126,7 @@ export function starLog(log: string, name: string): number {
 
 /** `samtools` of the pinned environment the engine created (HOME is the sandbox). */
 export function samtools(...args: string[]): string {
-  const bin = path.join(SANDBOX, 'home', '.rustrunner', 'micromamba', 'envs', 'samtools-1.24', 'bin', 'samtools');
+  const bin = path.join(preparedEnvPrefix('samtools'), 'bin', 'samtools');
   const result = run(bin, args);
   if (result.status !== 0) throw new Error(`samtools ${args.join(' ')} failed: ${result.stderr}`);
   return result.stdout;
@@ -274,7 +274,7 @@ export function verifyRiboseq(dir: string, full: boolean, ribo: RiboOptions = { 
   }
   const bamTranscripts = [...txHeader.matchAll(/^@SQ\tSN:(\S+)/gm)].map((m) => m[1]);
   ok('star-riboseq', gtfTranscripts.size > 1000 && bamTranscripts.length === gtfTranscripts.size && bamTranscripts.every((t) => gtfTranscripts.has(t)), `the ${bamTranscripts.length} transcripts of the BAM header are exactly the ${gtfTranscripts.size} transcripts of the GTF, same ids`);
-  const samtoolsPath = path.join(SANDBOX, 'home', '.rustrunner', 'micromamba', 'envs', 'samtools-1.24', 'bin', 'samtools');
+  const samtoolsPath = path.join(preparedEnvPrefix('samtools'), 'bin', 'samtools');
   const hitIds = run('sh', ['-c', '"$1" view -F 4 "$2" | cut -f3 | sort -u', 'sh', samtoolsPath, txBam]).stdout.split('\n').filter(Boolean);
   ok('star-riboseq', hitIds.length > 100 && hitIds.every((t) => gtfTranscripts.has(t)), `reads landed on ${hitIds.length} transcripts and every one is in the GTF`);
   const txUnmapped = count(txBam, '-f', '4');
@@ -399,7 +399,7 @@ export function verifyRiboseq(dir: string, full: boolean, ribo: RiboOptions = { 
   ok('ribowaltz-report', exists(dir, 'ribowaltz/offset_frame_check.tsv') && read(dir, 'ribowaltz/offset_frame_check.tsv').startsWith('sample\tlength\tcds_reads\toffset_ribowaltz\t'), 'offset_frame_check.tsv always exists, with its header');
 
   // --- the R helpers of the report script ---------------------------------------------------
-  const rscript = path.join(SANDBOX, 'home', '.rustrunner', 'micromamba', 'envs', 'ribowaltz-2.0', 'bin', 'Rscript');
+  const rscript = path.join(preparedEnvPrefix('ribowaltz'), 'bin', 'Rscript');
   const helpers = run(rscript, ['--vanilla', R_TEST, R_SCRIPT]);
   ok('ribowaltz-report', helpers.status === 0, `the R unit tests of the report script pass (${(helpers.stdout + helpers.stderr).trim().split('\n').slice(-3).join(' | ')})`);
 

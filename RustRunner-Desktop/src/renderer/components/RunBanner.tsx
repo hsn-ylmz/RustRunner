@@ -1,5 +1,6 @@
 import { Badge, Button, Callout, Icon, IconButton } from '../ui';
-import type { FailureCardData, RunSummaryView } from '../runFeedback';
+import type { FailureCardData, RunSummaryView, SetupProblemView } from '../runFeedback';
+import { SetupProblemCard } from './SetupProblemCard';
 
 /**
  * How the last run ended, above the run output: one line with the outcome,
@@ -10,6 +11,7 @@ import type { FailureCardData, RunSummaryView } from '../runFeedback';
 export function RunBanner({
   summary,
   failure,
+  setup,
   hasReport,
   onOpenReport,
   onShowLogs,
@@ -18,6 +20,8 @@ export function RunBanner({
 }: {
   summary: RunSummaryView;
   failure: FailureCardData | null;
+  /** The run could not start; shown instead of the engine's error line. */
+  setup?: SetupProblemView | null;
   hasReport: boolean;
   onOpenReport: () => void;
   onShowLogs: () => void;
@@ -59,7 +63,9 @@ export function RunBanner({
         />
       </div>
 
-      {summary.error && !failure && (
+      {setup && !failure && <SetupProblemCard problem={setup} />}
+
+      {summary.error && !failure && !setup && (
         <Callout tone="danger" data-testid="run-error">
           {summary.error}
         </Callout>

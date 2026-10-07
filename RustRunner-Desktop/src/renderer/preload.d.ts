@@ -124,6 +124,11 @@ interface ElectronAPI {
       workingDir: string,
       reportRef: string
     ): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+    /**
+     * Downloads micromamba (pinned version, https only, checksum verified) to
+     * where the engine looks for it. Resolves with the installed path or why not.
+     */
+    installMicromamba(): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
     /** Opens a tool's documentation page (https links only) in the default browser. */
     openDocs(url: string): Promise<{ ok: true } | { ok: false; error: string }>;
     /** Settings kept for this person in the app's data folder. */

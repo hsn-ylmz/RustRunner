@@ -27,6 +27,7 @@
 //! | `step_failed` | `step`, `reason`, `attempts` |
 //! | `step_skipped` | `step`, `reason` (`up_to_date` when its outputs are current, else why it was never reached) |
 //! | `check_failed` | `step`, `kind`, `blocking`, `message` |
+//! | `setup_failed` | `kind` (`micromamba_missing`), `message`, `searched` (every path looked at) |
 //! | `run_finished` | `status` (`succeeded`, `failed`, `stopped`), `summary`, `report` (optional) |
 //!
 //! `summary` holds `total`, `succeeded`, `failed`, `skipped`, `retried`,
@@ -38,7 +39,9 @@
 //! A step's events always appear in order: `step_started`, then for each failed
 //! attempt that will be repeated `step_retrying` followed by `step_started`
 //! with the next attempt, then `check_failed` for each failed output check,
-//! then exactly one of `step_succeeded` / `step_failed`. `run_finished` is
+//! then exactly one of `step_succeeded` / `step_failed`. `setup_failed` comes
+//! straight after `run_started`, before any step: the run cannot start, and
+//! `run_finished` (failed) follows. `run_finished` is
 //! emitted exactly once and is the last event. Adding fields is not a version
 //! change; readers must ignore fields they do not know.
 
@@ -144,6 +147,16 @@ pub enum Event {
         kind: String,
         blocking: bool,
         message: String,
+    },
+    /// The run cannot start because something it needs is missing. Sent before
+    /// any step, then `run_finished` (failed).
+    SetupFailed {
+        /// What is missing: `micromamba_missing`.
+        kind: String,
+        /// The full plain-language message, paths included.
+        message: String,
+        /// Every path that was searched.
+        searched: Vec<String>,
     },
     RunFinished {
         status: RunStatus,

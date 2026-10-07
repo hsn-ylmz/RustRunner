@@ -1552,6 +1552,29 @@
   border-radius: var(--radius-control);
 }
 
+.setup-searched {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.setup-searched summary {
+  cursor: pointer;
+  font-weight: var(--weight-semibold);
+}
+
+.setup-searched ul {
+  max-height: 90px;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  overflow: auto;
+  font-family: var(--font-mono);
+  color: var(--text);
+  word-break: break-all;
+  background-color: var(--surface-sunken);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+}
+
 .log-view {
   display: flex;
   flex: 1;

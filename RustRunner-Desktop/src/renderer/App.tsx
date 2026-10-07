@@ -130,10 +130,12 @@ import { RunBanner } from './components/RunBanner';
 import {
   PENDING_STATUS,
   buildFailureCard,
+  describeSetupProblem,
   describeRunResult,
   sectionToEdit,
   type FailureCardData,
   type RunResult,
+  type SetupProblemView,
 } from './runFeedback';
 import type { LogFilter } from './logLines';
 
@@ -224,6 +226,8 @@ function WorkflowEditorInner() {
   /** How the last run ended, from the engine's `run_finished` event. */
   const [runResult, setRunResult] = useState<(RunResult & { dry: boolean }) | null>(null);
   const [summaryDismissed, setSummaryDismissed] = useState(false);
+  /** Why the last run could not start, from the engine's `setup_failed` event. */
+  const [setupProblem, setSetupProblem] = useState<SetupProblemView | null>(null);
   const [logFilter, setLogFilter] = useState<LogFilter>('all');
   const { toasts, notify, dismiss: dismissToast } = useToasts();
   /** Whether the run now in flight is a dry run, readable from the IPC listeners. */
@@ -331,7 +335,11 @@ function WorkflowEditorInner() {
         if (runEvent.event === 'run_started') {
           setLatestReport(null);
           setRunResult(null);
+          setSetupProblem(null);
           setSummaryDismissed(false);
+        }
+        if (runEvent.event === 'setup_failed') {
+          setSetupProblem(describeSetupProblem(runEvent));
         }
         if (runEvent.event === 'run_finished') {
           if (runEvent.report) setLatestReport(runEvent.report);
@@ -2040,12 +2048,15 @@ function WorkflowEditorInner() {
         filter={logFilter}
         onFilterChange={setLogFilter}
         onNotify={notify}
-        bannerSize={summaryVisible ? (failureCard ? 'failure' : 'summary') : undefined}
+        bannerSize={
+          summaryVisible ? (failureCard || setupProblem ? 'failure' : 'summary') : undefined
+        }
         banner={
           summaryVisible && runResult ? (
             <RunBanner
               summary={describeRunResult(runResult, runResult.dry)}
               failure={failureCard}
+              setup={setupProblem}
               hasReport={Boolean(runResult.report)}
               onOpenReport={() => runResult.report && openReport(runResult.report)}
               onShowLogs={showErrorLogs}

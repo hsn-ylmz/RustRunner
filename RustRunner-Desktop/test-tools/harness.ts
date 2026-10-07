@@ -44,6 +44,15 @@ import {
   type BindingOption,
 } from '../src/renderer/slots';
 import { convertNodesToWorkflow, labelToId, validateWorkflow } from '../src/renderer/workflowConversion';
+import {
+  assertUntouched,
+  currentPlatform,
+  ensureEngineFoundIt,
+  isCondaInstall,
+  prepareEnv,
+  type MambaRunner,
+  type PreparedEnv,
+} from './envs';
 
 export const ENABLED = process.env.RUSTRUNNER_REAL_TOOLS === '1';
 
@@ -56,6 +65,10 @@ const BIN = path.join(SANDBOX, 'bin');
 export const DATA = path.join(SANDBOX, 'data');
 const RUNS = path.join(SANDBOX, 'runs');
 const RESULTS = path.join(SANDBOX, 'tools-results');
+/** Fresh conda prefixes, one per install spec (see envs.ts). */
+export const ENVS = path.join(SANDBOX, 'envs');
+/** Where the engine looks for conda environments (`$HOME/.rustrunner/micromamba/envs`). */
+const ENGINE_ENVS = path.join(HOME, '.rustrunner', 'micromamba', 'envs');
 
 // -----------------------------------------------------------------------------
 // Chain description
@@ -285,6 +298,63 @@ function installEngine(): string {
   return exe;
 }
 
+// -----------------------------------------------------------------------------
+// Conda environments: always fresh from the catalog spec (envs.ts)
+// -----------------------------------------------------------------------------
+
+/** The environments prepared in this process, by conda package name. */
+const PREPARED = new Map<string, PreparedEnv>();
+
+const mamba: MambaRunner = (args, env) => {
+  const result = spawnSync(path.join(BIN, 'micromamba'), args, {
+    encoding: 'utf8',
+    env: { ...sandboxEnv(), MAMBA_ROOT_PREFIX: path.join(HOME, '.rustrunner', 'micromamba'), ...env },
+    maxBuffer: 1 << 28,
+  });
+  return { status: result.status, stderr: result.stderr ?? '' };
+};
+
+/**
+ * The clean prefix of the environment prepared for conda package `pkg` in this run,
+ * for a chain's `verify` that wants to run a tool of that environment itself.
+ */
+export function preparedEnvPrefix(pkg: string): string {
+  const env = PREPARED.get(pkg);
+  if (!env) throw new Error(`no environment was prepared for ${pkg} in this run`);
+  return env.prefix;
+}
+
+/**
+ * Before a chain runs: builds (or reuses, if untouched) a fresh environment for each conda
+ * `install` block of the workflow, so the engine finds them and builds nothing; and checks that an
+ * environment the engine made earlier for a step without an `install` block was not modified.
+ * Returns the names the engine must find and the folders (for `CONDA_ENVS_DIRS`) it finds them in.
+ */
+function prepareChainEnvironments(workflow: any): { names: string[]; envsDirs: string[] } {
+  const names: string[] = [];
+  const envsDirs: string[] = [];
+  const platform = currentPlatform();
+  for (const step of workflow.steps as Array<{ tool: string; install?: unknown }>) {
+    if (isCondaInstall(step.install)) {
+      const env = prepareEnv({
+        install: step.install,
+        platform,
+        envsDir: ENVS,
+        engineEnvsDir: ENGINE_ENVS,
+        mamba,
+        env: { MAMBA_ROOT_PREFIX: path.join(HOME, '.rustrunner', 'micromamba') },
+      });
+      PREPARED.set(step.install.package, env);
+      if (!names.includes(env.name)) names.push(env.name);
+      if (!envsDirs.includes(env.envsDir)) envsDirs.push(env.envsDir);
+    } else if (!step.install) {
+      const legacy = path.join(ENGINE_ENVS, step.tool);
+      if (fs.existsSync(legacy)) assertUntouched(fs.realpathSync(legacy));
+    }
+  }
+  return { names, envsDirs };
+}
+
 interface RunResult {
   ok: boolean;
   log: string;
@@ -292,9 +362,9 @@ interface RunResult {
   steps: Record<string, string>;
 }
 
-function execute(exe: string, workflowPath: string, dir: string): Promise<RunResult> {
+function execute(exe: string, workflowPath: string, dir: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(exe, [workflowPath, '--json-events', '--working-dir', dir], { env: sandboxEnv(), cwd: dir });
+    const child = spawn(exe, [workflowPath, '--json-events', '--working-dir', dir], { env: sandboxEnv(extraEnv), cwd: dir });
     let log = '';
     child.stdout.on('data', (d) => (log += d));
     child.stderr.on('data', (d) => (log += d));
@@ -500,10 +570,12 @@ export function defineDomain(definition: DomainDefinition): void {
         const workflowPath = path.join(dir, `${chain.name}.yaml`);
         fs.writeFileSync(workflowPath, yaml.dump(workflow));
 
-        const outcome = await execute(exe, workflowPath, dir);
+        const prepared = prepareChainEnvironments(workflow);
+        // micromamba looks for environments in these folders too, so it finds the fresh ones by name.
+        const outcome = await execute(exe, workflowPath, dir, { CONDA_ENVS_DIRS: prepared.envsDirs.join(path.delimiter) });
         fs.writeFileSync(path.join(dir, 'engine.log'), outcome.log);
 
-        const failures: string[] = [];
+        const failures: string[] = [...ensureEngineFoundIt(outcome.log, prepared.names)];
         for (const [stepId, catalogId] of Object.entries(toolOf)) {
           const ok = outcome.steps[stepId] === 'step_succeeded';
           if (ok) record(catalogId, 'pass', '', chain.name);

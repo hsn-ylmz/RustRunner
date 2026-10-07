@@ -28,6 +28,7 @@ import { readResumeInfoFor, workflowFileStem } from './resumeState';
 import { readRunHistory, resolveReportPath, type RunHistoryEntry } from './runHistory';
 import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
 import { safeDocsUrl } from './docsUrl';
+import { installMicromamba, installTarget, resolveSource, type InstallResult } from './micromambaInstall';
 import {
   deleteUserTemplate,
   listUserTemplates,
@@ -708,6 +709,44 @@ app
     });
   })
   .catch(log.error);
+
+// -----------------------------------------------------------------------------
+// The tool installer (micromamba)
+// -----------------------------------------------------------------------------
+
+let micromambaInstall: Promise<InstallResult> | null = null;
+
+/**
+ * Downloads and installs micromamba after the engine reported it missing. One
+ * install at a time: a second click joins the first. The source is pinned and
+ * verified in micromambaInstall.ts; nothing from the renderer is trusted.
+ */
+ipcMain.handle('install-micromamba', (): Promise<InstallResult> => {
+  if (!micromambaInstall) {
+    const source = resolveSource({
+      platform: process.platform,
+      arch: process.arch,
+      isPackaged: app.isPackaged,
+      env: process.env,
+    });
+    if ('error' in source) {
+      return Promise.resolve({ ok: false, error: source.error });
+    }
+    const target = installTarget({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      env: process.env,
+      homeDir: os.homedir(),
+      // __dirname is dist/main/ at runtime, so walk back up to the repo root.
+      sourceRuntimeDir: path.join(__dirname, '../../../RustRunner/runtime'),
+    });
+    log.info('Installing micromamba', { target });
+    micromambaInstall = installMicromamba({ source, target }).finally(() => {
+      micromambaInstall = null;
+    });
+  }
+  return micromambaInstall;
+});
 
 // -----------------------------------------------------------------------------
 // The person's own workflow templates: <home>/.rustrunner/templates/<id>.json

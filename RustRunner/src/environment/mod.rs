@@ -5,6 +5,7 @@
 
 pub mod conda;
 pub mod install;
+pub mod locate;
 
 pub use conda::{
     create_env, create_env_with, search_packages, ToolEnvMap, ENV_MAP_PATH, MAMBA_ROOT_PREFIX,

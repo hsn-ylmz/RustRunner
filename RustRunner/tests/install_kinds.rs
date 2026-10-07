@@ -1,7 +1,9 @@
 //! End-to-end checks for the `install` block of a step (conda pins, checked
 //! downloads, system tools): the real binary with a throw-away HOME, so
 //! nothing is written to the real `~/.rustrunner`. Conda is replaced by a
-//! fake `micromamba` on the PATH that records what it was asked to do.
+//! fake `micromamba` that records what it was asked to do. It is named with
+//! `RUSTRUNNER_MICROMAMBA`, so a real micromamba in the source tree's
+//! `runtime/` folder cannot take its place.
 
 #![cfg(unix)]
 
@@ -68,16 +70,19 @@ esac
             self.path("bin").display(),
             std::env::var("PATH").unwrap_or_default()
         );
-        Command::new(env!("CARGO_BIN_EXE_rustrunner"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_rustrunner"));
+        command
             .arg(self.path("work/wf.yaml"))
             .arg("--working-dir")
             .arg(self.path("work"))
             .env("HOME", self.path("home"))
             .env("PATH", path)
+            // Always set, so a real micromamba on this machine is never used:
+            // without the fake, the file is simply missing.
+            .env("RUSTRUNNER_MICROMAMBA", self.path("bin/micromamba"))
             .env("FAKE_MAMBA_LOG", self.path("mamba.log"))
-            .env("FAKE_MAMBA_ENVS", self.path("fake-envs"))
-            .output()
-            .unwrap()
+            .env("FAKE_MAMBA_ENVS", self.path("fake-envs"));
+        command.output().unwrap()
     }
 
     fn mamba_log(&self) -> String {
@@ -379,4 +384,56 @@ fn a_dry_run_installs_nothing() {
         sb.mamba_log().is_empty(),
         "dry run must not call micromamba"
     );
+}
+
+#[test]
+fn a_missing_micromamba_is_reported_before_any_step_with_every_path_searched() {
+    let sb = Sandbox::new();
+    // No fake micromamba: the explicit path points at a file that does not exist.
+    let missing = sb.path("nowhere/micromamba");
+    let first = Step::new("first", "bash", "touch ran.marker");
+    let align =
+        Step::new("align", "star", "STAR --version").with_install(conda("star", "2.7.10b", false));
+    let yaml = serde_yaml::to_string(&Workflow::from_steps(vec![first, align])).unwrap();
+    fs::write(sb.path("work/wf.yaml"), yaml).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_rustrunner"))
+        .arg(sb.path("work/wf.yaml"))
+        .arg("--working-dir")
+        .arg(sb.path("work"))
+        .arg("--json-events")
+        .env("HOME", sb.path("home"))
+        .env("RUSTRUNNER_MICROMAMBA", &missing)
+        .output()
+        .unwrap();
+    let all = text(&out);
+    assert!(!out.status.success(), "{all}");
+    assert!(
+        !sb.path("work/ran.marker").exists(),
+        "no step may run before the check"
+    );
+    assert!(
+        all.contains("The tool installer (micromamba) was not found"),
+        "{all}"
+    );
+    assert!(all.contains(missing.to_str().unwrap()), "{all}");
+    let events: Vec<serde_json::Value> = String::from_utf8_lossy(&out.stderr)
+        .lines()
+        .filter_map(|l| l.strip_prefix("RUSTRUNNER_EVENT "))
+        .map(|j| serde_json::from_str(j).unwrap())
+        .collect();
+    let names: Vec<&str> = events
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["run_started", "setup_failed", "run_finished"],
+        "{all}"
+    );
+    assert_eq!(events[1]["kind"], "micromamba_missing");
+    assert_eq!(
+        events[1]["searched"],
+        serde_json::json!([missing.to_str().unwrap()])
+    );
+    assert_eq!(events[2]["status"], "failed");
 }

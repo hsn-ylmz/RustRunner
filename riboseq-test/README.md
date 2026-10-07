@@ -46,9 +46,13 @@ offsets (the report says so instead of inventing numbers).
 1. **Engine.** The app starts the engine from `RustRunner/target/debug/rustrunner`:
    `cd RustRunner && cargo build` (nothing to do if you already built it).
 2. **micromamba.** A run installs each tool into its own conda environment with micromamba. When you start the app
-   from source it looks for `RustRunner/runtime/micromamba` (git-ignored). Download it once:
+   from source it looks for `RustRunner/runtime/micromamba` (git-ignored). You do not have to fetch it yourself: if it
+   is missing, Run stops before any step with a card titled "The tool installer (micromamba) is missing" and a button
+   "Install the tool installer". It downloads the official static binary for your platform (pinned version, https only,
+   SHA-256 checked before the file is used) into `RustRunner/runtime/micromamba`; then press Run again. The card lists
+   every place the engine looked, under "Where the engine looked". To do it by hand instead:
    `cd RustRunner/runtime && curl -Ls https://micro.mamba.pm/api/micromamba/osx-arm64/latest | tar -xj bin/micromamba && mv bin/micromamba . && rmdir bin`
-   (use `osx-64` on an Intel Mac, `linux-64` on Linux). Without it the first step stops with "micromamba not found".
+   (use `osx-64` on an Intel Mac, `linux-64` on Linux). A dry run never needs it.
 3. **Rosetta (Apple silicon only).** STAR 2.7.10b has no native arm64 build, so it runs as an Intel build.
    Check with `arch -x86_64 /usr/bin/true`; if it fails, run `softwareupdate --install-rosetta --agree-to-license`.
 4. **Network** on the first run only, to download the tools (see section 8 for the size).
@@ -238,7 +242,7 @@ To remove everything RustRunner keeps in your home folder (all environments, and
 
 | What you see | What it means and what to do |
 |---|---|
-| The first step fails with "micromamba not found" | Section 2, step 2: put the binary at `RustRunner/runtime/micromamba` and `chmod +x` it. |
+| Run stops with "The tool installer (micromamba) is missing" | Press "Install the tool installer" on the card and run again (section 2, step 2). By hand: put the binary at `RustRunner/runtime/micromamba` and `chmod +x` it. |
 | "Failed to create environment" for one tool, or a download error | No network, a proxy, or a full disk. Fix it and click **Run**: finished steps are skipped. |
 | STAR fails to start, "Bad CPU type in executable" | Rosetta is missing (section 2, step 3). |
 | STAR fails with `could not open input file .../geneInfo.tab` | STAR 2.7.11b was used. The template pins 2.7.10b; do not change the version of the STAR steps. |

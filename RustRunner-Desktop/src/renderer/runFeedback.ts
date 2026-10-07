@@ -4,7 +4,7 @@
  * failure card shows. Pure, so it can be unit-tested; the components only draw.
  */
 
-import type { RunSummary, RunStatus } from '../main/engineEvents';
+import type { EngineEvent, RunSummary, RunStatus } from '../main/engineEvents';
 import type { BadgeTone, IconName } from './ui';
 import { formatCounts as formatStepCounts, formatDuration } from './runHistoryFormat';
 import type { SectionId } from './panelSections';
@@ -245,6 +245,54 @@ export function buildFailureCard(
     stderr: extractStderrTail(logs, engineId),
     notRun,
   };
+}
+
+// -----------------------------------------------------------------------------
+// Setup problems (the run could not start)
+// -----------------------------------------------------------------------------
+
+/** What the engine's `setup_failed` event says, as the app keeps it. */
+export type SetupProblemEvent = Extract<EngineEvent, { event: 'setup_failed' }>;
+
+export interface SetupProblemView {
+  kind: string;
+  headline: string;
+  /** What it means and what was (not) done, in plain words. */
+  what: string;
+  /** Every path the engine looked at. */
+  searched: string[];
+  /** The label of the one action that fixes it, when the app can do it. */
+  actionLabel?: string;
+}
+
+/** The card for a run that could not start. An unknown kind shows the engine's own message. */
+export function describeSetupProblem(event: Pick<SetupProblemEvent, 'kind' | 'message' | 'searched'>): SetupProblemView {
+  if (event.kind === 'micromamba_missing') {
+    return {
+      kind: event.kind,
+      headline: 'The tool installer (micromamba) is missing',
+      what:
+        'RustRunner uses it to download and set up the tools your steps need. ' +
+        'No step was run. Install it once, then run again.',
+      searched: event.searched,
+      actionLabel: 'Install the tool installer',
+    };
+  }
+  return {
+    kind: event.kind,
+    headline: 'The run could not start',
+    what: event.message.trim() || 'Something the run needs is missing.',
+    searched: event.searched,
+  };
+}
+
+/** What the card says once the install has finished or failed. */
+export function describeInstallResult(
+  result: { ok: true; path: string } | { ok: false; error: string }
+): { tone: 'success' | 'danger'; text: string } {
+  return 'error' in result
+    ? { tone: 'danger', text: result.error }
+    : { tone: 'success', text: 'The tool installer is installed. Press Run to start again.' };
 }
 
 /** Which section of the properties panel to open for "Edit step". */

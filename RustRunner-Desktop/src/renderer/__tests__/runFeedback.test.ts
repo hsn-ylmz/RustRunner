@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   PENDING_STATUS,
   buildFailureCard,
+  describeInstallResult,
   describeRunResult,
+  describeSetupProblem,
   nodeStatusLine,
   plainCheck,
   plainFailure,
@@ -283,5 +285,44 @@ describe('plainStepDetail', () => {
 
   it('leaves a message it does not know alone', () => {
     expect(plainStepDetail('skipped', 'something else')).toBe('something else');
+  });
+});
+
+describe('describeSetupProblem', () => {
+  it('turns a missing micromamba into a clear card with an install action', () => {
+    const view = describeSetupProblem({
+      kind: 'micromamba_missing',
+      message: 'long engine text with paths',
+      searched: ['/a/micromamba', '/b/micromamba'],
+    });
+    expect(view.headline).toBe('The tool installer (micromamba) is missing');
+    expect(view.actionLabel).toBe('Install the tool installer');
+    expect(view.searched).toEqual(['/a/micromamba', '/b/micromamba']);
+    expect(view.what).toMatch(/No step was run/);
+    // The card does not repeat the engine's multi-line text.
+    expect(view.what).not.toContain('long engine text');
+  });
+
+  it('shows the engine message for a kind it does not know, with no action', () => {
+    const view = describeSetupProblem({ kind: 'something_new', message: ' It broke. ', searched: [] });
+    expect(view.headline).toBe('The run could not start');
+    expect(view.what).toBe('It broke.');
+    expect(view.actionLabel).toBeUndefined();
+  });
+});
+
+describe('describeInstallResult', () => {
+  it('tells the person to run again after a successful install', () => {
+    expect(describeInstallResult({ ok: true, path: '/x/micromamba' })).toEqual({
+      tone: 'success',
+      text: 'The tool installer is installed. Press Run to start again.',
+    });
+  });
+
+  it('passes the reason of a failed install through', () => {
+    expect(describeInstallResult({ ok: false, error: 'checksum' })).toEqual({
+      tone: 'danger',
+      text: 'checksum',
+    });
   });
 });

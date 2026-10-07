@@ -665,7 +665,7 @@ pub fn find_on_path(binary: &str) -> Option<PathBuf> {
 }
 
 #[cfg(unix)]
-fn is_executable_file(path: &Path) -> bool {
+pub(crate) fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(path)
         .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
@@ -673,7 +673,7 @@ fn is_executable_file(path: &Path) -> bool {
 }
 
 #[cfg(not(unix))]
-fn is_executable_file(path: &Path) -> bool {
+pub(crate) fn is_executable_file(path: &Path) -> bool {
     path.is_file() || path.with_extension("exe").is_file()
 }
 

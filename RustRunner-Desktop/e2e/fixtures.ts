@@ -36,6 +36,11 @@ export interface Sandbox {
 }
 
 export interface Fixtures {
+  /**
+   * Extra environment for the app (and so the engine). `{root}` in a value is
+   * replaced by the test's sandbox folder. Set with `test.use({ appEnv })`.
+   */
+  appEnv: Record<string, string>;
   sandbox: Sandbox;
   app: ElectronApplication;
   page: Page;
@@ -48,7 +53,10 @@ export interface Fixtures {
  * inside `root`. Calling it again with the same root is a restart: the second
  * run finds what the first saved.
  */
-export function launchApp(root: string): Promise<ElectronApplication> {
+export function launchApp(root: string, extraEnv: Record<string, string> = {}): Promise<ElectronApplication> {
+  const extra = Object.fromEntries(
+    Object.entries(extraEnv).map(([k, v]) => [k, v.split('{root}').join(root)])
+  );
   return _electron.launch({
     args: [DESKTOP_DIR, `--user-data-dir=${path.join(root, 'profile')}`, ...headlessLinuxArgs(), ...captureArgs()],
     cwd: DESKTOP_DIR,
@@ -58,11 +66,14 @@ export function launchApp(root: string): Promise<ElectronApplication> {
       TMPDIR: path.join(root, 'tmp'),
       NODE_ENV: 'production',
       RUSTRUNNER_BIN: ENGINE_BIN,
+      ...extra,
     },
   });
 }
 
 export const test = base.extend<Fixtures>({
+  appEnv: [{}, { option: true }],
+
   sandbox: async ({}, use) => {
     fs.mkdirSync(TMP_ROOT, { recursive: true });
     const root = fs.mkdtempSync(path.join(TMP_ROOT, 'run-'));
@@ -72,7 +83,7 @@ export const test = base.extend<Fixtures>({
     fs.rmSync(root, { recursive: true, force: true });
   },
 
-  app: async ({ sandbox }, use, testInfo) => {
+  app: async ({ sandbox, appEnv }, use, testInfo) => {
     expect(fs.existsSync(ENGINE_BIN), `engine binary missing: ${ENGINE_BIN} (run cargo build)`).toBe(true);
     const root = path.dirname(sandbox.workDir);
     // HOME, TMPDIR and the profile all point into the sandbox so a test run
@@ -80,7 +91,7 @@ export const test = base.extend<Fixtures>({
     fs.mkdirSync(path.join(root, 'home'));
     fs.mkdirSync(path.join(root, 'tmp'));
 
-    const app = await launchApp(root);
+    const app = await launchApp(root, appEnv);
 
     // Native dialogs cannot be driven from the page: answer the directory
     // picker with the sandbox, and "Discard" for any unsaved-changes prompt.

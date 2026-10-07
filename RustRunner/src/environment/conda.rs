@@ -5,10 +5,9 @@
 //!
 //! # Environment Resolution Priority
 //!
-//! Micromamba binary is resolved in the following order:
-//! 1. Development path: `{project_root}/runtime/micromamba`
-//! 2. Production path: Next to the rustrunner executable
-//! 3. System PATH: Falls back to system-installed micromamba
+//! The micromamba binary is resolved by [`super::locate`]: an explicit
+//! `RUSTRUNNER_MICROMAMBA`, else next to the executable, the source tree's
+//! `runtime/`, `~/.rustrunner/bin`, then the system `PATH`.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -19,6 +18,8 @@ use std::process::Command;
 use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+
+use super::locate::{binary_name, locate_micromamba};
 
 /// Lazily-initialized path to the environment mapping file.
 pub static ENV_MAP_PATH: Lazy<PathBuf> = Lazy::new(|| {
@@ -52,50 +53,26 @@ pub static ENV_MAP_PATH: Lazy<PathBuf> = Lazy::new(|| {
 });
 
 /// Lazily-initialized path to the micromamba binary.
+///
+/// See [`super::locate`] for the search order. When nothing is found this is
+/// the first place that was searched; the engine refuses to start a run that
+/// needs micromamba before it gets that far (see `Engine::check_micromamba`).
 pub static MICROMAMBA_PATH: Lazy<PathBuf> = Lazy::new(|| {
-    // Priority 1: Production environment (next to executable)
-    // Check this first to ensure packaged apps use their bundled micromamba
-    let exe_path = std::env::current_exe().expect("Failed to get current executable path");
-    let exe_dir = exe_path
-        .parent()
-        .expect("Executable must be in a directory");
-    let prod_path = exe_dir.join("micromamba");
-
-    if prod_path.exists() {
-        info!("Using production micromamba: {}", prod_path.display());
-        return prod_path;
+    let lookup = locate_micromamba();
+    if let Some(found) = lookup.found {
+        info!("Using micromamba: {}", found.display());
+        return found;
     }
-
-    // Priority 2: Development environment (only if production not found)
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("runtime")
-        .join("micromamba");
-
-    if dev_path.exists() {
-        info!("Using development micromamba: {}", dev_path.display());
-        return dev_path;
-    }
-
-    // Priority 3: System PATH
-    if let Ok(output) = Command::new("which").arg("micromamba").output() {
-        if output.status.success() {
-            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path_str.is_empty() {
-                let system_path = PathBuf::from(path_str);
-                info!("Using system micromamba: {}", system_path.display());
-                return system_path;
-            }
-        }
-    }
-
-    // Not found
     warn!("Micromamba binary not found");
-    warn!("  Searched: {}", prod_path.display());
-    warn!("  Searched: {}", dev_path.display());
-    warn!("  Searched: system PATH");
+    for path in &lookup.searched {
+        warn!("  Searched: {}", path);
+    }
     warn!("  Download from: https://micro.mamba.pm/");
-
-    prod_path
+    lookup
+        .searched
+        .first()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(binary_name()))
 });
 
 /// Lazily-initialized path to the micromamba root prefix (where environments are stored).

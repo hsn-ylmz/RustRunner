@@ -126,6 +126,11 @@ const electronHandler = {
       return ipcRenderer.invoke('open-run-report', workingDir, reportRef);
     },
 
+    /** Downloads, verifies and installs micromamba (the tool installer). */
+    installMicromamba(): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('install-micromamba');
+    },
+
     openDocs(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
       return ipcRenderer.invoke('open-docs', url);
     },

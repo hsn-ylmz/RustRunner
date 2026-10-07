@@ -67,6 +67,18 @@ export type EngineEventBody =
       message: string;
     }
   | {
+      /**
+       * The run cannot start because something it needs is missing. Sent before
+       * any step, then `run_finished` (failed).
+       */
+      event: 'setup_failed';
+      kind: 'micromamba_missing' | string;
+      /** The engine's full message, paths included. */
+      message: string;
+      /** Every path the engine looked at. */
+      searched: string[];
+    }
+  | {
       event: 'run_finished';
       status: RunStatus;
       summary: RunSummary;
@@ -129,6 +141,8 @@ const VALIDATORS: Record<string, (o: Obj) => boolean> = {
   step_skipped: (o) => isStr(o.step) && isStr(o.reason),
   check_failed: (o) =>
     isStr(o.step) && isStr(o.kind) && isBool(o.blocking) && isStr(o.message),
+  setup_failed: (o) =>
+    isStr(o.kind) && isStr(o.message) && Array.isArray(o.searched) && o.searched.every(isStr),
   run_finished: (o) =>
     (o.status === 'succeeded' || o.status === 'failed' || o.status === 'stopped') &&
     validSummary(o.summary) &&
