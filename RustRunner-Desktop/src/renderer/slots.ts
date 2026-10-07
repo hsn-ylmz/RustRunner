@@ -209,6 +209,7 @@ const EXTENSION_TYPES: Record<string, string> = {
   sam: 'sam',
   bam: 'bam',
   bai: 'bai',
+  idx: 'index',
   fai: 'fai',
   dict: 'dict',
   bed: 'bed',

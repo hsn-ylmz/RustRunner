@@ -343,6 +343,42 @@ describe('number steps', () => {
   });
 });
 
+describe('option labels', () => {
+  const strand = (c: any) => tool(c, 'featurecounts').params.find((p: any) => p.id === 'strand');
+
+  it('accepts a label for some or all options of a choice', () => {
+    const c = copy();
+    strand(c).option_labels = { '2': 'Reverse-stranded' };
+    expect(errorsOf(c)).toBe('');
+  });
+
+  it('rejects a label for a value that is not an option', () => {
+    const c = copy();
+    strand(c).option_labels = { '3': 'Something else' };
+    expect(errorsOf(c)).toContain('featurecounts.strand: option_labels names "3", which is not an option');
+  });
+
+  it('rejects an empty label and labels that are not a map of text', () => {
+    const empty = copy();
+    strand(empty).option_labels = { '1': '  ' };
+    expect(errorsOf(empty)).toContain('featurecounts.strand: the label of option "1" is empty');
+    for (const bad of ['text', ['a'], 3]) {
+      const c = copy();
+      strand(c).option_labels = bad;
+      expect(errorsOf(c), JSON.stringify(bad)).toContain('option_labels must map option values to text');
+    }
+  });
+
+  it('lets an option with an empty value mean "add nothing", with a label that says so', () => {
+    const c = copy();
+    const stringtie = tool(c, 'stringtie-assemble').params.find((p: any) => p.id === 'strand');
+    expect(stringtie.options).toContain('');
+    expect(stringtie.default).toBe('');
+    expect(stringtie.option_labels['']).toMatch(/^Unstranded/);
+    expect(errorsOf(c)).toBe('');
+  });
+});
+
 describe('a minimal new tool passes', () => {
   it('lets a domain add a system tool with one input and one output', () => {
     const c: Catalog = copy();

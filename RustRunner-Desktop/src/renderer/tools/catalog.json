@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2026.12.0",
+  "version": "2026.13.0",
   "file_types": [
     "fastq",
     "fasta",
@@ -115,7 +115,7 @@
         {
           "name": "reports",
           "label": "Reports to combine",
-          "description": "Any results MultiQC understands: FastQC, fastp, Cutadapt, samtools, STAR, Salmon, featureCounts. Connect as many steps as you like.",
+          "description": "Any results MultiQC understands: FastQC, fastp, Cutadapt, samtools, STAR, HISAT2, Salmon, kallisto, featureCounts, RSeQC. Connect as many steps as you like.",
           "types": [
             "any"
           ],
@@ -1012,7 +1012,7 @@
     {
       "id": "star",
       "name": "STAR",
-      "description": "Splice-aware RNA-seq aligner. Writes a coordinate-sorted BAM.",
+      "description": "Splice-aware RNA-seq aligner, single-end or paired-end. Writes a coordinate-sorted BAM.",
       "category": "alignment",
       "subcategory": "RNA-seq aligners",
       "install": {
@@ -1026,7 +1026,7 @@
         {
           "name": "index",
           "label": "Genome index folder",
-          "description": "The folder made with `STAR --runMode genomeGenerate`.",
+          "description": "The folder made with STAR genome index (connect it).",
           "types": [
             "index"
           ],
@@ -1036,7 +1036,7 @@
         },
         {
           "name": "reads",
-          "label": "Reads",
+          "label": "Reads (first of the pair)",
           "description": "Sequencing reads in FASTQ format (plain or .gz).",
           "types": [
             "fastq"
@@ -1044,6 +1044,17 @@
           "required": true,
           "multiple": false,
           "example": "reads.fastq.gz"
+        },
+        {
+          "name": "reads2",
+          "label": "Reads (second of the pair)",
+          "description": "Leave empty for single-end reads.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reads_R2.fastq.gz"
         }
       ],
       "outputs": [
@@ -1086,7 +1097,7 @@
         }
       ],
       "params": [],
-      "command": "STAR --runThreadN {threads} --genomeDir {index} --readFilesIn {reads} --readFilesCommand gzip -cdf --outSAMtype BAM SortedByCoordinate --outFileNamePrefix {out_dir}",
+      "command": "STAR --runThreadN {threads} --genomeDir {index} --readFilesIn {reads} {reads2} --readFilesCommand gzip -cdf --outSAMtype BAM SortedByCoordinate --outFileNamePrefix {out_dir}",
       "threads": 8,
       "docs": "https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf"
     },
@@ -2358,7 +2369,7 @@
         {
           "name": "index",
           "label": "Salmon index",
-          "description": "The folder made with `salmon index`.",
+          "description": "The folder made with Salmon index (connect it).",
           "types": [
             "index"
           ],
@@ -2438,7 +2449,7 @@
         {
           "name": "bams",
           "label": "Alignments",
-          "description": "One or more BAM or SAM files. They are counted into one table, one column per file.",
+          "description": "One or more BAM or SAM files, counted into one table with one column per file. For paired-end reads tick Paired-end reads in Options.",
           "types": [
             "bam",
             "sam"
@@ -2486,6 +2497,23 @@
       ],
       "params": [
         {
+          "id": "strand",
+          "label": "Library strandedness",
+          "type": "select",
+          "default": "0",
+          "options": [
+            "0",
+            "1",
+            "2"
+          ],
+          "description": "Pick what your library kit makes. Most Illumina kits (TruSeq stranded, dUTP) are reverse-stranded. If unsure, run RSeQC infer experiment first. A wrong choice loses most reads.",
+          "option_labels": {
+            "0": "Unstranded (read direction does not matter)",
+            "1": "Forward-stranded (read 1 is the transcript strand)",
+            "2": "Reverse-stranded (dUTP kits: read 1 is the opposite strand)"
+          }
+        },
+        {
           "id": "feature_type",
           "label": "Feature type",
           "type": "string",
@@ -2505,12 +2533,870 @@
           "type": "boolean",
           "default": false,
           "flag": "-p --countReadPairs",
-          "description": "Count read pairs (fragments) instead of single reads."
+          "description": "Count read pairs (fragments) instead of single reads. Tick this for paired-end data: featureCounts stops with an error when it finds pairs and this is off."
         }
       ],
-      "command": "featureCounts -T {threads} -a {annotation} -t {feature_type} -g {attribute} {paired} -o {counts} {bams}",
+      "command": "featureCounts -T {threads} -a {annotation} -s {strand} -t {feature_type} -g {attribute} {paired} -o {counts} {bams}",
       "threads": 4,
       "docs": "https://subread.sourceforge.net/SubreadUsersGuide.pdf"
+    },
+    {
+      "id": "hisat2-build",
+      "name": "HISAT2 build",
+      "description": "Builds the genome index HISAT2 needs to align RNA-seq reads.",
+      "category": "reference",
+      "subcategory": "Aligner indexes",
+      "install": {
+        "kind": "conda",
+        "package": "hisat2",
+        "channel": "bioconda",
+        "version": "2.2.3"
+      },
+      "inputs": [
+        {
+          "name": "genome",
+          "label": "Reference genome",
+          "description": "The genome FASTA to index.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "index_dir",
+          "label": "Index folder",
+          "description": "The HISAT2 index files. Connect it to HISAT2 as the genome index.",
+          "types": [
+            "index"
+          ],
+          "pattern": "hisat2_index/",
+          "is_dir": true
+        }
+      ],
+      "params": [],
+      "command": "hisat2-build -p {threads} {genome} {index_dir}genome",
+      "threads": 4,
+      "docs": "https://daehwankimlab.github.io/hisat2/manual/"
+    },
+    {
+      "id": "salmon-index",
+      "name": "Salmon index",
+      "description": "Builds the index Salmon quant needs from transcript sequences.",
+      "category": "reference",
+      "subcategory": "Aligner indexes",
+      "install": {
+        "kind": "conda",
+        "package": "salmon",
+        "channel": "bioconda",
+        "version": "2.8.0"
+      },
+      "inputs": [
+        {
+          "name": "transcripts",
+          "label": "Transcript sequences",
+          "description": "One FASTA entry per transcript (cDNA). Make it from a genome and an annotation with gffread.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "transcripts.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "index_dir",
+          "label": "Index folder",
+          "description": "The Salmon index. Connect it to Salmon quant.",
+          "types": [
+            "index"
+          ],
+          "pattern": "salmon_index/",
+          "is_dir": true
+        }
+      ],
+      "params": [
+        {
+          "id": "kmer",
+          "label": "Word size (k-mer)",
+          "type": "number",
+          "default": 31,
+          "description": "Odd number. 31 suits reads of 75 bases or longer; use about 21 for shorter reads.",
+          "min": 11,
+          "max": 63,
+          "step": 2
+        }
+      ],
+      "command": "salmon index -t {transcripts} -i {index_dir} -k {kmer} -p {threads}",
+      "threads": 4,
+      "docs": "https://salmon.readthedocs.io/en/latest/salmon.html#preparing-transcriptome-indices-mapping-based-mode"
+    },
+    {
+      "id": "star-genomegenerate",
+      "name": "STAR genome index",
+      "description": "Builds the genome index STAR needs to align RNA-seq reads, with the known splice junctions of an annotation.",
+      "category": "reference",
+      "subcategory": "Aligner indexes",
+      "install": {
+        "kind": "conda",
+        "package": "star",
+        "channel": "bioconda",
+        "version": "2.7.10b",
+        "osx64": true
+      },
+      "inputs": [
+        {
+          "name": "genome",
+          "label": "Reference genome",
+          "description": "The genome FASTA to index.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        },
+        {
+          "name": "annotation",
+          "label": "Gene annotation",
+          "description": "Optional but recommended: STAR then knows the splice junctions of your genes. GTF format.",
+          "types": [
+            "gtf"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "genes.gtf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "index_dir",
+          "label": "Index folder",
+          "description": "The STAR index. Connect it to STAR as the genome index.",
+          "types": [
+            "index"
+          ],
+          "pattern": "star_index/",
+          "is_dir": true
+        }
+      ],
+      "params": [
+        {
+          "id": "sjdb_overhang",
+          "label": "Splice junction overhang",
+          "type": "number",
+          "default": 100,
+          "description": "Read length minus 1. 100 suits reads up to 101 bases. Only used when a gene annotation is given.",
+          "min": 1
+        },
+        {
+          "id": "sa_index_nbases",
+          "label": "Index size setting",
+          "type": "number",
+          "default": 14,
+          "description": "14 suits a human or mouse genome. For a small genome use about log2(genome size) / 2 - 1 (a 5 million base genome: 10).",
+          "min": 4,
+          "max": 15
+        }
+      ],
+      "command": "ANN=\"{annotation}\"; STAR --runMode genomeGenerate --runThreadN {threads} --genomeDir {index_dir} --genomeFastaFiles {genome} --genomeSAindexNbases {sa_index_nbases} --outFileNamePrefix {index_dir} ${ANN:+--sjdbGTFfile \"$ANN\" --sjdbOverhang {sjdb_overhang}}",
+      "threads": 8,
+      "docs": "https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf"
+    },
+    {
+      "id": "kallisto-index",
+      "name": "kallisto index",
+      "description": "Builds the index kallisto quant needs from transcript sequences.",
+      "category": "reference",
+      "subcategory": "Aligner indexes",
+      "install": {
+        "kind": "conda",
+        "package": "kallisto",
+        "channel": "bioconda",
+        "version": "0.52.0"
+      },
+      "inputs": [
+        {
+          "name": "transcripts",
+          "label": "Transcript sequences",
+          "description": "One FASTA entry per transcript (cDNA). Make it from a genome and an annotation with gffread.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "transcripts.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "index",
+          "label": "Index file",
+          "description": "The kallisto index. Connect it to kallisto quant.",
+          "types": [
+            "index"
+          ],
+          "pattern": "kallisto.idx",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "kmer",
+          "label": "Word size (k-mer)",
+          "type": "number",
+          "default": 31,
+          "description": "Odd number up to 31. Use a smaller value (about 21) for reads shorter than 50 bases.",
+          "min": 3,
+          "max": 31,
+          "step": 2
+        }
+      ],
+      "command": "kallisto index -i {index} -k {kmer} {transcripts}",
+      "threads": 1,
+      "docs": "https://pachterlab.github.io/kallisto/manual"
+    },
+    {
+      "id": "gffread",
+      "name": "gffread transcripts",
+      "description": "Cuts the transcript sequences (exons joined together) out of a genome using an annotation.",
+      "category": "reference",
+      "subcategory": "Annotation files",
+      "install": {
+        "kind": "conda",
+        "package": "gffread",
+        "channel": "bioconda",
+        "version": "0.12.9"
+      },
+      "inputs": [
+        {
+          "name": "genome",
+          "label": "Reference genome",
+          "description": "The genome FASTA the annotation belongs to. gffread also writes a .fai index file next to it.",
+          "types": [
+            "fasta"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genome.fa"
+        },
+        {
+          "name": "annotation",
+          "label": "Gene annotation",
+          "description": "Gene annotation in GTF or GFF3 format.",
+          "types": [
+            "gtf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.gtf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "transcripts",
+          "label": "Transcript sequences",
+          "description": "One FASTA entry per transcript. Connect it to Salmon index or kallisto index.",
+          "types": [
+            "fasta"
+          ],
+          "pattern": "transcripts.fa",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "gffread -w {transcripts} -g {genome} {annotation}",
+      "threads": 1,
+      "docs": "https://ccb.jhu.edu/software/stringtie/gff.shtml#gffread"
+    },
+    {
+      "id": "gffread-bed",
+      "name": "Annotation to BED12",
+      "description": "Converts a gene annotation (GTF or GFF3) to the BED12 gene model that RSeQC reads.",
+      "category": "reference",
+      "subcategory": "Annotation files",
+      "install": {
+        "kind": "conda",
+        "package": "gffread",
+        "channel": "bioconda",
+        "version": "0.12.9"
+      },
+      "inputs": [
+        {
+          "name": "annotation",
+          "label": "Gene annotation",
+          "description": "Gene annotation in GTF or GFF3 format.",
+          "types": [
+            "gtf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.gtf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "bed",
+          "label": "Gene model (BED12)",
+          "description": "One line per transcript with its exon blocks. Connect it to the RSeQC steps.",
+          "types": [
+            "bed"
+          ],
+          "pattern": "genes.bed",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "gffread --bed {annotation} -o {bed}",
+      "threads": 1,
+      "docs": "https://ccb.jhu.edu/software/stringtie/gff.shtml#gffread"
+    },
+    {
+      "id": "hisat2",
+      "name": "HISAT2",
+      "description": "Splice-aware RNA-seq aligner, single-end or paired-end. Writes SAM.",
+      "category": "alignment",
+      "subcategory": "RNA-seq aligners",
+      "install": {
+        "kind": "conda",
+        "package": "hisat2",
+        "channel": "bioconda",
+        "version": "2.2.3"
+      },
+      "inputs": [
+        {
+          "name": "index",
+          "label": "Genome index folder",
+          "description": "The folder made with HISAT2 build (connect it).",
+          "types": [
+            "index"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "hisat2_index/"
+        },
+        {
+          "name": "reads1",
+          "label": "Reads (first of the pair)",
+          "description": "FASTQ with the reads, or the first file of a pair.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads_R1.fastq.gz"
+        },
+        {
+          "name": "reads2",
+          "label": "Reads (second of the pair)",
+          "description": "Leave empty for single-end reads.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reads_R2.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "sam",
+          "label": "Alignments",
+          "description": "The alignments in SAM format. Sort them with samtools sort next.",
+          "types": [
+            "sam"
+          ],
+          "pattern": "hisat2.sam",
+          "is_dir": false
+        },
+        {
+          "name": "summary",
+          "label": "Alignment summary",
+          "description": "How many reads aligned. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "hisat2_summary.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "dta",
+          "label": "Prepare for StringTie",
+          "type": "boolean",
+          "default": false,
+          "flag": "--dta",
+          "description": "Tick this when the alignments go to StringTie to assemble transcripts."
+        },
+        {
+          "id": "max_intron",
+          "label": "Longest intron",
+          "type": "number",
+          "default": 500000,
+          "description": "Introns longer than this many bases are not searched for. The default suits most animals; lower it for yeast or plants.",
+          "min": 20
+        }
+      ],
+      "command": "set -- -U {reads1}; if [ -n \"{reads2}\" ]; then set -- -1 {reads1} -2 {reads2}; fi; hisat2 -p {threads} {dta} --max-intronlen {max_intron} -x {index}/genome \"$@\" -S {sam} --new-summary --summary-file {summary}",
+      "threads": 4,
+      "docs": "https://daehwankimlab.github.io/hisat2/manual/"
+    },
+    {
+      "id": "kallisto-quant",
+      "name": "kallisto quant",
+      "description": "Quantifies transcript abundance from single-end or paired-end reads, without aligning them.",
+      "category": "quantification",
+      "subcategory": "Transcript abundance",
+      "install": {
+        "kind": "conda",
+        "package": "kallisto",
+        "channel": "bioconda",
+        "version": "0.52.0"
+      },
+      "inputs": [
+        {
+          "name": "index",
+          "label": "kallisto index",
+          "description": "The index made with kallisto index (connect it).",
+          "types": [
+            "index"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "kallisto.idx"
+        },
+        {
+          "name": "reads1",
+          "label": "Reads (first of the pair)",
+          "description": "FASTQ with the reads, or the first file of a pair.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads_R1.fastq.gz"
+        },
+        {
+          "name": "reads2",
+          "label": "Reads (second of the pair)",
+          "description": "Leave empty for single-end reads. kallisto then needs the fragment length from Options.",
+          "types": [
+            "fastq"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "reads_R2.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Result folder",
+          "description": "kallisto writes its results here.",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "kallisto_out/",
+          "is_dir": true
+        },
+        {
+          "name": "abundance",
+          "label": "Abundances",
+          "description": "The table of transcript abundances. It is always called abundance.tsv inside the result folder.",
+          "types": [
+            "tsv"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "abundance.tsv"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "log",
+          "label": "Run log",
+          "description": "kallisto's progress messages. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "kallisto.log",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "fragment_length",
+          "label": "Average fragment length",
+          "type": "number",
+          "default": 200,
+          "description": "Only used for single-end reads (when the second reads file is empty): the average length of the sequenced DNA fragments, from your library preparation.",
+          "min": 1
+        },
+        {
+          "id": "fragment_sd",
+          "label": "Fragment length spread",
+          "type": "number",
+          "default": 20,
+          "description": "Only used for single-end reads: the standard deviation of the fragment length.",
+          "min": 1
+        },
+        {
+          "id": "strand",
+          "label": "Library strandedness",
+          "type": "select",
+          "default": "",
+          "options": [
+            "",
+            "--rf-stranded",
+            "--fr-stranded"
+          ],
+          "description": "Pick what your library kit makes. Most Illumina kits (TruSeq stranded, dUTP) are reverse-stranded. If unsure, run RSeQC infer experiment on an alignment.",
+          "option_labels": {
+            "": "Unstranded (read direction does not matter)",
+            "--rf-stranded": "Reverse-stranded (dUTP kits: read 1 is the opposite strand)",
+            "--fr-stranded": "Forward-stranded (read 1 is the transcript strand)"
+          }
+        },
+        {
+          "id": "bootstrap_samples",
+          "label": "Bootstrap samples",
+          "type": "number",
+          "default": 0,
+          "description": "Repeats of the estimate that show how certain it is. Needed only to compare samples with sleuth; 0 is fastest.",
+          "min": 0,
+          "max": 1000
+        }
+      ],
+      "command": "set -- --single -l {fragment_length} -s {fragment_sd}; if [ -n \"{reads2}\" ]; then set --; fi; kallisto quant -i {index} -o {out_dir} -t {threads} \"$@\" {strand} -b {bootstrap_samples} {reads1} {reads2} 2> {log} || (cat {log} >&2; false)",
+      "threads": 4,
+      "docs": "https://pachterlab.github.io/kallisto/manual"
+    },
+    {
+      "id": "stringtie-assemble",
+      "name": "StringTie assemble",
+      "description": "Assembles transcripts from RNA-seq alignments, optionally guided by a gene annotation, and estimates their abundance.",
+      "category": "quantification",
+      "subcategory": "Transcript assembly",
+      "install": {
+        "kind": "conda",
+        "package": "stringtie",
+        "channel": "bioconda",
+        "version": "3.0.3"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM sorted by genome position. Made with HISAT2 (tick Prepare for StringTie) and samtools sort.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        },
+        {
+          "name": "annotation",
+          "label": "Guide annotation",
+          "description": "Optional. With an annotation StringTie also finds the known genes; without one it assembles from the reads alone.",
+          "types": [
+            "gtf"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "genes.gtf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "gtf",
+          "label": "Assembled transcripts",
+          "description": "The transcripts StringTie found, with their coverage and TPM. GTF format.",
+          "types": [
+            "gtf"
+          ],
+          "pattern": "stringtie_assembled.gtf",
+          "is_dir": false
+        },
+        {
+          "name": "genes",
+          "label": "Gene abundances",
+          "description": "One row per gene with coverage, FPKM and TPM.",
+          "types": [
+            "tsv"
+          ],
+          "pattern": "stringtie_genes.tsv",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "strand",
+          "label": "Library strandedness",
+          "type": "select",
+          "default": "",
+          "options": [
+            "",
+            "--rf",
+            "--fr"
+          ],
+          "description": "Pick what your library kit makes. Most Illumina kits (TruSeq stranded, dUTP) are reverse-stranded. If unsure, run RSeQC infer experiment on an alignment.",
+          "option_labels": {
+            "": "Unstranded (read direction does not matter)",
+            "--rf": "Reverse-stranded (dUTP kits: read 1 is the opposite strand)",
+            "--fr": "Forward-stranded (read 1 is the transcript strand)"
+          }
+        },
+        {
+          "id": "min_coverage",
+          "label": "Minimum coverage",
+          "type": "number",
+          "default": 2.5,
+          "description": "Transcripts covered by fewer reads on average than this are dropped.",
+          "min": 0,
+          "step": 0.5
+        },
+        {
+          "id": "min_isoform_fraction",
+          "label": "Minimum isoform fraction",
+          "type": "number",
+          "default": 0.01,
+          "description": "Transcripts of a gene with less than this share of the gene's reads are dropped (0 to 1).",
+          "min": 0,
+          "max": 1,
+          "step": 0.01
+        }
+      ],
+      "command": "G=\"{annotation}\"; stringtie {bam} -p {threads} -o {gtf} -A {genes} -c {min_coverage} -f {min_isoform_fraction} {strand} ${G:+-G \"$G\"}",
+      "threads": 4,
+      "docs": "https://ccb.jhu.edu/software/stringtie/index.shtml?t=manual"
+    },
+    {
+      "id": "stringtie-quantify",
+      "name": "StringTie quantify",
+      "description": "Measures the abundance of the transcripts of an annotation (no new transcripts are made).",
+      "category": "quantification",
+      "subcategory": "Transcript assembly",
+      "install": {
+        "kind": "conda",
+        "package": "stringtie",
+        "channel": "bioconda",
+        "version": "3.0.3"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM sorted by genome position.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        },
+        {
+          "name": "annotation",
+          "label": "Gene annotation",
+          "description": "The transcripts to measure: a GTF or GFF3 file, or the assembled transcripts of StringTie assemble.",
+          "types": [
+            "gtf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.gtf"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Result folder",
+          "description": "StringTie writes its tables here, including the .ctab files Ballgown reads.",
+          "types": [
+            "gtf",
+            "tsv"
+          ],
+          "pattern": "stringtie/",
+          "is_dir": true
+        },
+        {
+          "name": "transcripts",
+          "label": "Transcript abundances",
+          "description": "The annotated transcripts with coverage, FPKM and TPM. Always called transcripts.gtf inside the result folder.",
+          "types": [
+            "gtf"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "transcripts.gtf"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "genes",
+          "label": "Gene abundances",
+          "description": "One row per gene. Always called gene_abundances.tsv inside the result folder.",
+          "types": [
+            "tsv"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "gene_abundances.tsv"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "strand",
+          "label": "Library strandedness",
+          "type": "select",
+          "default": "",
+          "options": [
+            "",
+            "--rf",
+            "--fr"
+          ],
+          "description": "Pick what your library kit makes. Most Illumina kits (TruSeq stranded, dUTP) are reverse-stranded. If unsure, run RSeQC infer experiment on an alignment.",
+          "option_labels": {
+            "": "Unstranded (read direction does not matter)",
+            "--rf": "Reverse-stranded (dUTP kits: read 1 is the opposite strand)",
+            "--fr": "Forward-stranded (read 1 is the transcript strand)"
+          }
+        }
+      ],
+      "command": "stringtie {bam} -e -B -p {threads} -G {annotation} -o {out_dir}transcripts.gtf -A {out_dir}gene_abundances.tsv {strand}",
+      "threads": 4,
+      "docs": "https://ccb.jhu.edu/software/stringtie/index.shtml?t=manual"
+    },
+    {
+      "id": "rseqc-infer-experiment",
+      "name": "RSeQC infer experiment",
+      "description": "Works out whether an RNA-seq library is stranded, and which way, from where reads fall on genes.",
+      "category": "qc",
+      "subcategory": "RNA-seq QC",
+      "install": {
+        "kind": "conda",
+        "package": "rseqc",
+        "channel": "bioconda",
+        "version": "5.0.5"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM of RNA-seq reads aligned to the genome.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        },
+        {
+          "name": "gene_model",
+          "label": "Gene model (BED12)",
+          "description": "The genes in BED12 format. Make it from a GTF with Annotation to BED12.",
+          "types": [
+            "bed"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.bed"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report",
+          "label": "Strandedness report",
+          "description": "The share of reads that follow each strand rule. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "infer_experiment.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "sample_size",
+          "label": "Reads to check",
+          "type": "number",
+          "default": 200000,
+          "description": "The first this many reads that fall on genes are checked. More is slower and barely changes the answer.",
+          "min": 1000
+        },
+        {
+          "id": "min_mapq",
+          "label": "Minimum mapping quality",
+          "type": "number",
+          "default": 30,
+          "description": "Reads below this mapping quality are skipped.",
+          "min": 0,
+          "max": 255
+        }
+      ],
+      "command": "infer_experiment.py -r {gene_model} -i {bam} -s {sample_size} -q {min_mapq} > {report}",
+      "threads": 1,
+      "docs": "https://rseqc.sourceforge.net/#infer-experiment-py"
+    },
+    {
+      "id": "rseqc-read-distribution",
+      "name": "RSeQC read distribution",
+      "description": "Shows how the reads divide between exons, introns and the regions around genes.",
+      "category": "qc",
+      "subcategory": "RNA-seq QC",
+      "install": {
+        "kind": "conda",
+        "package": "rseqc",
+        "channel": "bioconda",
+        "version": "5.0.5"
+      },
+      "inputs": [
+        {
+          "name": "bam",
+          "label": "Alignments (BAM)",
+          "description": "A BAM of RNA-seq reads aligned to the genome.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        },
+        {
+          "name": "gene_model",
+          "label": "Gene model (BED12)",
+          "description": "The genes in BED12 format. Make it from a GTF with Annotation to BED12.",
+          "types": [
+            "bed"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.bed"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report",
+          "label": "Distribution report",
+          "description": "Bases and read tags per region type. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "read_distribution.txt",
+          "is_dir": false
+        }
+      ],
+      "params": [],
+      "command": "read_distribution.py -i {bam} -r {gene_model} > {report}",
+      "threads": 1,
+      "docs": "https://rseqc.sourceforge.net/#read-distribution-py"
     }
   ]
 }

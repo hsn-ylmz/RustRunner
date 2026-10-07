@@ -21,6 +21,11 @@ Writes into OUTDIR:
                       copies of some of them (so 2 * DUP_COPIES reads are
                       duplicates). Made from a separate random stream, so the
                       other files are the same as before this one was added.
+  rna_R1/R2.fastq.gz  paired-end 75 bp stranded RNA reads (dUTP kit: read 1 is the
+                      antisense of the transcript, read 2 the sense), RNA_PAIRS pairs
+                      from the spliced transcripts at RNA_WEIGHTS abundance, from a
+                      third random stream (earlier files unchanged)
+  rna_truth.tsv       transcript id and the number of pairs drawn from it
 """
 import gzip
 import os
@@ -30,6 +35,8 @@ import sys
 ADAPTER = "AGATCGGAAGAGC"
 DUP_UNIQUE_PAIRS = 600
 DUP_COPIES = 200
+RNA_PAIRS = 2000
+RNA_WEIGHTS = (6, 3, 1)  # tx1 : tx2 : tx3 abundance
 COMP = str.maketrans("ACGT", "TGCA")
 
 
@@ -139,6 +146,28 @@ def main():
 
     write_duplicate_pairs(outdir, sample, random.Random(seed + 1))
     write_unnormalized_vcf(outdir, ref)
+    write_stranded_rna_pairs(outdir, transcripts, random.Random(seed + 2))
+
+
+def write_stranded_rna_pairs(outdir, transcripts, rng):
+    """Paired stranded RNA reads at known, unequal abundance (see the module doc)."""
+    tids = list(transcripts)
+    counts = {tid: 0 for tid in tids}
+    r1, r2 = [], []
+    for i in range(RNA_PAIRS):
+        tid = rng.choices(tids, weights=RNA_WEIGHTS)[0]
+        counts[tid] += 1
+        seq = transcripts[tid]
+        length = rng.randint(150, 250)
+        start = rng.randrange(0, len(seq) - length + 1)
+        frag = seq[start:start + length]  # sense strand
+        r1.append((f"rnap{i}/1", revcomp(frag)[:75]))  # dUTP: read 1 is antisense
+        r2.append((f"rnap{i}/2", frag[:75]))
+    write_fastq(os.path.join(outdir, "rna_R1.fastq.gz"), r1)
+    write_fastq(os.path.join(outdir, "rna_R2.fastq.gz"), r2)
+    with open(os.path.join(outdir, "rna_truth.tsv"), "w") as fh:
+        for tid in tids:
+            fh.write(f"{tid}\t{counts[tid]}\n")
 
 
 def write_unnormalized_vcf(outdir, ref):

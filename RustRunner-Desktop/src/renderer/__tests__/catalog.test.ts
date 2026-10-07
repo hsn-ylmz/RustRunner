@@ -234,7 +234,7 @@ describe('catalog structure', () => {
     expect(inputs('bwa-mem')).toEqual(['ref', 'reads1', 'reads2?']);
     expect(inputs('featurecounts')).toEqual(['bams*', 'annotation']);
     expect(inputs('salmon-quant')).toEqual(['index', 'reads']);
-    expect(inputs('star')).toEqual(['index', 'reads']);
+    expect(inputs('star')).toEqual(['index', 'reads', 'reads2?']);
     expect(inputs('bcftools-call')).toEqual(['ref', 'bam']);
     expect(inputs('multiqc')).toEqual(['reports*']);
     expect(tool('multiqc').inputs[0].types).toEqual(['any']);

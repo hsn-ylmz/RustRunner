@@ -42,6 +42,12 @@ export interface ToolParam {
   description: string;
   /** Allowed values of a `select` parameter. */
   options?: string[];
+  /**
+   * What the form shows for an option whose value is not plain words (a flag
+   * like `--rf`, or `2`): `{ '--rf': 'Reverse-stranded (dUTP kits)' }`. An
+   * option without a label shows its value. The value is what the command gets.
+   */
+  option_labels?: Record<string, string>;
   /** Bounds of a `number` parameter. */
   min?: number;
   max?: number;
@@ -380,6 +386,17 @@ function validateParams(where: string, params: unknown, errors: string[]): ToolP
           errors.push(`${at}: a choice needs options`);
         } else if (!param.options.includes(param.default as string)) {
           errors.push(`${at}: default is not one of the options`);
+        }
+        if (param.option_labels !== undefined) {
+          const labels = param.option_labels as unknown;
+          if (!isRecord(labels)) {
+            errors.push(`${at}: option_labels must map option values to text`);
+          } else {
+            for (const [value, text] of Object.entries(labels)) {
+              if (!param.options?.includes(value)) errors.push(`${at}: option_labels names "${value}", which is not an option`);
+              else if (!nonEmpty(text)) errors.push(`${at}: the label of option "${value}" is empty`);
+            }
+          }
         }
         break;
       case 'string':

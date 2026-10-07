@@ -667,7 +667,7 @@ export function PropertiesPanel({
                 >
                   {param.options?.map((option) => (
                     <option key={option} value={option}>
-                      {option}
+                      {param.option_labels?.[option] ?? option}
                     </option>
                   ))}
                 </Select>

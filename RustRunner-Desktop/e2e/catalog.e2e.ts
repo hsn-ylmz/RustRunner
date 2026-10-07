@@ -46,7 +46,7 @@ test('the palette searches by name and category, and closes with Escape', async 
   await page.getByTestId('open-palette').click();
   const items = page.locator('[data-testid^="palette-item-"]');
   const all = await items.count();
-  expect(all).toBeGreaterThanOrEqual(34);
+  expect(all).toBeGreaterThanOrEqual(46);
 
   await page.getByTestId('palette-search').fill('BWA');
   await expect(items).toHaveCount(2);
@@ -276,6 +276,41 @@ test('a variant caller offers fractions with a fine step and builds its command 
   );
   // Several BAM files can feed it.
   await expect(page.getByTestId('prop-slot-bams-row')).toBeVisible();
+});
+
+test('a choice shows plain labels and puts the flag it stands for into the command', async ({ page }) => {
+  await addFromPalette(page, 'stringtie assemble', 'stringtie-assemble');
+  const strand = page.getByTestId('catalog-param-strand');
+  // The values are flags; the person reads what each means.
+  await expect(strand.locator('option')).toHaveText([
+    'Unstranded (read direction does not matter)',
+    'Reverse-stranded (dUTP kits: read 1 is the opposite strand)',
+    'Forward-stranded (read 1 is the transcript strand)',
+  ]);
+  await expect(strand).toHaveValue('');
+  await openSection(page, 'advanced');
+  await expect(page.getByTestId('prop-command')).not.toHaveValue(/--rf/);
+  await strand.selectOption({ label: 'Reverse-stranded (dUTP kits: read 1 is the opposite strand)' });
+  await expect(page.getByTestId('prop-command')).toHaveValue(/-f 0\.01 --rf \$\{G:\+/);
+  // The guide annotation is optional: the step can run on the alignments alone.
+  await expect(page.getByTestId('prop-slot-annotation-row')).toContainText('optional');
+});
+
+test('transcript sequences from gffread go straight into an index builder, and the index into the quantifier', async ({
+  page,
+}) => {
+  await addFromPalette(page, 'gffread', 'gffread');
+  await addFromPalette(page, 'kallisto index', 'kallisto-index');
+  await addFromPalette(page, 'kallisto quant', 'kallisto-quant');
+  await connect(page, 'gffread transcripts', 'kallisto index');
+  await connect(page, 'kallisto index', 'kallisto quant');
+  await selectNode(page, 'kallisto index');
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-transcripts')).toHaveText('transcripts.fa');
+  await selectNode(page, 'kallisto quant');
+  await expect(page.getByTestId('binding-prompt')).toHaveCount(0);
+  await expect(page.getByTestId('prop-slot-index')).toHaveText('kallisto.idx');
+  await expect(page.getByTestId('prop-slot-reads2-row')).toContainText('optional');
 });
 
 test('MultiQC follows several steps at once, and asks which of a step\'s files to use', async ({ page }) => {
