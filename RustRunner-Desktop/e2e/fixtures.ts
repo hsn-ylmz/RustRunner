@@ -66,6 +66,9 @@ export function launchApp(root: string, extraEnv: Record<string, string> = {}): 
       TMPDIR: path.join(root, 'tmp'),
       NODE_ENV: 'production',
       RUSTRUNNER_BIN: ENGINE_BIN,
+      // The engine's tool-to-environment map, kept in the sandbox so a test
+      // never rewrites the tracked RustRunner/runtime/env_map.json.
+      RUSTRUNNER_ENV_MAP: path.join(root, 'env_map.json'),
       ...extra,
     },
   });

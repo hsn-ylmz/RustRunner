@@ -23,6 +23,14 @@ use super::locate::{binary_name, locate_micromamba};
 
 /// Lazily-initialized path to the environment mapping file.
 pub static ENV_MAP_PATH: Lazy<PathBuf> = Lazy::new(|| {
+    // Priority 0: an explicit file (tests use this so a run never rewrites the
+    // tracked runtime/env_map.json in the source tree)
+    if let Some(explicit) = std::env::var_os("RUSTRUNNER_ENV_MAP").filter(|v| !v.is_empty()) {
+        let path = PathBuf::from(explicit);
+        info!("Using env_map from RUSTRUNNER_ENV_MAP: {}", path.display());
+        return path;
+    }
+
     // Priority 1: Production environment (next to executable)
     // Check this first to ensure packaged apps use their bundled env_map
     if let Ok(exe_path) = std::env::current_exe() {
