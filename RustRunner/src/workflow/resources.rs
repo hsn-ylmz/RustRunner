@@ -21,8 +21,10 @@
 //!    people who relocate the app);
 //! 2. `app_resources/` next to the engine executable (the packaged app puts it
 //!    beside `env_map.json`);
-//! 3. `runtime/app_resources/` of the source tree the engine was built from
-//!    (development builds).
+//! 3. `runtime/app_resources/` of the source tree the engine was built from,
+//!    in debug (development) builds only. A release build never looks there:
+//!    the path is the build machine's, and on another computer whoever can
+//!    create that folder would decide which script runs.
 //!
 //! # What is accepted
 //!
@@ -103,6 +105,15 @@ pub fn resources_dir() -> Option<PathBuf> {
                 return Some(beside);
             }
         }
+    }
+    source_tree_resources()
+}
+
+/// The development fallback: `runtime/app_resources/` of the source tree, for
+/// debug builds only (see the module docs).
+fn source_tree_resources() -> Option<PathBuf> {
+    if !cfg!(debug_assertions) {
+        return None;
     }
     let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("runtime")
@@ -349,10 +360,26 @@ mod tests {
     }
 
     #[test]
+    fn test_the_source_tree_fallback_exists_only_in_debug_builds() {
+        assert_eq!(
+            source_tree_resources().is_some(),
+            cfg!(debug_assertions),
+            "a release build must not look for scripts at the build machine's path"
+        );
+    }
+
+    #[test]
     fn test_the_shipped_riboseq_script_is_found_in_the_source_tree() {
-        // The development fallback (`runtime/app_resources`) is what cargo
-        // tests and the real-tool suite use.
-        let path = resolve("ribowaltz/ribowaltz_report.R").unwrap();
+        // The development fallback (`runtime/app_resources`) is what debug
+        // cargo tests use; the real-tool suite puts the folder beside the engine.
+        let path = resolve_in(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime/app_resources"),
+            "ribowaltz/ribowaltz_report.R",
+        )
+        .unwrap();
         assert!(path.is_file());
+        if cfg!(debug_assertions) && std::env::var_os("RUSTRUNNER_RESOURCES").is_none() {
+            assert_eq!(resolve("ribowaltz/ribowaltz_report.R").unwrap(), path);
+        }
     }
 }

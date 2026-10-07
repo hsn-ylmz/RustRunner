@@ -123,20 +123,27 @@ describe('Ribo-seq with UMIs template', () => {
     expect(new Set(labels).size).toBe(labels.length);
   });
 
-  it('starts at the values of DATA.md: D-Plex adapter, 12 nt UMI at the 5\' end and 4 nt motif, 28 to 34 nt, 2 mismatches, one place', () => {
+  it('starts at the values of DATA.md: D-Plex adapter, cutadapt minimum 36 (UMI still on), 12 nt UMI at the 5\' end and 4 nt motif, 28 to 34 nt, frame-checked offsets, 2 mismatches, one place', () => {
     const texts = initialSettingTexts(template);
     expect(texts).toMatchObject({
       adapter: 'AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC',
+      trim_min_length: '36',
       umi_end: '5prime',
       umi_length: '12',
       spacer_length: '4',
       min_length: '28',
       max_length: '34',
+      offset_refine: 'frame',
       mismatches: '2',
       multimap: '1',
     });
     const m = made();
-    expect(node('cut', m.nodes).data.catalogParams).toMatchObject({ min_overlap: 10, error_rate: 0.1, min_length: 20 });
+    // cutadapt runs before the UMI is removed: 12 UMI + 4 motif + an insert of at least 20.
+    expect(node('cut', m.nodes).data.catalogParams).toMatchObject({ min_overlap: 10, error_rate: 0.1, min_length: 36 });
+    expect(node('cut', m.nodes).data.command).toContain('-m 36');
+    expect(node('ribo', m.nodes).data.command).toContain('--offset-refine frame');
+    // MAPQ 20 stays: it removes reads on two overlapping transcripts, so dedup sees each read once.
+    expect(node('view', m.nodes).data.command).toContain('-q 20');
     // The UMI is extracted with the regex method and a discard group (the string method with X leaves the motif in the read).
     expect(node('umi', m.nodes).data.command).toContain('--extract-method=regex');
     expect(node('umi', m.nodes).data.command).toContain('discard_1');
@@ -150,9 +157,13 @@ describe('Ribo-seq with UMIs template', () => {
       spacer_length: '0',
       min_length: '26',
       max_length: '32',
+      offset_refine: 'none',
+      trim_min_length: '28',
       mismatches: '1',
       multimap: '2',
     });
+    expect(node('cut', m.nodes).data.catalogParams.min_length).toBe(28);
+    expect(node('ribo', m.nodes).data.command).toContain('--offset-refine none');
     expect(node('cut', m.nodes).data.catalogParams.adapter).toBe('TGGAATTCTCGGGTGCCAAGG');
     expect(node('umi', m.nodes).data.catalogParams).toMatchObject({ umi_end: '3prime', umi_length: 8, spacer_length: 0 });
     expect(node('ribo', m.nodes).data.catalogParams).toMatchObject({ min_length: 26, max_length: 32 });

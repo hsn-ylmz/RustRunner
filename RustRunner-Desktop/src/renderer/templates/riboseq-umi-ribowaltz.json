@@ -3,10 +3,10 @@
   "id": "riboseq-umi-ribowaltz",
   "name": "Ribo-seq with UMIs (riboWaltz)",
   "description": "Ribosome profiling with UMIs: trim, extract UMIs, remove rRNA/tRNA/ncRNA, map to transcripts with STAR, deduplicate, riboWaltz report and MultiQC.",
-  "details": "Ribosome profiling (Ribo-seq) with UMIs, from raw reads to a riboWaltz report. The reads are checked (FastQC), trimmed (cutadapt), their UMI is moved into the read name (UMI-tools), cleaned of rRNA, tRNA and other small ncRNA (three bowtie2 steps), mapped to transcripts with STAR, filtered, sorted and indexed (samtools), deduplicated by UMI and position (UMI-tools dedup) and analysed with riboWaltz. MultiQC combines the four FastQC checks with the cutadapt, bowtie2, STAR and UMI-tools logs. The indexes are built inside the workflow, so you only bring FASTA and GTF files.\n\nCheck the settings below before you create the workflow: the adapter, the UMI position and length, and the footprint lengths must match your kit. The defaults are those of the public HEK293T test library (Diagenode D-Plex: a 12 base UMI and 4 template-switch bases at the 5' end, poly(A) tail and adapter at the 3' end).\n\nGood to know: STAR is pinned to 2.7.10b because 2.7.11b fails with --quantMode (on Apple silicon it runs as an Intel build). Antisense reads are dropped before deduplication. riboWaltz expects one transcript per gene. The first run installs the tools (a few GB). One sample at a time.",
+  "details": "Ribosome profiling (Ribo-seq) with UMIs, from raw reads to a riboWaltz report. The reads are checked (FastQC), trimmed (cutadapt), their UMI is moved into the read name (UMI-tools), cleaned of rRNA, tRNA and other small ncRNA (three bowtie2 steps), mapped to transcripts with STAR, filtered, sorted and indexed (samtools), deduplicated by UMI and position (UMI-tools dedup) and analysed with riboWaltz. MultiQC combines the four FastQC checks with the cutadapt, bowtie2, STAR and UMI-tools logs. The indexes are built inside the workflow, so you only bring FASTA and GTF files.\n\nCheck the settings below before you create the workflow: the adapter, the UMI position and length, the shortest read cutadapt keeps (it still counts the UMI) and the footprint lengths must match your kit. The defaults are those of the public HEK293T test library (Diagenode D-Plex: a 12 base UMI and 4 template-switch bases at the 5' end, poly(A) tail and adapter at the 3' end).\n\nGood to know: STAR is pinned to 2.7.10b because 2.7.11b fails with --quantMode (on Apple silicon it runs as an Intel build). Antisense reads and reads on two transcripts (MAPQ below 20) are dropped before deduplication, so every read is deduplicated once. riboWaltz's P-site offsets are checked against the reading frame, and by default moved by one nucleotide where the frame is clearly better. riboWaltz expects one transcript per gene. The first run installs the tools (a few GB). One sample at a time.",
   "domain": "rna",
   "difficulty": "advanced",
-  "minCatalogVersion": "2026.17.0",
+  "minCatalogVersion": "2026.17.1",
   "readLayout": "single",
   "inputs": [
     {
@@ -137,6 +137,17 @@
       ]
     },
     {
+      "id": "trim_min_length",
+      "label": "Shortest read kept by cutadapt (UMI and spacer included)",
+      "hint": "Cutadapt runs before the UMI is taken out, so this length still counts the UMI and the spacer (12 + 4 for D-Plex). 36 keeps inserts of 20 nt and longer, so no read of a few bases reaches the aligners. Set it to UMI + spacer + the shortest insert you want.",
+      "targets": [
+        {
+          "step": "cut",
+          "param": "min_length"
+        }
+      ]
+    },
+    {
       "id": "umi_end",
       "label": "UMI position in the read",
       "hint": "Choose the 5' end for a UMI at the start of the read (D-Plex), the 3' end for a UMI at the end of the read (linker-based protocols). It is taken out after the adapter is cut.",
@@ -192,6 +203,17 @@
       ]
     },
     {
+      "id": "offset_refine",
+      "label": "Adjust P-site offsets to the reading frame",
+      "hint": "riboWaltz takes each offset from the reads on start codons. Yes moves an offset by one nucleotide when that puts at least 5 points more of the CDS P-sites in frame 0; the report lists riboWaltz's offsets next to the ones used, so you can compare. On the test library riboWaltz picks 12 or 13 nt from about 350 start-codon reads, and the frame moves five of the seven lengths.",
+      "targets": [
+        {
+          "step": "ribo",
+          "param": "offset_refine"
+        }
+      ]
+    },
+    {
       "id": "mismatches",
       "label": "Mismatches allowed in STAR",
       "hint": "Footprints are short, so 2 is strict enough to avoid wrong placements and loose enough for sequencing errors.",
@@ -205,7 +227,7 @@
     {
       "id": "multimap",
       "label": "Most places a read may align to",
-      "hint": "1 keeps only reads that fit one transcript, which is what P-site analysis wants. Raise it only if you know why.",
+      "hint": "1 keeps only reads that fit one place in the genome, which is what P-site analysis wants. The samtools step keeps MAPQ 20 and above, which also drops reads STAR places on two overlapping transcripts, so raising this alone adds no reads to the report.",
       "targets": [
         {
           "step": "star",
@@ -235,7 +257,7 @@
         "adapter": "AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC",
         "error_rate": 0.1,
         "min_overlap": 10,
-        "min_length": 20,
+        "min_length": 36,
         "quality_cutoff": 20
       },
       "files": {
@@ -463,6 +485,9 @@
       "position": {
         "x": 2600,
         "y": 160
+      },
+      "params": {
+        "offset_refine": "frame"
       }
     },
     {

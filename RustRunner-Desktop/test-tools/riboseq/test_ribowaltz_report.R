@@ -144,5 +144,42 @@ check("flanking never goes below 0", r$flanking == 1L && identical(calls, c(0L, 
 calls <- integer(); fail_at <- 6L; fail_message <- "no reads on the start codon"
 check("any other error is raised at once, without retries", raises(psite_with_tie_fallback(list(), 6L, "auto"), "no reads on the start codon") && identical(calls, 6L))
 
+# --- offsets against the reading frame ---------------------------------------------
+# Transcript with the CDS from 101 (first base of the start codon) to 400 (last base of the stop codon).
+reads_at <- function(len, end5) data.frame(length = len, end5 = end5, cds_start = 101L, cds_stop = 400L)
+# 31 nt reads whose P-site is in frame 0 with offset 13 (5' end at 101 - 13 + 3k), 30 nt reads in frame 0 with offset 12.
+r31 <- reads_at(31L, 88L + 3L * (0:149))
+r30 <- reads_at(30L, 89L + 3L * (0:149))
+s <- in_frame_share(r31$end5, r31$cds_start, r31$cds_stop, 13L)
+check("all P-sites in frame 0 with the right offset", s[["reads"]] == 100 && s[["in_frame"]] == 100)
+check("none in frame 0 one nucleotide off", in_frame_share(r31$end5, r31$cds_start, r31$cds_stop, 12L)[["in_frame"]] == 0)
+check("P-sites outside the CDS are not counted", in_frame_share(88L, 101L, 400L, 12L)[["reads"]] == 0 &&
+        in_frame_share(400L, 101L, 400L, 0L)[["reads"]] == 1 && in_frame_share(401L, 101L, 400L, 0L)[["reads"]] == 0)
+check("a non-coding transcript (cds_start 0) is not counted", in_frame_share(100L, 0L, 0L, 12L)[["reads"]] == 0)
+check("no CDS read gives NA, not 0", is.na(in_frame_share(integer(), integer(), integer(), 12L)[["in_frame"]]))
+offs <- data.frame(length = c(30L, 31L), corrected_offset_from_5 = c(12L, 12L), corrected_offset_from_3 = c(17L, 18L))
+chk <- offset_frame_check(rbind(r30, r31), offs)
+check("one row per length, in the order of the offsets", identical(chk$length, c(30L, 31L)))
+check("a right offset is not flagged", !chk$better_offset[1] && chk$best_offset[1] == 12L && chk$in_frame_ribowaltz[1] == 100)
+check("an offset one nucleotide off is flagged with the better one", chk$better_offset[2] && chk$offset_ribowaltz[2] == 12L &&
+        chk$best_offset[2] == 13L && chk$in_frame_ribowaltz[2] == 0 && chk$in_frame_best[2] == 100)
+check("only neighbours are tried, never another codon", all(abs(chk$best_offset - chk$offset_ribowaltz) <= 1L))
+few <- offset_frame_check(reads_at(31L, 88L + 3L * (0:20)), data.frame(length = 31L, corrected_offset_from_5 = 12L))
+check("a length with fewer than 100 CDS reads is never flagged", !few$better_offset && few$cds_reads < 100)
+mixed <- reads_at(31L, c(88L + 3L * (0:99), 87L + 3L * (0:95)))
+small <- offset_frame_check(mixed, data.frame(length = 31L, corrected_offset_from_5 = 13L))
+check("a gain under 5 points is not flagged", !small$better_offset && small$in_frame_ribowaltz > small$in_frame_best - 5)
+check("no offsets give an empty table with the columns", nrow(offset_frame_check(r31, offs[0, ])) == 0L &&
+        identical(names(offset_frame_check(r31, offs[0, ])), c("length", "cds_reads", "offset_ribowaltz", "in_frame_ribowaltz", "best_offset", "in_frame_best", "better_offset")))
+refined <- refine_offsets(offs, chk)
+check("refining moves only the flagged length", identical(refined$corrected_offset_from_5, c(12L, 13L)) && identical(refined$adjusted_to_frame, c(FALSE, TRUE)))
+check("refining keeps the 3' offset consistent (length - 1 - 5' offset)", all(refined$corrected_offset_from_3 == refined$length - 1L - refined$corrected_offset_from_5))
+check("refining with an empty check changes nothing", identical(refine_offsets(offs, chk[0, ])$corrected_offset_from_5, offs$corrected_offset_from_5) &&
+        !any(refine_offsets(offs, chk[0, ])$adjusted_to_frame))
+o <- parse_args(c("--gtf", "g", "--out", "o", "--", "a.bam"))
+check("offsets are riboWaltz's unless asked", o$offset_refine == "none")
+check("--offset-refine frame is read", parse_args(c("--gtf", "g", "--out", "o", "--offset-refine", "frame", "a.bam"))$offset_refine == "frame")
+check("a wrong --offset-refine is refused", raises(parse_args(c("--gtf", "g", "--out", "o", "--offset-refine", "best", "a.bam")), "--offset-refine must be none or frame"))
+
 cat(sprintf("%d checks passed, %d failed\n", passed, failures))
 if (failures > 0L) quit(status = 1L, save = "no")

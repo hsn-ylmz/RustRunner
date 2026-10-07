@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2026.17.0",
+  "version": "2026.17.1",
   "file_types": [
     "fastq",
     "fasta",
@@ -547,7 +547,7 @@
           "label": "Minimum read length",
           "type": "number",
           "default": 20,
-          "description": "Reads shorter than this after trimming are discarded.",
+          "description": "Reads shorter than this after trimming are discarded. If a UMI or spacer is still on the read (cutadapt before UMI-tools extract), they count: add their length to the shortest insert you want (D-Plex: 16 + 20 = 36).",
           "min": 0
         },
         {
@@ -7230,7 +7230,7 @@
         {
           "name": "report_dir",
           "label": "Report folder",
-          "description": "The report and its tables.",
+          "description": "The report and its tables (offsets, the reading-frame check of the offsets, periodicity, regions, codons).",
           "types": [
             "html",
             "tsv"
@@ -7309,9 +7309,24 @@
           "min": 0,
           "max": 30,
           "description": "A read is used to find the offset only if it extends at least this many bases on both sides of the start codon. riboWaltz's default is 6."
+        },
+        {
+          "id": "offset_refine",
+          "label": "Adjust offsets to the reading frame",
+          "type": "select",
+          "default": "none",
+          "options": [
+            "none",
+            "frame"
+          ],
+          "option_labels": {
+            "none": "No, riboWaltz's offsets as they are",
+            "frame": "Yes, where the CDS frame is clearly better"
+          },
+          "description": "riboWaltz takes each length's offset from the reads on start codons, which can be a few hundred. The report always checks every offset against the reading frame of the P-sites in the CDS (offset_frame_check.tsv) and warns when an offset one nucleotide away puts at least 5 points more of them in frame 0. Yes uses those offsets instead; never more than one nucleotide from riboWaltz's, so the codon stays the one the start codon gave."
         }
       ],
-      "command": "GEN=\"{genome}\"; Rscript --vanilla {app_resource:ribowaltz/ribowaltz_report.R} --gtf {annotation} --out {report_dir} --min-length {min_length} --max-length {max_length} --extremity {extremity} --flanking {flanking} --threads {threads} ${GEN:+--fasta \"$GEN\"} -- {bams}",
+      "command": "GEN=\"{genome}\"; Rscript --vanilla {app_resource:ribowaltz/ribowaltz_report.R} --gtf {annotation} --out {report_dir} --min-length {min_length} --max-length {max_length} --extremity {extremity} --flanking {flanking} --offset-refine {offset_refine} --threads {threads} ${GEN:+--fasta \"$GEN\"} -- {bams}",
       "threads": 2,
       "docs": "https://github.com/LabTranslationalArchitectomics/riboWaltz"
     }

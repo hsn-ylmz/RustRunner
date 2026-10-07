@@ -172,7 +172,7 @@ describe('the commands', () => {
   it('the riboWaltz step names its script as a bundled file, not a path', () => {
     const c = render('ribowaltz-report');
     expect(c).toContain('Rscript --vanilla {app_resource:ribowaltz/ribowaltz_report.R}');
-    expect(c).toContain('--min-length 28 --max-length 34 --extremity auto --flanking 6');
+    expect(c).toContain('--min-length 28 --max-length 34 --extremity auto --flanking 6 --offset-refine none');
     expect(c).toContain('-- {bams}');
     expect(c).not.toMatch(/<<|heredoc/i);
   });
@@ -337,6 +337,22 @@ describe.skipIf(process.platform === 'win32')('the shell logic of the commands',
     const at = (flag: string) => r.args[r.args.indexOf(flag) + 1];
     expect([at('--min-length'), at('--max-length'), at('--extremity'), at('--flanking')]).toEqual(['26', '36', '5end', '9']);
   });
+
+  it('riboWaltz: offsets are riboWaltz\'s own unless the frame adjustment is chosen, and only these two values exist', () => {
+    const tool = findTool('ribowaltz-report')!;
+    const param = tool.params.find((p) => p.id === 'offset_refine')!;
+    expect(param.default).toBe('none');
+    expect(param.options).toEqual(['none', 'frame']);
+    const at = (r: { args: string[] }) => r.args[r.args.indexOf('--offset-refine') + 1];
+    expect(at(run('ribowaltz-report', 'Rscript', ribo))).toBe('none');
+    expect(at(run('ribowaltz-report', 'Rscript', ribo, { offset_refine: 'frame' }))).toBe('frame');
+  });
+
+  it('Cutadapt says that a UMI still on the read counts towards the minimum length', () => {
+    const param = findTool('cutadapt')!.params.find((p) => p.id === 'min_length')!;
+    expect(param.description).toMatch(/UMI/);
+    expect(param.description).toContain('36');
+  });
 });
 
 describe('connecting the Ribo-seq steps', () => {
@@ -484,7 +500,7 @@ describe('files that ship with the app: {app_resource:path}', () => {
       .join('\n');
     expect(script).not.toMatch(/install\.packages|BiocManager|devtools|remotes::|download\.file|rmarkdown|pandoc|knitr/);
     expect(script).not.toMatch(/https?:\/\//); // no address to fetch from
-    expect(script).toContain('.libPaths(.Library)');
+    expect(script).toContain('.libPaths(.Library, include.site = FALSE)');
   });
 
   it('the packaged app carries the folder next to the engine', () => {

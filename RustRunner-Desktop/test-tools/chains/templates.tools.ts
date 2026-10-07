@@ -360,8 +360,9 @@ function riboSetup(reads: string, full: boolean): Setup {
       annotation: ['ribo_genes.gtf'],
     },
     // No setting is typed: the template's defaults are the settings of this library (D-Plex adapter,
-    // 12 nt UMI at the 5' end, 4 nt motif, 28 to 34 nt, 2 mismatches, one place).
-    verify: (dir) => verifyRiboseq(dir, full),
+    // cutadapt minimum 36 with the UMI still on, 12 nt UMI at the 5' end, 4 nt motif, 28 to 34 nt,
+    // offsets adjusted to the reading frame, 2 mismatches, one place).
+    verify: (dir) => verifyRiboseq(dir, full, { refine: true }),
   };
 }
 

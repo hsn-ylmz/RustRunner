@@ -53,7 +53,7 @@ Because the user's pipeline runs cutadapt first and `umi_tools extract` second, 
 
 | Step | Setting | Effect |
 |---|---|---|
-| cutadapt | 3' adapter `AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC`, `-e 0.1 -O 10 -m 20` | removes A-tail + Illumina adapter (and anything after it) |
+| cutadapt | 3' adapter `AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC`, `-e 0.1 -O 10 -m 36` | removes A-tail + Illumina adapter (and anything after it); `-m 36` because UMI and motif (16 nt) are still on the read |
 | umi_tools extract | `--extract-method=regex --bc-pattern='^(?P<umi_1>.{12})(?P<discard_1>.{4})'` | moves the 12 nt UMI into the read name and removes the 4 nt motif |
 
 ## 2. What the reads show (verified, not assumed)
@@ -176,13 +176,13 @@ The catalog (2026.17.0) has an entry for every step of the pipeline; each is run
 
 | Pipeline step | Catalog entry | Settings that follow this data (the defaults) |
 |---|---|---|
-| cutadapt | Cutadapt | 3' adapter `AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC`, minimum overlap 10, allowed errors 0.1, minimum length 20 (type the adapter and the overlap: the entry's own defaults are the plain Illumina ones) |
+| cutadapt | Cutadapt | 3' adapter `AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC`, minimum overlap 10, allowed errors 0.1, minimum length **36** (the 12 nt UMI and 4 nt motif are still on the read here, so 36 keeps inserts of 20 nt or more; type the adapter, the overlap and the length: the entry's own defaults are the plain Illumina ones) |
 | umi_tools extract | UMI-tools extract | UMI at the 5' end, length 12, spacer 4 (the entry always uses the regex method with a `discard_1` group, see section 6.1) |
 | bowtie2 vs rRNA, tRNA, ncRNA | Remove reads matching a database (bowtie2), after Bowtie2 build, three times | local, very sensitive, `--reorder`, unaligned reads written with `--un-gz` |
 | STAR | STAR genome index (with the GTF), then STAR (Ribo-seq, transcriptome BAM) | 2.7.10b, end to end, 2 mismatches, one place, `--outSAMunmapped Within`, `--quantMode TranscriptomeSAM` |
 | samtools view, sort, index | samtools view (mapped only, forward strand), samtools sort, samtools index | `-F 4 -G 16`, MAPQ 20 |
 | umi_tools dedup | UMI-tools dedup | directional, by position, read length compared, seed 1 |
-| riboWaltz | riboWaltz report | lengths 28 to 34, automatic read end, 6 flanking bases, genome FASTA for codon usage |
+| riboWaltz | riboWaltz report | lengths 28 to 34, automatic read end, 6 flanking bases, genome FASTA for codon usage; every offset is checked against the CDS reading frame, and the template moves it by one nucleotide where that is clearly better ("Adjust offsets to the reading frame") |
 | MultiQC | MultiQC | every FastQC report and every log |
 
 The same pipeline is also a bundled template, **Ribo-seq with UMIs (riboWaltz)** (`riboseq-umi-ribowaltz`, 20 steps; its
@@ -201,3 +201,6 @@ RIBOSEQ_FULL=1 TOOLS_DOMAIN=riboseq TOOLS_CHAIN=full npm run test:tools   # 5 mi
 On the 200 000-read set riboWaltz cannot estimate offsets (13 reads cover an annotated start codon with 6 bases
 on each side); its report then says so in a warning at the top and leaves the sections that need offsets empty.
 The 5-million-read set gives a start-codon pile-up of 351 reads and offsets of 12 to 13 nt for the 30 to 34 nt reads.
+riboWaltz's start-codon offsets (12, 12, 13, 12, 13, 12, 13 nt for 28 to 34 nt) put 42.8 % of CDS P-sites in frame 0; the report's
+reading-frame check finds a neighbour one nucleotide away that is 9 to 25 points better for five lengths, and with "Adjust offsets to
+the reading frame" (on in the template) the offsets 13, 13, 12, 13, 13, 13, 13 nt give 53.9 %.

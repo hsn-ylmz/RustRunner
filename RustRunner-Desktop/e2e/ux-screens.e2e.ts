@@ -405,7 +405,7 @@ for (const scheme of SCHEMES) {
       await page.keyboard.press('Escape');
       await expect(page.getByTestId('template-dialog')).toHaveCount(0);
 
-      // The largest template: twenty steps in the setup step's pipeline drawing, six files and eight settings.
+      // The largest template: twenty steps in the setup step's pipeline drawing, six files and ten settings.
       await page.getByTestId('new-from-template').click();
       await page.getByTestId('template-card-riboseq-umi-ribowaltz').click();
       await expect(page.getByTestId('template-setup')).toBeVisible();

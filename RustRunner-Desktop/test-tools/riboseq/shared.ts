@@ -35,6 +35,9 @@ export const LINKS: Record<string, string> = {
 export const DPLEX_ADAPTER = 'AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC';
 export const UMI_LENGTH = 12;
 export const SPACER_LENGTH = 4;
+/** Shortest insert worth aligning; cutadapt runs before the UMI is removed, so its minimum length is this plus UMI and spacer. */
+export const MIN_INSERT = 20;
+export const MIN_TRIMMED = UMI_LENGTH + SPACER_LENGTH + MIN_INSERT;
 
 const R_TEST = path.join(__dirname, 'test_ribowaltz_report.R');
 const R_SCRIPT = path.join(REPO, 'RustRunner', 'runtime', 'app_resources', 'ribowaltz', 'ribowaltz_report.R');
@@ -140,7 +143,53 @@ export function tsv(text: string): Array<Record<string, string>> {
 // Checks on a finished run
 // -----------------------------------------------------------------------------
 
-export function verifyRiboseq(dir: string, full: boolean): Check[] {
+/** How a chain sets the riboWaltz step: `refine` is "Adjust offsets to the reading frame". */
+export interface RiboOptions {
+  refine: boolean;
+}
+
+/**
+ * Coding transcripts of a GTF in transcript coordinates (1-based, as riboWaltz counts):
+ * the first base of the start codon and the last base of the CDS, with the stop codon
+ * when the GTF lists it separately (Ensembl does).
+ */
+export function cdsInTranscripts(gtf: string): Map<string, { start: number; stop: number }> {
+  const exons = new Map<string, Array<[number, number]>>();
+  const coding = new Map<string, Array<[number, number]>>();
+  const strandOf = new Map<string, string>();
+  for (const line of gtf.split('\n')) {
+    if (line.startsWith('#')) continue;
+    const cols = line.split('\t');
+    if (cols.length < 9 || !['exon', 'CDS', 'stop_codon'].includes(cols[2])) continue;
+    const id = /transcript_id "([^"]+)"/.exec(cols[8])?.[1];
+    if (!id) continue;
+    strandOf.set(id, cols[6]);
+    const into = cols[2] === 'exon' ? exons : coding;
+    if (!into.has(id)) into.set(id, []);
+    into.get(id)!.push([Number(cols[3]), Number(cols[4])]);
+  }
+  const out = new Map<string, { start: number; stop: number }>();
+  for (const [id, parts] of coding) {
+    const minus = strandOf.get(id) === '-';
+    const ordered = [...(exons.get(id) ?? [])].sort((a, b) => (minus ? b[0] - a[0] : a[0] - b[0]));
+    const toTranscript = (g: number): number => {
+      let before = 0;
+      for (const [a, b] of ordered) {
+        if (g >= a && g <= b) return before + (minus ? b - g : g - a) + 1;
+        before += b - a + 1;
+      }
+      return NaN;
+    };
+    const lo = Math.min(...parts.map((p) => p[0]));
+    const hi = Math.max(...parts.map((p) => p[1]));
+    const start = toTranscript(minus ? hi : lo);
+    const stop = toTranscript(minus ? lo : hi);
+    if (Number.isFinite(start) && Number.isFinite(stop)) out.set(id, { start, stop });
+  }
+  return out;
+}
+
+export function verifyRiboseq(dir: string, full: boolean, ribo: RiboOptions = { refine: false }): Check[] {
   const checks: Check[] = [];
   const lines: string[] = [];
   const ok = (tool: string, cond: boolean, message: string) => {
@@ -161,7 +210,7 @@ export function verifyRiboseq(dir: string, full: boolean): Check[] {
   const trimmedReads = fastqReads(f('trimmed.fastq.gz'));
   const trimmed = readFastq(f('trimmed.fastq.gz'), LIMIT);
   ok('cutadapt', trimmedReads === written, 'the trimmed file holds every read cutadapt reported writing');
-  ok('cutadapt', trimmed.seqs.every((s) => s.length >= 20), 'no trimmed read is shorter than the minimum length of 20');
+  ok('cutadapt', trimmed.seqs.every((s) => s.length >= MIN_TRIMMED), `no trimmed read is shorter than ${MIN_TRIMMED} (UMI ${UMI_LENGTH} + spacer ${SPACER_LENGTH} + insert ${MIN_INSERT}), because the UMI is still on the read`);
   ok('cutadapt', !trimmed.seqs.some((s) => s.endsWith('AGATCGGAAGAGC')), 'no trimmed read still ends with the Illumina adapter');
 
   // --- umi_tools extract: 12 nt UMI into the name, 4 nt motif removed --------
@@ -181,6 +230,7 @@ export function verifyRiboseq(dir: string, full: boolean): Check[] {
       umi.quals[i] === trimmed.quals[i].slice(UMI_LENGTH + SPACER_LENGTH);
   }
   ok('umi-tools-extract', exact, 'for every read the UMI is the first 12 bases, the next 4 are gone and the insert and its qualities are what follows');
+  ok('umi-tools-extract', umi.seqs.every((s) => s.length >= MIN_INSERT), `no extracted read is shorter than ${MIN_INSERT} nt: nothing of a few bases goes on to the aligners`);
   ok('umi-tools-extract', /Reads output: \d+/.test(read(dir, 'umi_extract.log')), 'the extraction log reports the reads written');
 
   // --- bowtie2 removal: a read leaves a step only when it did not match ------
@@ -240,6 +290,10 @@ export function verifyRiboseq(dir: string, full: boolean): Check[] {
   ok('samtools-view', count(f('mapped.bam'), '-f', '4') === 0 && count(f('mapped.bam'), '-f', '16') === 0, 'the filtered BAM has no unmapped and no reverse-strand alignment');
   ok('samtools-sort', /SO:coordinate/.test(samtools('view', '-H', f('sorted.bam'))) && count(f('sorted.bam')) === expectedMapped, 'sort wrote a coordinate-sorted BAM with every alignment');
   ok('samtools-index', exists(dir, 'sorted.bam.bai'), 'the BAM index is next to the sorted BAM');
+  // A read STAR puts on two overlapping transcripts has MAPQ 3 there; MAPQ 20 drops it, so dedup sees every read once.
+  const mappedNames = samtools('view', f('mapped.bam')).split('\n').filter(Boolean).map((l) => l.split('\t')[0]);
+  const onTwo = count(txBam, '-F', '4', '-G', '16') - count(txBam, '-F', '4', '-G', '16', '-q', '20');
+  ok('samtools-view', new Set(mappedNames).size === mappedNames.length, `every read is in the filtered BAM once (${onTwo} forward alignments below MAPQ 20, reads on more than one transcript, were dropped)`);
 
   // --- UMI-tools dedup -------------------------------------------------------------
   const dedupCount = count(f('deduplicated.bam'));
@@ -296,6 +350,43 @@ export function verifyRiboseq(dir: string, full: boolean): Check[] {
     ok('ribowaltz-report', cds > 80 && cds > share(mine, "5' UTR") + share(mine, "3' UTR"), `most P-sites are in the CDS (${cds.toFixed(1)}%), the UTRs hold ${share(mine, "5' UTR").toFixed(1)}% and ${share(mine, "3' UTR").toFixed(1)}%`);
     ok('ribowaltz-report', enrichment('CDS') > 1.5 && enrichment("3' UTR") < 0.25 && enrichment("5' UTR") < 1, `P-sites are enriched in the CDS against the transcript space (CDS ${enrichment('CDS').toFixed(2)}x, 5' UTR ${enrichment("5' UTR").toFixed(2)}x, 3' UTR ${enrichment("3' UTR").toFixed(2)}x of what position-blind reads would give)`);
     ok('ribowaltz-report', tsv(read(dir, 'ribowaltz/codon_usage.tsv')).length === 64, 'codon usage lists all 64 codons');
+
+    // The reading-frame check of the offsets: one row per length, neighbours only, and the same numbers worked out here
+    // from the BAM and the GTF without riboWaltz.
+    const check = tsv(read(dir, 'ribowaltz/offset_frame_check.tsv'));
+    ok('ribowaltz-report', check.length === offsets.length && check.every((r) => Math.abs(Number(r.best_offset) - Number(r.offset_ribowaltz)) <= 1), `offset_frame_check.tsv has a row for each of the ${offsets.length} lengths and only ever moves an offset by one nucleotide`);
+    const cdsOf = cdsInTranscripts(fs.readFileSync(f('ribo_genes.gtf'), 'utf8'));
+    const reads5 = samtools('view', f('deduplicated.bam')).split('\n').filter(Boolean).map((l) => {
+      const c = l.split('\t');
+      return { tx: c[2], end5: Number(c[3]), len: c[9].length };
+    });
+    const frameShare = (len: number, offset: number) => {
+      let n = 0;
+      let inFrame = 0;
+      for (const r of reads5) {
+        const cds = cdsOf.get(r.tx);
+        if (r.len !== len || !cds) continue;
+        const p = r.end5 + offset;
+        if (p < cds.start || p > cds.stop) continue;
+        n += 1;
+        if ((p - cds.start) % 3 === 0) inFrame += 1;
+      }
+      return { n, pct: n ? (100 * inFrame) / n : NaN };
+    };
+    const agree = check.every((r) => {
+      const mine = frameShare(Number(r.length), Number(r.offset_ribowaltz));
+      return Math.abs(mine.pct - Number(r.in_frame_ribowaltz)) < 1 && Math.abs(mine.n - Number(r.cds_reads)) <= 0.01 * mine.n;
+    });
+    ok('ribowaltz-report', agree, `the in-frame shares of offset_frame_check.tsv match an independent count from the BAM and the GTF (${check.map((r) => `${r.length} nt: ${Number(r.in_frame_ribowaltz).toFixed(1)}% with ${r.offset_ribowaltz}, ${Number(r.in_frame_best).toFixed(1)}% with ${r.best_offset}`).join('; ')})`);
+    const flagged = check.filter((r) => r.better_offset === 'TRUE').map((r) => Number(r.length));
+    const adjusted = offsets.filter((r) => r.adjusted_to_frame === 'TRUE').map((r) => Number(r.length));
+    if (ribo.refine) {
+      ok('ribowaltz-report', JSON.stringify(adjusted) === JSON.stringify(flagged) && check.every((r) => r.better_offset !== 'TRUE' || offsetOf(Number(r.length)) === Number(r.best_offset)), `with the frame adjustment on, exactly the flagged lengths (${flagged.join(', ') || 'none'}) use the better offset`);
+      ok('ribowaltz-report', inFrame >= 50, `with the adjusted offsets at least half of the CDS P-sites are in frame 0 (${inFrame.toFixed(1)}%)`);
+    } else {
+      ok('ribowaltz-report', adjusted.length === 0, 'with the frame adjustment off, every offset is riboWaltz\'s own');
+      ok('ribowaltz-report', (flagged.length > 0) === /role="alert"[\s\S]*an offset one nucleotide away/.test(html), `the report warns at the top exactly when an offset one nucleotide away is clearly better (flagged: ${flagged.join(', ') || 'none'})`);
+    }
   } else if (degraded) {
     // Too few start-codon reads in 200 000 reads: the report must say so and must not make up offsets.
     ok('ribowaltz-report', offsets.length === 0, 'no offsets were invented when riboWaltz had too few reads over start codons');
@@ -305,6 +396,7 @@ export function verifyRiboseq(dir: string, full: boolean): Check[] {
     ok('ribowaltz-report', offsets.length >= 3 && images >= 7, `riboWaltz found offsets for ${offsets.length} read lengths and drew ${images} figures`);
   }
   ok('ribowaltz-report', exists(dir, 'ribowaltz/psite_offsets.tsv') && read(dir, 'ribowaltz/psite_offsets.tsv').startsWith('sample\tlength\t'), 'psite_offsets.tsv always exists, with its header');
+  ok('ribowaltz-report', exists(dir, 'ribowaltz/offset_frame_check.tsv') && read(dir, 'ribowaltz/offset_frame_check.tsv').startsWith('sample\tlength\tcds_reads\toffset_ribowaltz\t'), 'offset_frame_check.tsv always exists, with its header');
 
   // --- the R helpers of the report script ---------------------------------------------------
   const rscript = path.join(SANDBOX, 'home', '.rustrunner', 'micromamba', 'envs', 'ribowaltz-2.0', 'bin', 'Rscript');

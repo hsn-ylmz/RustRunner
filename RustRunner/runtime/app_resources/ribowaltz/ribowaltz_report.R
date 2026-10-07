@@ -19,12 +19,20 @@
 #
 #   Rscript --vanilla ribowaltz_report.R --gtf genes.gtf --out report_dir/ \
 #       [--fasta genome.fa] [--min-length 28] [--max-length 34] \
-#       [--extremity auto|5end|3end] [--flanking 6] [--threads 2] -- a.bam b.bam
+#       [--extremity auto|5end|3end] [--flanking 6] [--offset-refine none|frame] \
+#       [--threads 2] -- a.bam b.bam
 #
 # What it never does: it does not invent numbers. When riboWaltz cannot
 # estimate P-site offsets (too few reads over annotated start codons), the
 # report says so at the top, keeps the figures that do not need offsets, and
 # the offsets table is empty.
+#
+# Offsets and the reading frame: riboWaltz takes each length's offset from the
+# reads on annotated start codons, which can be a few hundred reads. The report
+# checks every offset against the reading frame of the P-sites inside the CDS
+# (offset_frame_check.tsv) and says so at the top when an offset one nucleotide
+# away puts clearly more of them in frame 0. With --offset-refine frame those
+# offsets are used instead (never more than one nucleotide from riboWaltz's).
 #
 # The functions below are plain and testable: the file can be `source()`d
 # without running anything (see test-tools/riboseq/test_ribowaltz_report.R).
@@ -38,7 +46,7 @@
 parse_args <- function(argv) {
   opt <- list(
     gtf = NULL, out = NULL, fasta = NULL, min_length = 28L, max_length = 34L,
-    extremity = "auto", flanking = 6L, threads = 1L, bams = character()
+    extremity = "auto", flanking = 6L, offset_refine = "none", threads = 1L, bams = character()
   )
   need_value <- function(i, flag) {
     if (i >= length(argv)) stop(sprintf("%s needs a value", flag), call. = FALSE)
@@ -70,6 +78,12 @@ parse_args <- function(argv) {
         v <- need_value(i, a)
         if (!v %in% c("auto", "5end", "3end")) stop("--extremity must be auto, 5end or 3end", call. = FALSE)
         opt$extremity <- v
+        i <- i + 1L
+      },
+      "--offset-refine" = {
+        v <- need_value(i, a)
+        if (!v %in% c("none", "frame")) stop("--offset-refine must be none or frame", call. = FALSE)
+        opt$offset_refine <- v
         i <- i + 1L
       },
       {
@@ -210,6 +224,72 @@ dominant_frame_share <- function(frame_counts) {
   100 * max(cds$count) / sum(cds$count)
 }
 
+#' Reads (CDS P-sites) and the percentage of them in frame 0 when the P-site is
+#' `offset` nucleotides from the 5' end of each read. A P-site is in the CDS
+#' from the first base of the start codon to the last base of the stop codon,
+#' as riboWaltz counts it; frame 0 is the frame of the start codon.
+in_frame_share <- function(end5, cds_start, cds_stop, offset) {
+  psite <- end5 + offset
+  inside <- !is.na(cds_start) & !is.na(cds_stop) & cds_start > 0 & psite >= cds_start & psite <= cds_stop
+  n <- sum(inside)
+  if (n == 0L) return(c(reads = 0, in_frame = NA_real_))
+  c(reads = n, in_frame = 100 * sum((psite[inside] - cds_start[inside]) %% 3L == 0L) / n)
+}
+
+#' The reading-frame check of the offsets of one sample.
+#'
+#' riboWaltz fixes the offset of each length from the reads on start codons;
+#' that fixes the codon of the P-site. Inside the CDS an offset that is one
+#' nucleotide off moves most P-sites out of frame 0, so for each length the
+#' offsets one less and one more are compared with the one riboWaltz chose
+#' (never two or more: that would be another codon, which the frame cannot tell).
+#' A length is flagged when one of the neighbours puts at least `min_gain`
+#' percentage points more of the CDS P-sites in frame 0 and the length has at
+#' least `min_reads` reads in the CDS.
+#'
+#' `reads`: columns length, end5, cds_start, cds_stop (riboWaltz's reads list).
+#' `offsets`: columns length, corrected_offset_from_5 (riboWaltz's offsets).
+#' Returns one row per length of `offsets`.
+offset_frame_check <- function(reads, offsets, min_reads = 100L, min_gain = 5) {
+  offsets <- as.data.frame(offsets)
+  rows <- lapply(seq_len(nrow(offsets)), function(i) {
+    len <- offsets$length[i]
+    used <- as.integer(offsets$corrected_offset_from_5[i])
+    of_len <- reads[reads$length == len, , drop = FALSE]
+    candidates <- c(used - 1L, used, used + 1L)
+    shares <- vapply(candidates, function(o) in_frame_share(of_len$end5, of_len$cds_start, of_len$cds_stop, o), numeric(2))
+    rw_share <- shares["in_frame", 2L]
+    cds_reads <- as.integer(shares["reads", 2L])
+    best <- if (all(is.na(shares["in_frame", ]))) 2L else which.max(shares["in_frame", ])
+    best_share <- shares["in_frame", best]
+    flagged <- cds_reads >= min_reads && !is.na(rw_share) && best != 2L && best_share - rw_share >= min_gain
+    data.frame(length = as.integer(len), cds_reads = cds_reads, offset_ribowaltz = used,
+               in_frame_ribowaltz = rw_share, best_offset = candidates[best],
+               in_frame_best = best_share, better_offset = flagged, stringsAsFactors = FALSE)
+  })
+  if (length(rows) == 0L) {
+    return(data.frame(length = integer(), cds_reads = integer(), offset_ribowaltz = integer(), in_frame_ribowaltz = numeric(),
+                      best_offset = integer(), in_frame_best = numeric(), better_offset = logical()))
+  }
+  do.call(rbind, rows)
+}
+
+#' riboWaltz's offsets with the flagged lengths moved to the better offset of
+#' `check` (offset_frame_check). Both corrected columns are set, because
+#' riboWaltz places the P-site from the 3' end column: offset from the 3' end =
+#' length - 1 - offset from the 5' end. Adds `adjusted_to_frame`.
+refine_offsets <- function(offsets, check) {
+  offsets <- as.data.frame(offsets)
+  offsets$adjusted_to_frame <- FALSE
+  for (i in which(check$better_offset)) {
+    at <- which(offsets$length == check$length[i])
+    offsets$corrected_offset_from_5[at] <- check$best_offset[i]
+    offsets$corrected_offset_from_3[at] <- offsets$length[at] - 1L - check$best_offset[i]
+    offsets$adjusted_to_frame[at] <- TRUE
+  }
+  offsets
+}
+
 # ---------------------------------------------------------------------------
 # The page
 # ---------------------------------------------------------------------------
@@ -309,10 +389,14 @@ write_tsv <- function(df, path) {
 }
 
 OFFSET_COLUMNS <- c("sample", "length", "total_percentage", "start_percentage", "around_start",
-                    "offset_from_5", "offset_from_3", "corrected_offset_from_5", "corrected_offset_from_3")
+                    "offset_from_5", "offset_from_3", "corrected_offset_from_5", "corrected_offset_from_3",
+                    "adjusted_to_frame")
+FRAME_CHECK_COLUMNS <- c("sample", "length", "cds_reads", "offset_ribowaltz", "in_frame_ribowaltz", "best_offset",
+                         "in_frame_best", "better_offset")
 
 run_report <- function(opt) {
-  .libPaths(.Library) # this R's own packages only, whatever the user has installed
+  # This R's own packages only, whatever the user has installed (R_LIBS_SITE included).
+  .libPaths(.Library, include.site = FALSE)
   suppressPackageStartupMessages({
     library(data.table)
     library(ggplot2)
@@ -413,7 +497,9 @@ run_report <- function(opt) {
   # --- offsets --------------------------------------------------------------
   offset_table <- NULL
   psite_list <- NULL
+  frame_check <- NULL
   offset_note <- character()
+  frame_note <- character()
   if (length(analysed) > 0L) {
     # One sample at a time: a sample with too few start-codon reads must not
     # take the others down with it.
@@ -440,6 +526,33 @@ run_report <- function(opt) {
       }
     }
     if (length(offset_parts) > 0L) {
+      # Check each offset against the reading frame inside the CDS, and move it
+      # by one nucleotide when asked and when that is clearly better.
+      check_parts <- list()
+      for (s in names(offset_parts)) {
+        check <- offset_frame_check(filtered[[s]], offset_parts[[s]])
+        flagged <- check$length[check$better_offset]
+        if (opt$offset_refine == "frame") {
+          offset_parts[[s]] <- as.data.table(refine_offsets(offset_parts[[s]], check))
+          if (length(flagged) > 0L) {
+            frame_note <- c(frame_note, sprintf("%s: the offsets of %s nt were moved by one nucleotide to the reading frame (\"Adjust offsets to the reading frame\" is on).",
+                                                s, paste(flagged, collapse = ", ")))
+          }
+        } else {
+          offset_parts[[s]] <- as.data.table(refine_offsets(offset_parts[[s]], check[0L, ]))
+          if (length(flagged) > 0L) {
+            rows <- check[check$better_offset, ]
+            warn(sprintf("Sample %s: for %s nt, an offset one nucleotide away from riboWaltz's puts clearly more CDS P-sites in frame 0 (%s). riboWaltz took the offsets from %d reads on start codons. Look at the table \"Offsets against the reading frame\" and the read-end figure; to use the better offsets, turn on \"Adjust offsets to the reading frame\" in the riboWaltz step and run it again.",
+                         s, paste(flagged, collapse = ", "),
+                         paste(sprintf("%d nt: %d gives %.1f %%, %d gives %.1f %%", rows$length, rows$offset_ribowaltz, rows$in_frame_ribowaltz,
+                                       rows$best_offset, rows$in_frame_best), collapse = "; "),
+                         start_codon_reads(filtered[[s]], opt$flanking)))
+          }
+        }
+        check$sample <- rep(s, nrow(check))
+        check_parts[[s]] <- check
+      }
+      frame_check <- rbindlist(check_parts, use.names = TRUE)
       offset_table <- rbindlist(offset_parts, use.names = TRUE)
       psite_list <- quiet(psite_info(filtered[names(offset_parts)], offset_table))
     }
@@ -447,18 +560,30 @@ run_report <- function(opt) {
   if (is.null(offset_table)) {
     write_tsv(setNames(as.data.frame(matrix(character(), 0, length(OFFSET_COLUMNS))), OFFSET_COLUMNS),
               file.path(opt$out, "psite_offsets.tsv"))
+    write_tsv(setNames(as.data.frame(matrix(character(), 0, length(FRAME_CHECK_COLUMNS))), FRAME_CHECK_COLUMNS),
+              file.path(opt$out, "offset_frame_check.tsv"))
     add_section("offsets", "P-site offsets", "", "<p class=\"note\">No offsets could be estimated; see the note at the top.</p>")
   } else {
     write_tsv(offset_table[, intersect(OFFSET_COLUMNS, names(offset_table)), with = FALSE], file.path(opt$out, "psite_offsets.tsv"))
+    write_tsv(frame_check[, FRAME_CHECK_COLUMNS, with = FALSE], file.path(opt$out, "offset_frame_check.tsv"))
+    shown_check <- as.data.frame(frame_check[order(sample, length)])[, FRAME_CHECK_COLUMNS]
     shown <- as.data.frame(offset_table[order(sample, length)])[, c("sample", "length", "total_percentage", "start_percentage",
-                                                                   "around_start", "corrected_offset_from_5", "corrected_offset_from_3")]
+                                                                   "around_start", "corrected_offset_from_5", "corrected_offset_from_3",
+                                                                   "adjusted_to_frame")]
     shown$around_start <- ifelse(shown$around_start %in% c("T", "TRUE", TRUE), "yes", "no")
     add_section("offsets", "P-site offsets",
       "The P-site offset is the distance from the end of a read to the first base of the ribosome's P-site codon. It is worked out for each read length from the reads that sit on annotated start codons, where the ribosome pauses on initiation.",
       paste0(if (length(offset_note)) paste0("<p>riboWaltz: <code>", html_escape(paste(offset_note, collapse = "; ")), "</code></p>") else "",
              html_table(shown, c("Sample", "Read length (nt)", "% of reads", "% of start-codon reads", "Seen at start codons",
-                                 "P-site offset from the 5' end (nt)", "P-site offset from the 3' end (nt)"), digits = 2L),
-             "<p class=\"note\">Lengths marked \"no\" had no reads on a start codon; their offset was taken from the neighbouring lengths (riboWaltz's correction step). The uncorrected values are in psite_offsets.tsv.</p>"))
+                                 "P-site offset from the 5' end (nt)", "P-site offset from the 3' end (nt)", "Moved to the reading frame"), digits = 2L),
+             "<p class=\"note\">Lengths marked \"no\" had no reads on a start codon; their offset was taken from the neighbouring lengths (riboWaltz's correction step). The uncorrected values are in psite_offsets.tsv.</p>",
+             "<h3>Offsets against the reading frame</h3>",
+             "<p>The start codon fixes which codon the P-site is in; the reading frame of the P-sites inside the CDS fixes the nucleotide. For each length, the share of its CDS P-sites in frame 0 with riboWaltz's offset and with the best of the offsets one nucleotide shorter or longer. \"Better offset\" is yes when that one gives at least 5 points more, with 100 or more CDS reads.</p>",
+             if (length(frame_note)) paste0("<p>", html_escape(frame_note), "</p>", collapse = "") else "",
+             html_table(shown_check, c("Sample", "Read length (nt)", "CDS reads", "riboWaltz's offset (5' end)", "In frame 0 with it (%)",
+                                       "Best offset within 1 nt", "In frame 0 with that (%)", "Better offset"), digits = 1L),
+             sprintf("<p class=\"note\">Offsets used: %s. The table is offset_frame_check.tsv.</p>",
+                     if (opt$offset_refine == "frame") "riboWaltz's, moved to the reading frame where marked" else "riboWaltz's, unchanged")))
   }
 
   # --- read ends around start and stop (needs no offsets) --------------------
@@ -553,7 +678,8 @@ run_report <- function(opt) {
     sprintf("Created %s", format(Sys.time(), "%Y-%m-%d %H:%M")),
     sprintf("riboWaltz %s, %s", as.character(utils::packageVersion("riboWaltz")), R.version.string),
     sprintf("Annotation: %s (%d transcripts with a CDS)", basename(opt$gtf), n_coding),
-    sprintf("Read lengths analysed: %s nt. Bases around the start codon: %d. Offset read end: %s.", lengths_text, opt$flanking, opt$extremity)
+    sprintf("Read lengths analysed: %s nt. Bases around the start codon: %d. Offset read end: %s. Offsets adjusted to the reading frame: %s.",
+            lengths_text, opt$flanking, opt$extremity, if (opt$offset_refine == "frame") "yes" else "no")
   )
   page <- build_page("riboWaltz report", meta_lines, warnings_out, summary_html, sections)
   report_path <- file.path(opt$out, "ribowaltz_report.html")

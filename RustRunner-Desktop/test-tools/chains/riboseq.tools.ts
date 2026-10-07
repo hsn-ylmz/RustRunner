@@ -25,7 +25,7 @@
  *    give (12 to 13 nt for the dominant lengths), CDS enrichment and 3-nt periodicity.
  */
 import { defineDomain, type Chain } from '../harness';
-import { DPLEX_ADAPTER, SPACER_LENGTH, UMI_LENGTH, linkRiboData, verifyRiboseq } from '../riboseq/shared';
+import { DPLEX_ADAPTER, MIN_TRIMMED, SPACER_LENGTH, UMI_LENGTH, linkRiboData, verifyRiboseq } from '../riboseq/shared';
 
 // -----------------------------------------------------------------------------
 // The chain
@@ -42,7 +42,7 @@ function pipeline(name: string, reads: string, full: boolean): Chain {
       {
         key: 'cut',
         catalog: 'cutadapt',
-        params: { adapter: DPLEX_ADAPTER, error_rate: 0.1, min_overlap: 10, min_length: 20, quality_cutoff: 20 },
+        params: { adapter: DPLEX_ADAPTER, error_rate: 0.1, min_overlap: 10, min_length: MIN_TRIMMED, quality_cutoff: 20 },
         files: { reads, trimmed: 'trimmed.fastq.gz', report: 'cutadapt.txt' },
       },
       { key: 'fqc_trim', catalog: 'fastqc', files: { report_dir: 'qc_trimmed/' } },
@@ -80,7 +80,8 @@ function pipeline(name: string, reads: string, full: boolean): Chain {
       {
         key: 'ribo',
         catalog: 'ribowaltz-report',
-        params: { min_length: 28, max_length: 34 },
+        // The catalog default: riboWaltz's offsets as they are (the template chain runs the frame adjustment).
+        params: { min_length: 28, max_length: 34, offset_refine: 'none' },
         files: { annotation: 'ribo_genes.gtf', genome: 'ribo_genome.fa', report_dir: 'ribowaltz/' },
       },
       { key: 'mqc', catalog: 'multiqc', files: { report_dir: 'multiqc/' } },
@@ -127,7 +128,7 @@ function pipeline(name: string, reads: string, full: boolean): Chain {
       'star>mqc': [{ slot: 'reports', output: 'log' }],
       'dedup>mqc': [{ slot: 'reports', output: 'log' }],
     },
-    verify: (dir) => verifyRiboseq(dir, full),
+    verify: (dir) => verifyRiboseq(dir, full, { refine: false }),
   };
 }
 
