@@ -370,6 +370,18 @@ describe.skipIf(process.platform === 'win32')('the shell logic of the commands',
   };
   /** The value after a flag. */
   const after = (list: string[], flag: string) => list[list.indexOf(flag) + 1];
+  /**
+   * Runs `use` with a fresh file to stand in for an output slot. A command that
+   * redirects to /dev/stdout fails on CI runners whose stdout is a socket.
+   */
+  const withOutputFile = <T,>(use: (file: string) => T): T => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lr-out-'));
+    try {
+      return use(path.join(dir, 'out.txt'));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
 
   it('gives Filtlong a limit only when it is above zero, and short reads and a base target only when given', () => {
     const slots = { reads: 'r.fastq', short1: '', short2: '', filtered: '/dev/null' };
@@ -622,16 +634,21 @@ describe.skipIf(process.platform === 'win32')('the shell logic of the commands',
     expect(plain).not.toContain('--include');
     const cols = args('pod5-view', 'pod5', { pods: 'a.pod5', table: 'reads.tsv' }, { columns: 'read_id,channel' });
     expect(after(cols, '--include')).toBe('read_id,channel');
-    const result = run('pod5-inspect', { pod: 'a.pod5', report: '/dev/stdout' }, {}, echoTool('pod5'));
-    expect(result.stdout.trim().split('\n')).toEqual(['inspect', 'summary', 'a.pod5']);
+    const inspected = withOutputFile((report) => {
+      const result = run('pod5-inspect', { pod: 'a.pod5', report }, {}, echoTool('pod5'));
+      expect(result.status, result.stderr).toBe(0);
+      return fs.readFileSync(report, 'utf8');
+    });
+    expect(inspected.trim().split('\n')).toEqual(['inspect', 'summary', 'a.pod5']);
   });
 
   it('keeps the Dorado models in the home folder and passes the form on', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lr-'));
     try {
-      const result = run('dorado-basecaller', { pod: 'run.pod5', calls: '/dev/stdout' }, { model: 'fast', min_qscore: 0 }, echoTool('dorado'), { HOME: home });
+      const calls = path.join(home, 'calls.txt');
+      const result = run('dorado-basecaller', { pod: 'run.pod5', calls }, { model: 'fast', min_qscore: 0 }, echoTool('dorado'), { HOME: home });
       expect(result.status, result.stderr).toBe(0);
-      const list = result.stdout.trim().split('\n');
+      const list = fs.readFileSync(calls, 'utf8').trim().split('\n');
       expect(list.slice(0, 3)).toEqual(['basecaller', 'fast', 'run.pod5']);
       expect(after(list, '--models-directory')).toBe(path.join(home, '.rustrunner', 'dorado-models'));
       expect(after(list, '--min-qscore')).toBe('0');
