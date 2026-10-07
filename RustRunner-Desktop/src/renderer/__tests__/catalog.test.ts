@@ -283,9 +283,11 @@ describe('renderCommand', () => {
     const t = tool('cutadapt');
     expect(renderCommand(t, defaultParams(t), 4)).toContain('-a AGATCGGAAGAGC ');
     expect(renderCommand(t, { adapter: '  ' }, 4)).toContain('-a {adapter} ');
+    // A read group is always written (GATK and Picard need one); an emptied name leaves the gap visible.
     expect(renderCommand(tool('bwa-mem'), defaultParams(tool('bwa-mem')), 4)).toBe(
-      'bwa mem -t 4 -M -k 19 {ref} {reads1} {reads2} > {sam}'
+      'sample=sample; bwa mem -t 4 -M -k 19 -R "@RG\\tID:$sample\\tSM:$sample" {ref} {reads1} {reads2} > {sam}'
     );
+    expect(renderCommand(tool('bwa-mem'), { sample_name: '' }, 4)).toContain('sample={sample_name};');
   });
 
   it('turns an unusable thread count into 1 and clamps numbers to their bounds', () => {

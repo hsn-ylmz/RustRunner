@@ -1,0 +1,267 @@
+{
+  "formatVersion": 1,
+  "id": "rnaseq-hisat2-counts",
+  "name": "RNA-seq alignment and gene counts",
+  "description": "Align RNA-seq reads to a genome with HISAT2 and count the reads per gene, ready for differential expression.",
+  "details": "Use this when you have a reference genome and a gene annotation and want a table of read counts per gene, for example as input to DESeq2 or edgeR. The pipeline trims the reads with fastp, builds a HISAT2 index from your genome, aligns the reads (HISAT2 handles reads that span introns), sorts and indexes the alignments with samtools, counts reads per gene with featureCounts, and gathers everything into a MultiQC report. HISAT2 was chosen because it runs everywhere with modest memory. If you prefer STAR, build its index with the STAR genome generate step and swap the aligner by hand; the rest of the pipeline stays the same. Check the strandedness option of the featureCounts step against your library kit (the default counts unstranded). The genome index is built again on every run, which takes a few minutes for a large genome; this template suits small to medium genomes best. One single-end sample at a time.",
+  "domain": "rna",
+  "difficulty": "intermediate",
+  "minCatalogVersion": "2026.15.0",
+  "inputs": [
+    {
+      "id": "reads",
+      "label": "Sequencing reads",
+      "hint": "One FASTQ file of single-end RNA-seq reads, plain or compressed (.fastq or .fastq.gz).",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample.fastq.gz",
+      "targets": [
+        {
+          "step": "fastp",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "genome",
+      "label": "Genome sequence",
+      "hint": "The genome of your organism as a FASTA file.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "genome.fa",
+      "targets": [
+        {
+          "step": "hisat2_build",
+          "slot": "genome"
+        }
+      ]
+    },
+    {
+      "id": "annotation",
+      "label": "Gene annotation",
+      "hint": "The matching gene annotation in GTF format (exons with a gene_id).",
+      "types": [
+        "gtf"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "genes.gtf",
+      "targets": [
+        {
+          "step": "featurecounts",
+          "slot": "annotation"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "fastp",
+      "tool": "fastp",
+      "label": "Trim reads (fastp)",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "hisat2_build",
+      "tool": "hisat2-build",
+      "label": "HISAT2 index",
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "key": "hisat2",
+      "tool": "hisat2",
+      "label": "HISAT2 alignment",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort",
+      "tool": "samtools-sort",
+      "label": "Sort alignments",
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "bam_index",
+      "tool": "samtools-index",
+      "label": "Index alignments",
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "key": "featurecounts",
+      "tool": "featurecounts",
+      "label": "Count reads per gene",
+      "position": {
+        "x": 520,
+        "y": 160
+      }
+    },
+    {
+      "key": "multiqc",
+      "tool": "multiqc",
+      "label": "MultiQC report",
+      "files": {
+        "report_dir": "multiqc/"
+      },
+      "position": {
+        "x": 780,
+        "y": 160
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "fastp",
+      "to": "hisat2",
+      "bind": [
+        {
+          "slot": "reads1",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "hisat2_build",
+      "to": "hisat2",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index_dir"
+        }
+      ]
+    },
+    {
+      "from": "hisat2",
+      "to": "sort",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "bam_index",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "featurecounts",
+      "bind": [
+        {
+          "slot": "bams",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "fastp",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "json_report"
+        }
+      ]
+    },
+    {
+      "from": "hisat2",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "summary"
+        }
+      ]
+    },
+    {
+      "from": "featurecounts",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "summary"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Gene counts",
+      "step": "featurecounts",
+      "slot": "counts",
+      "hint": "One row per gene with the number of reads counted."
+    },
+    {
+      "label": "Sorted alignments",
+      "step": "sort",
+      "slot": "bam",
+      "hint": "The aligned reads (BAM), open with a genome browser."
+    },
+    {
+      "label": "Alignment index",
+      "step": "bam_index",
+      "slot": "bai",
+      "hint": "The .bai file next to the BAM."
+    },
+    {
+      "label": "Alignment summary",
+      "step": "hisat2",
+      "slot": "summary",
+      "hint": "How many reads aligned."
+    },
+    {
+      "label": "Combined report",
+      "step": "multiqc",
+      "slot": "report",
+      "hint": "Open multiqc_report.html in a browser."
+    }
+  ],
+  "references": [
+    {
+      "label": "Kim D, Paggi JM, Park C, Bennett C, Salzberg SL. Graph-based genome alignment and genotyping with HISAT2 and HISAT-genotype. Nature Biotechnology 2019;37:907-915.",
+      "url": "https://doi.org/10.1038/s41587-019-0201-4"
+    },
+    {
+      "label": "Liao Y, Smyth GK, Shi W. featureCounts: an efficient general purpose program for assigning sequence reads to genomic features. Bioinformatics 2014;30:923-930.",
+      "url": "https://doi.org/10.1093/bioinformatics/btt656"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    },
+    {
+      "label": "Chen S, Zhou Y, Chen Y, Gu J. fastp: an ultra-fast all-in-one FASTQ preprocessor. Bioinformatics 2018;34:i884-i890.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty560"
+    },
+    {
+      "label": "Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.",
+      "url": "https://doi.org/10.1093/bioinformatics/btw354"
+    }
+  ]
+}

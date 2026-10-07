@@ -62,14 +62,49 @@ test('search and the topic filter narrow the list', async ({ page }) => {
   await openGallery(page);
   await page.getByTestId('template-search').fill('multiqc fastp');
   await expect(page.getByTestId('template-card-basic-read-qc')).toBeVisible();
-  await page.getByTestId('template-search').fill('salmon');
+  await page.getByTestId('template-search').fill('kraken');
   await expect(page.getByTestId('template-card-basic-read-qc')).toHaveCount(0);
   await expect(page.getByTestId('template-empty')).toContainText('No ready-made template matches');
+  await page.getByTestId('template-search').fill('salmon');
+  await expect(page.getByTestId('template-card-rnaseq-salmon')).toBeVisible();
+  await expect(page.getByTestId('template-card-basic-read-qc')).toHaveCount(0);
   await page.getByTestId('template-search').fill('');
   await page.getByTestId('template-domain').selectOption('qc');
   await expect(page.getByTestId('template-card-basic-read-qc')).toBeVisible();
   // The select offers only topics that have a template.
-  await expect(page.getByTestId('template-domain').locator('option')).toHaveText(['All topics', 'Read quality']);
+  await expect(page.getByTestId('template-domain').locator('option')).toHaveText(['All topics', 'Read quality', 'DNA sequencing', 'RNA sequencing']);
+});
+
+test('the RNA-seq and variant calling templates are listed, and the paired-end one asks for both read files', async ({
+  page,
+}) => {
+  await openGallery(page);
+  for (const id of ['rnaseq-salmon', 'rnaseq-hisat2-counts', 'variants-bcftools', 'variants-bcftools-paired', 'variants-gatk']) {
+    await expect(page.getByTestId(`template-card-${id}`)).toBeVisible();
+  }
+  await page.getByTestId('template-domain').selectOption('dna');
+  await expect(page.getByTestId('template-card-variants-gatk')).toBeVisible();
+  await expect(page.getByTestId('template-card-rnaseq-salmon')).toHaveCount(0);
+
+  await page.getByTestId('template-card-variants-bcftools-paired').click();
+  await expect(page.getByTestId('template-setup')).toBeVisible();
+  await page.getByTestId('template-input-field-reads1').fill('/data/s_R1.fastq.gz');
+  await page.getByTestId('template-input-field-reads2').fill('/data/s_R2.fastq.gz');
+  await page.getByTestId('template-input-field-reference').fill('/data/ref.fa');
+  await page.getByTestId('template-create').click();
+  await expect(page.getByTestId('template-dialog')).toHaveCount(0);
+  await expect(nodes(page)).toHaveCount(10);
+  await expect(nodes(page).filter({ hasText: 'Align read pairs (BWA-MEM)' })).toHaveCount(1);
+});
+
+test('the quantification templates make their steps with the files in place', async ({ page }) => {
+  await openGallery(page);
+  await page.getByTestId('template-card-rnaseq-salmon').click();
+  await page.getByTestId('template-input-field-reads').fill('/data/s.fastq.gz');
+  await page.getByTestId('template-input-field-transcripts').fill('/data/tx.fa');
+  await page.getByTestId('template-create').click();
+  await expect(nodes(page)).toHaveCount(4);
+  await expect(page.getByTestId('problems-toggle')).toHaveCount(0);
 });
 
 test('gallery, setup, then a canvas of bound steps', async ({ page, consoleErrors }) => {

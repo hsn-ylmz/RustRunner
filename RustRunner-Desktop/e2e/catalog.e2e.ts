@@ -230,7 +230,7 @@ test('a tool with a reference and optional reads shows each file as a field and 
   // Nothing is missing any more, although the second reads file is empty.
   await expect(page.getByTestId('command-preview-missing')).toHaveCount(0);
   await expect(page.getByTestId('command-preview')).toContainText(
-    'bwa mem -t 4 -M -k 19 genome/hg38.fa reads_R1.fastq.gz  > aligned.sam'
+    'sample=sample; bwa mem -t 4 -M -k 19 -R "@RG\\tID:$sample\\tSM:$sample" genome/hg38.fa reads_R1.fastq.gz  > aligned.sam'
   );
   await expect(page.getByTestId('run')).not.toHaveAttribute('aria-disabled', 'true');
 });
@@ -496,7 +496,7 @@ test('opening a workflow saved with the version 1 catalog updates its steps', as
   await expect(page.getByTestId('prop-input')).toHaveCount(0);
   await openSection(page, 'advanced');
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'bwa mem -t 4 -M -k 19 {ref} {reads1} {reads2} > {sam}'
+    'sample=sample; bwa mem -t 4 -M -k 19 -R "@RG\\tID:$sample\\tSM:$sample" {ref} {reads1} {reads2} > {sam}'
   );
   // The unsaved marker shows: saving keeps the update.
   await expect(page.locator('.dirty-marker')).toBeVisible();

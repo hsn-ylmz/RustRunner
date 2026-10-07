@@ -1,0 +1,304 @@
+{
+  "formatVersion": 1,
+  "id": "variants-bcftools",
+  "name": "Germline variant calling with bcftools",
+  "description": "Find single-base differences between one sample and a reference genome, from trimming to a filtered, summarised VCF.",
+  "details": "Use this to list the variants (SNPs and small insertions or deletions) of one sample compared with a reference genome, for example a bacterial isolate, a yeast strain or a small panel. The pipeline trims the reads with fastp, indexes your reference and aligns the reads with BWA-MEM, sorts the alignments, marks PCR duplicates with samtools, indexes the result, calls variants with bcftools, keeps only calls with enough quality and depth, summarises them with bcftools stats, and gathers the results into a MultiQC report. The filter keeps calls with quality 20 or more and depth 10 or more; change these in the filter step to match your coverage. bcftools calls diploid genotypes by default; for large human genomes use the GATK template, which is built for them. One single-end sample at a time.",
+  "domain": "dna",
+  "difficulty": "intermediate",
+  "minCatalogVersion": "2026.15.1",
+  "inputs": [
+    {
+      "id": "reads",
+      "label": "Sequencing reads",
+      "hint": "One FASTQ file of single-end DNA reads, plain or compressed. For paired reads use the paired-end template.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample.fastq.gz",
+      "targets": [
+        {
+          "step": "fastp",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "label": "Reference genome",
+      "hint": "The reference genome as a FASTA file. The reads are compared against it.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "reference.fa",
+      "targets": [
+        {
+          "step": "bwa_index",
+          "slot": "ref"
+        },
+        {
+          "step": "call",
+          "slot": "ref"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "fastp",
+      "tool": "fastp",
+      "label": "Trim reads (fastp)",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "bwa_index",
+      "tool": "bwa-index",
+      "label": "BWA index",
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "key": "bwa_mem",
+      "tool": "bwa-mem",
+      "label": "Align reads (BWA-MEM)",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort",
+      "tool": "samtools-sort",
+      "label": "Sort alignments",
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "markdup",
+      "tool": "samtools-markdup",
+      "label": "Mark duplicates",
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "key": "bam_index",
+      "tool": "samtools-index",
+      "label": "Index alignments",
+      "files": {
+        "bai": "markdup.bam.bai"
+      },
+      "position": {
+        "x": 1040,
+        "y": 0
+      }
+    },
+    {
+      "key": "call",
+      "tool": "bcftools-call",
+      "label": "Call variants",
+      "position": {
+        "x": 0,
+        "y": 320
+      }
+    },
+    {
+      "key": "filter",
+      "tool": "bcftools-filter",
+      "label": "Filter variants",
+      "position": {
+        "x": 260,
+        "y": 320
+      }
+    },
+    {
+      "key": "stats",
+      "tool": "bcftools-stats",
+      "label": "Variant statistics",
+      "position": {
+        "x": 520,
+        "y": 320
+      }
+    },
+    {
+      "key": "multiqc",
+      "tool": "multiqc",
+      "label": "MultiQC report",
+      "files": {
+        "report_dir": "multiqc/"
+      },
+      "position": {
+        "x": 780,
+        "y": 320
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "fastp",
+      "to": "bwa_mem",
+      "bind": [
+        {
+          "slot": "reads1",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "bwa_index",
+      "to": "bwa_mem",
+      "bind": [
+        {
+          "slot": "ref",
+          "output": "indexed_ref"
+        }
+      ]
+    },
+    {
+      "from": "bwa_mem",
+      "to": "sort",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "markdup",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "markdup",
+      "to": "bam_index",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "marked"
+        }
+      ]
+    },
+    {
+      "from": "markdup",
+      "to": "call",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "marked"
+        }
+      ]
+    },
+    {
+      "from": "bam_index",
+      "to": "call"
+    },
+    {
+      "from": "call",
+      "to": "filter",
+      "bind": [
+        {
+          "slot": "vcf",
+          "output": "vcf"
+        }
+      ]
+    },
+    {
+      "from": "filter",
+      "to": "stats",
+      "bind": [
+        {
+          "slot": "vcf",
+          "output": "filtered"
+        }
+      ]
+    },
+    {
+      "from": "fastp",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "json_report"
+        }
+      ]
+    },
+    {
+      "from": "stats",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "stats"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Filtered variants",
+      "step": "filter",
+      "slot": "filtered",
+      "hint": "VCF with the calls that passed the quality and depth filter."
+    },
+    {
+      "label": "All variant calls",
+      "step": "call",
+      "slot": "vcf",
+      "hint": "VCF before filtering."
+    },
+    {
+      "label": "Alignments",
+      "step": "markdup",
+      "slot": "marked",
+      "hint": "Sorted BAM with duplicates marked."
+    },
+    {
+      "label": "Variant statistics",
+      "step": "stats",
+      "slot": "stats",
+      "hint": "Counts of SNPs, indels and base changes."
+    },
+    {
+      "label": "Combined report",
+      "step": "multiqc",
+      "slot": "report",
+      "hint": "Open multiqc_report.html in a browser."
+    }
+  ],
+  "references": [
+    {
+      "label": "Li H. Aligning sequence reads, clone sequences and assembly contigs with BWA-MEM. arXiv 2013;1303.3997.",
+      "url": "https://doi.org/10.48550/arXiv.1303.3997"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    },
+    {
+      "label": "Chen S, Zhou Y, Chen Y, Gu J. fastp: an ultra-fast all-in-one FASTQ preprocessor. Bioinformatics 2018;34:i884-i890.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty560"
+    },
+    {
+      "label": "Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.",
+      "url": "https://doi.org/10.1093/bioinformatics/btw354"
+    }
+  ]
+}

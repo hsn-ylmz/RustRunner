@@ -8,11 +8,21 @@
  */
 
 import basicReadQc from './basic-read-qc.json';
+import rnaseqSalmon from './rnaseq-salmon.json';
+import rnaseqHisat2Counts from './rnaseq-hisat2-counts.json';
+import variantsBcftools from './variants-bcftools.json';
+import variantsBcftoolsPaired from './variants-bcftools-paired.json';
+import variantsGatk from './variants-gatk.json';
 import { parseTemplate, type WorkflowTemplate } from './schema';
 
 /** Every bundled template file, as imported. Order is the order the gallery shows. */
 export const BUNDLED_SOURCES: Array<{ file: string; raw: unknown }> = [
   { file: 'basic-read-qc.json', raw: basicReadQc },
+  { file: 'rnaseq-salmon.json', raw: rnaseqSalmon },
+  { file: 'rnaseq-hisat2-counts.json', raw: rnaseqHisat2Counts },
+  { file: 'variants-bcftools.json', raw: variantsBcftools },
+  { file: 'variants-bcftools-paired.json', raw: variantsBcftoolsPaired },
+  { file: 'variants-gatk.json', raw: variantsGatk },
 ];
 
 /** The bundled templates that are valid for the tool catalog this app has. */

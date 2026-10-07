@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2026.15.0",
+  "version": "2026.15.1",
   "file_types": [
     "fastq",
     "fasta",
@@ -892,9 +892,17 @@
           "default": 19,
           "description": "Matches shorter than this are dropped. Smaller is more sensitive and slower.",
           "min": 1
+        },
+        {
+          "id": "sample_name",
+          "label": "Sample name",
+          "type": "string",
+          "default": "sample",
+          "description": "Written into every alignment as its read group. GATK and Picard need one. For example patient1.",
+          "required": true
         }
       ],
-      "command": "bwa mem -t {threads} {mark_secondary} -k {min_seed_length} {ref} {reads1} {reads2} > {sam}",
+      "command": "sample={sample_name}; bwa mem -t {threads} {mark_secondary} -k {min_seed_length} -R \"@RG\\tID:$sample\\tSM:$sample\" {ref} {reads1} {reads2} > {sam}",
       "threads": 4,
       "docs": "https://bio-bwa.sourceforge.net/bwa.shtml"
     },

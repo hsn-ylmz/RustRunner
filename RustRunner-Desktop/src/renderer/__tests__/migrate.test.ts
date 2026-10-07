@@ -149,8 +149,11 @@ describe('each version 1 tool becomes a version 2 step with the same files', () 
     ).data;
     expect(data.slotFiles).toMatchObject({ ref: 'genome.fa', reads1: 'trimmed.fastq.gz', sam: 'aln.sam' });
     expect(data.slotFiles.reads2).toBeUndefined();
-    expect(data.catalogParams).toEqual({ mark_secondary: false, min_seed_length: 25 });
-    expect(data.command).toBe('bwa mem -t 4 -k 25 {ref} {reads1} {reads2} > {sam}');
+    // The migrated step is rebuilt from the current tool, so it gains the read group (default sample name).
+    expect(data.catalogParams).toEqual({ mark_secondary: false, min_seed_length: 25, sample_name: 'sample' });
+    expect(data.command).toBe(
+      'sample=sample; bwa mem -t 4 -k 25 -R "@RG\\tID:$sample\\tSM:$sample" {ref} {reads1} {reads2} > {sam}'
+    );
   });
 
   it('bwa mem: the comma-separated pair becomes the first and second read file', () => {

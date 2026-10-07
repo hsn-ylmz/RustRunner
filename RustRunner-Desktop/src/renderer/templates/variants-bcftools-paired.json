@@ -1,0 +1,323 @@
+{
+  "formatVersion": 1,
+  "id": "variants-bcftools-paired",
+  "name": "Germline variant calling, paired-end reads (bcftools)",
+  "description": "Find variants in one paired-end sample against a reference genome, with alignment statistics and a filtered VCF.",
+  "details": "Use this when your sequencing run gave two files per sample (R1 and R2). The pipeline indexes your reference, aligns the read pairs with BWA-MEM so mates are placed together, sorts the alignments, marks PCR duplicates with samtools, indexes the result, calls variants with bcftools, keeps calls with enough quality and depth, and reports alignment statistics (samtools flagstat) and variant statistics in one MultiQC report. Trimming is not included because the fastp step of this version handles one file at a time; if your reads need adapter removal, trim them beforehand. The filter keeps calls with quality 20 or more and depth 10 or more; change these in the filter step to match your coverage. For single-end reads use the single-end template, which also trims.",
+  "domain": "dna",
+  "difficulty": "intermediate",
+  "minCatalogVersion": "2026.15.1",
+  "inputs": [
+    {
+      "id": "reads1",
+      "label": "Forward reads (R1)",
+      "hint": "The first FASTQ file of a paired-end sample, plain or compressed.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample_R1.fastq.gz",
+      "targets": [
+        {
+          "step": "bwa_mem",
+          "slot": "reads1"
+        }
+      ]
+    },
+    {
+      "id": "reads2",
+      "label": "Reverse reads (R2)",
+      "hint": "The second FASTQ file of the same pairs (the _R2 file), plain or compressed.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample_R2.fastq.gz",
+      "targets": [
+        {
+          "step": "bwa_mem",
+          "slot": "reads2"
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "label": "Reference genome",
+      "hint": "The reference genome as a FASTA file. The reads are compared against it.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "reference.fa",
+      "targets": [
+        {
+          "step": "bwa_index",
+          "slot": "ref"
+        },
+        {
+          "step": "call",
+          "slot": "ref"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "bwa_index",
+      "tool": "bwa-index",
+      "label": "BWA index",
+      "position": {
+        "x": 0,
+        "y": 160
+      }
+    },
+    {
+      "key": "bwa_mem",
+      "tool": "bwa-mem",
+      "label": "Align read pairs (BWA-MEM)",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort",
+      "tool": "samtools-sort",
+      "label": "Sort alignments",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "markdup",
+      "tool": "samtools-markdup",
+      "label": "Mark duplicates",
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "bam_index",
+      "tool": "samtools-index",
+      "label": "Index alignments",
+      "files": {
+        "bai": "markdup.bam.bai"
+      },
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "key": "flagstat",
+      "tool": "samtools-flagstat",
+      "label": "Alignment statistics",
+      "position": {
+        "x": 520,
+        "y": 160
+      }
+    },
+    {
+      "key": "call",
+      "tool": "bcftools-call",
+      "label": "Call variants",
+      "position": {
+        "x": 0,
+        "y": 320
+      }
+    },
+    {
+      "key": "filter",
+      "tool": "bcftools-filter",
+      "label": "Filter variants",
+      "position": {
+        "x": 260,
+        "y": 320
+      }
+    },
+    {
+      "key": "stats",
+      "tool": "bcftools-stats",
+      "label": "Variant statistics",
+      "position": {
+        "x": 520,
+        "y": 320
+      }
+    },
+    {
+      "key": "multiqc",
+      "tool": "multiqc",
+      "label": "MultiQC report",
+      "files": {
+        "report_dir": "multiqc/"
+      },
+      "position": {
+        "x": 780,
+        "y": 320
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "bwa_index",
+      "to": "bwa_mem",
+      "bind": [
+        {
+          "slot": "ref",
+          "output": "indexed_ref"
+        }
+      ]
+    },
+    {
+      "from": "bwa_mem",
+      "to": "sort",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "markdup",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "markdup",
+      "to": "bam_index",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "marked"
+        }
+      ]
+    },
+    {
+      "from": "markdup",
+      "to": "flagstat",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "marked"
+        }
+      ]
+    },
+    {
+      "from": "markdup",
+      "to": "call",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "marked"
+        }
+      ]
+    },
+    {
+      "from": "bam_index",
+      "to": "call"
+    },
+    {
+      "from": "call",
+      "to": "filter",
+      "bind": [
+        {
+          "slot": "vcf",
+          "output": "vcf"
+        }
+      ]
+    },
+    {
+      "from": "filter",
+      "to": "stats",
+      "bind": [
+        {
+          "slot": "vcf",
+          "output": "filtered"
+        }
+      ]
+    },
+    {
+      "from": "flagstat",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "report"
+        }
+      ]
+    },
+    {
+      "from": "stats",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "stats"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Filtered variants",
+      "step": "filter",
+      "slot": "filtered",
+      "hint": "VCF with the calls that passed the quality and depth filter."
+    },
+    {
+      "label": "All variant calls",
+      "step": "call",
+      "slot": "vcf",
+      "hint": "VCF before filtering."
+    },
+    {
+      "label": "Alignments",
+      "step": "markdup",
+      "slot": "marked",
+      "hint": "Sorted BAM with duplicates marked."
+    },
+    {
+      "label": "Alignment statistics",
+      "step": "flagstat",
+      "slot": "report",
+      "hint": "How many reads aligned and how many pairs are proper pairs."
+    },
+    {
+      "label": "Variant statistics",
+      "step": "stats",
+      "slot": "stats",
+      "hint": "Counts of SNPs, indels and base changes."
+    },
+    {
+      "label": "Combined report",
+      "step": "multiqc",
+      "slot": "report",
+      "hint": "Open multiqc_report.html in a browser."
+    }
+  ],
+  "references": [
+    {
+      "label": "Li H. Aligning sequence reads, clone sequences and assembly contigs with BWA-MEM. arXiv 2013;1303.3997.",
+      "url": "https://doi.org/10.48550/arXiv.1303.3997"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    },
+    {
+      "label": "Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.",
+      "url": "https://doi.org/10.1093/bioinformatics/btw354"
+    }
+  ]
+}
