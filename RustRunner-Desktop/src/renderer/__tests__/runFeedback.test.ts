@@ -6,6 +6,7 @@ import {
   nodeStatusLine,
   plainCheck,
   plainFailure,
+  plainStepDetail,
   sectionToEdit,
   stateView,
   type RunResult,
@@ -233,5 +234,54 @@ describe('sectionToEdit', () => {
   it('sends a timeout to Reliability and anything else to Advanced', () => {
     expect(sectionToEdit({ what: 'The step took longer than its time limit and was stopped.' })).toBe('reliability');
     expect(sectionToEdit({ what: 'The command ended with an error.' })).toBe('advanced');
+  });
+});
+
+describe('plainStepDetail', () => {
+  const labels: Record<string, string> = { empty: 'Empty', bad: 'Bad step' };
+  const labelOf = (id: string) => labels[id];
+
+  it('says a failed check in the failure card words', () => {
+    const text = plainStepDetail(
+      'failed',
+      'output check failed: non_empty on all outputs: empty.txt: is empty',
+      labelOf
+    );
+    expect(text).toBe(
+      'empty.txt is empty, but "Outputs must be non-empty" is on. Check the command, or turn the check off.'
+    );
+    expect(text).not.toMatch(/non_empty|output check failed/);
+  });
+
+  it('joins several failed checks', () => {
+    const text = plainStepDetail(
+      'failed',
+      'output check failed: exists on all outputs: a.txt: does not exist; min_lines 5 on all outputs: b.txt: has 2 lines, expected at least 5',
+      labelOf
+    );
+    expect(text).toContain('a.txt does not exist');
+    expect(text).toContain('"At least 5 lines" is on');
+  });
+
+  it('uses the same sentence as the failure card for other failures', () => {
+    expect(plainStepDetail('failed', 'step timed out after 5s')).toBe(plainFailure('step timed out after 5s'));
+    expect(plainStepDetail('failed', undefined)).toBe('The command ended with an error.');
+  });
+
+  it('names the step that made a later step wait, by the name the person gave it', () => {
+    expect(plainStepDetail('skipped', "not run: the workflow stopped at step 'empty'", labelOf)).toBe(
+      'Did not run because "Empty" failed.'
+    );
+    expect(plainStepDetail('skipped', "not run: step 'bad' failed", labelOf)).toBe(
+      'Did not run because "Bad step" failed.'
+    );
+    expect(plainStepDetail('skipped', "not run: step 'zzz' failed")).toBe('Did not run because "zzz" failed.');
+    expect(plainStepDetail('skipped', 'not run: the workflow stopped early')).toBe(
+      'Did not run because the workflow stopped early.'
+    );
+  });
+
+  it('leaves a message it does not know alone', () => {
+    expect(plainStepDetail('skipped', 'something else')).toBe('something else');
   });
 });

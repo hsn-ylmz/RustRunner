@@ -26,7 +26,11 @@ export type IconName =
   | 'play'
   | 'pause'
   | 'stop'
-  | 'link';
+  | 'link'
+  | 'star'
+  | 'star-filled'
+  | 'chevron-right'
+  | 'clock';
 
 /** 16x16 drawings, stroked with the current text colour. */
 const PATHS: Record<IconName, ReactNode> = {
@@ -70,6 +74,20 @@ const PATHS: Record<IconName, ReactNode> = {
   play: <path d="M5 3.5v9l7.5-4.5z" />,
   pause: <path d="M5.5 3.5v9M10.5 3.5v9" />,
   stop: <path d="M4.5 4.5h7v7h-7z" />,
+  star: <path d="M8 2l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.2 4.3 13.3l.8-4.1L2 6.3l4.2-.5L8 2z" />,
+  'star-filled': (
+    <path
+      d="M8 2l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.2 4.3 13.3l.8-4.1L2 6.3l4.2-.5L8 2z"
+      fill="currentColor"
+    />
+  ),
+  'chevron-right': <path d="M6 4l4 4-4 4" />,
+  clock: (
+    <>
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 4.8V8l2.2 1.4" />
+    </>
+  ),
   link: <path d="M6.5 9.5l3-3M7.2 4.8l.9-.9a2.5 2.5 0 0 1 3.5 3.5l-.9.9M8.8 11.2l-.9.9a2.5 2.5 0 0 1-3.5-3.5l.9-.9" />,
 };
 

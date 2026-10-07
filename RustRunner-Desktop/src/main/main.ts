@@ -27,6 +27,7 @@ import { readResumeInfoFor, workflowFileStem } from './resumeState';
 import { readRunHistory, resolveReportPath, type RunHistoryEntry } from './runHistory';
 import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
 import { safeDocsUrl } from './docsUrl';
+import { readSettings, sanitizeSettings, writeSettings, type AppSettings } from './appSettings';
 
 // =============================================================================
 // Types
@@ -674,3 +675,22 @@ app
     });
   })
   .catch(log.error);
+
+/** The per-person settings file, in the app's own data folder. */
+function settingsFile(): string {
+  return path.join(app.getPath('userData'), 'settings.json');
+}
+
+/** Favourites and recently used tools of the palette. */
+ipcMain.handle('get-settings', (): AppSettings => readSettings(settingsFile()));
+
+/** Saves the palette's favourites and recent tools; the main process cleans what the renderer sends. */
+ipcMain.handle('set-palette-prefs', (_event, palette: unknown): AppSettings => {
+  const next = sanitizeSettings({ palette });
+  try {
+    return writeSettings(settingsFile(), next);
+  } catch (error) {
+    log.error('Could not save settings', error);
+    return next;
+  }
+});

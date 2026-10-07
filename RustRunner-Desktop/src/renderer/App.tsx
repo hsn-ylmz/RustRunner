@@ -76,9 +76,11 @@ import { StepStatusPanel } from './components/StepStatusPanel';
 import { RunHistoryPanel } from './components/RunHistoryPanel';
 import type { RunHistoryEntry } from '../main/runHistory';
 import { ToolPalette } from './components/ToolPalette';
+import { EMPTY_PREFS, cleanPrefs, recordRecent, type PalettePrefs } from './toolBrowser';
 import {
   buildCatalogNodeData,
   checkEdge,
+  findTool,
   validateCatalogNodes,
   type CatalogTool,
 } from './tools/catalog';
@@ -184,6 +186,8 @@ function WorkflowEditorInner() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** Favourite and recently used tools, kept in the app's settings file. */
+  const [palettePrefs, setPalettePrefs] = useState<PalettePrefs>(EMPTY_PREFS);
   /** A connection that could fill several file slots: the person picks one in the later step's properties. */
   const [pendingBinding, setPendingBinding] = useState<{ sourceId: string; targetId: string } | null>(null);
   /** The canvas viewport, for placing new nodes where they're actually visible. */
@@ -278,6 +282,23 @@ function WorkflowEditorInner() {
     },
     [appendLogLines]
   );
+
+  // The favourite and recent tools saved by an earlier session.
+  useEffect(() => {
+    let cancelled = false;
+    window.electron.ipcRenderer
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        const saved = cleanPrefs(settings.palette);
+        // A change made before the file was read wins over what was saved.
+        setPalettePrefs((current) => (current === EMPTY_PREFS ? saved : current));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Setup IPC listeners
   useEffect(() => {
@@ -674,8 +695,29 @@ function WorkflowEditorInner() {
   }, [nodes, placeNewNode, recordEdit, markDirty]);
 
   /** Adds a node prefilled from a catalog tool and selects it, so its options show. */
+  /** Remembers the palette's favourites and recent tools in the settings file. */
+  const updatePalettePrefs = useCallback(
+    (next: PalettePrefs) => {
+      setPalettePrefs(next);
+      window.electron.ipcRenderer.setPalettePrefs(next).catch(() => {
+        notify('danger', 'Your favourite tools could not be saved.');
+      });
+    },
+    [notify]
+  );
+
+  const openToolDocs = useCallback(
+    (url: string) => {
+      void window.electron.ipcRenderer.openDocs(url).then((result) => {
+        if (!result.ok) notify('danger', 'The documentation page could not be opened.');
+      });
+    },
+    [notify]
+  );
+
   const addCatalogNode = useCallback(
     (tool: CatalogTool) => {
+      updatePalettePrefs(recordRecent(palettePrefs, tool.id));
       recordEdit();
 
       const position = placeNewNode();
@@ -696,7 +738,7 @@ function WorkflowEditorInner() {
       setProblemsOpen(false);
       markDirty();
     },
-    [nodes, placeNewNode, recordEdit, markDirty]
+    [nodes, placeNewNode, recordEdit, markDirty, palettePrefs, updatePalettePrefs]
   );
 
   /** Removes the selected steps (with their connections) and the selected connections. */
@@ -1651,7 +1693,7 @@ function WorkflowEditorInner() {
                     : `${RUN_TOOLTIPS.run} ${describeResume(resumeInfo, Boolean(workingDirectory))}`
                 }
               >
-                {executionState === 'paused' ? 'Continue' : 'Run'}
+                {executionState === 'paused' ? 'Continue' : executionState === 'running' ? 'Running…' : 'Run'}
               </Button>
 
               <Button
@@ -1758,6 +1800,17 @@ function WorkflowEditorInner() {
           {paletteOpen && <ToolPalette
               onAdd={addCatalogNode}
               onClose={closePalette}
+              prefs={palettePrefs}
+              onPrefsChange={updatePalettePrefs}
+              onOpenDocs={openToolDocs}
+              selectedStep={
+                selectedNode
+                  ? {
+                      label: String(selectedNode.data?.label || 'the selected step'),
+                      tool: findTool(selectedNode.data?.catalogId),
+                    }
+                  : null
+              }
               onAddCustom={() => {
                 closePalette();
                 addNode();

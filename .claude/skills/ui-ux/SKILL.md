@@ -25,6 +25,7 @@ RustRunner is a visual, no-DSL workflow builder for biologists who are not progr
 | `ui/` | Primitives (import from `../ui`), `ui/ui.css` their styles. |
 | `connections.ts`, `nodePlacement.ts`, `runFeedback.ts`, `validation.ts`, `panelSections.ts` | Pure UI logic (unit-tested): "Runs after" edges, where a new step goes, plain-language run results, problems per field, panel sections. Put new UI logic in a module like these, not in a component. |
 | `slots.ts`, `tools/catalog.ts`, `tools/migrate.ts` | File slots and the tool catalog (schema v2, validated by `validateCatalog`). A catalog tool names every file as a slot: the form shows one labelled field per slot (optional ones say so, a folder's derived files have no field), never the command's `{placeholders}`. Old saved steps are brought up by `migrateNodes`. |
+| `toolBrowser.ts`, `main/appSettings.ts` | Palette logic (ranked search, fits-after filter, favourites, recent, category tree) and the per-person settings file the favourites live in. Not localStorage. |
 | `App.css` | Layout and app-specific pieces (nodes, edges, panels). Tokens only. |
 | `nodeColors.ts` | Node colour names; the only other file allowed colour literals (legacy hex of old files). |
 

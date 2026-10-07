@@ -1,5 +1,5 @@
 import { Badge, Icon } from '../ui';
-import { stateView } from '../runFeedback';
+import { plainStepDetail, stateView } from '../runFeedback';
 import {
   summarizeRows,
   type RunPhase,
@@ -37,6 +37,11 @@ export function StepStatusPanel({
   }
 
   const counts = summarizeRows(rows);
+  /** The name the person gave the step an engine id belongs to. */
+  const labelOf = (engineId: string) => {
+    const row = rows.find((r) => r.id === engineId);
+    return row ? (row.instance ? `${row.label} ${row.instance}` : row.label) : undefined;
+  };
 
   return (
     <div className="step-status" data-testid="step-status">
@@ -94,7 +99,7 @@ export function StepStatusPanel({
                 {row.label}
                 {row.instance && <span className="step-row-instance"> {row.instance}</span>}
               </td>
-              <td className="step-row-details">{rowDetails(row)}</td>
+              <td className="step-row-details">{rowDetails(row, labelOf)}</td>
             </tr>
           ))}
         </tbody>
@@ -103,8 +108,8 @@ export function StepStatusPanel({
   );
 }
 
-function rowDetails(row: StatusRow): string {
-  if (row.state === 'failed') return row.message || 'Step failed';
+function rowDetails(row: StatusRow, labelOf: (engineId: string) => string | undefined): string {
+  if (row.state === 'failed') return plainStepDetail('failed', row.message || undefined, labelOf);
   const parts: string[] = [];
   if (row.state === 'retrying' && row.attempt && row.maxAttempts) {
     const wait =
@@ -119,7 +124,11 @@ function rowDetails(row: StatusRow): string {
     parts.push('tool not run, outputs are placeholders');
   }
   if (row.state === 'skipped') {
-    parts.push(row.message || 'up to date, or not reached');
+    parts.push(
+      row.upToDate
+        ? row.message || 'up to date'
+        : plainStepDetail('skipped', row.message, labelOf) || 'up to date, or not reached'
+    );
   }
   if (row.warnings && row.warnings.length > 0) {
     parts.push(`check warning: ${row.warnings.join('; ')}`);

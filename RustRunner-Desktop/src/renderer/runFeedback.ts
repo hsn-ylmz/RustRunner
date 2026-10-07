@@ -182,6 +182,39 @@ export function plainCheck(message: string | undefined): string {
 }
 
 /**
+ * What the Details column of the step status table says about a failed or
+ * skipped step, in the same plain words as the failure card: no engine check
+ * names, no step ids. `labelOf` turns an engine step id into the name the
+ * person gave the step. Anything it does not recognise is returned unchanged.
+ */
+export function plainStepDetail(
+  state: 'failed' | 'skipped',
+  message: string | undefined,
+  labelOf: (engineId: string) => string | undefined = () => undefined
+): string {
+  const text = (message ?? '').trim();
+  if (state === 'failed') {
+    const checks = /^output check failed: (.+)$/is.exec(text);
+    if (checks) {
+      return checks[1]
+        .split('; ')
+        .map((c) => plainCheck(c))
+        .join(' ');
+    }
+    return plainFailure(text);
+  }
+  const named = /^not run: (?:the workflow stopped at step|step) '(.+?)'(?: failed)?$/.exec(text);
+  if (named) {
+    const name = labelOf(named[1]) ?? named[1];
+    return `Did not run because "${name}" failed.`;
+  }
+  if (/^not run: the workflow stopped early$/.test(text)) {
+    return 'Did not run because the workflow stopped early.';
+  }
+  return text;
+}
+
+/**
  * Describes the first failed step, in canvas order, or null when nothing
  * failed. `logs` is the raw log, searched for the step's stderr.
  */

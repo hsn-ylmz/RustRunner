@@ -122,6 +122,18 @@ const electronHandler = {
       return ipcRenderer.invoke('open-docs', url);
     },
 
+    /** Settings kept for this person: the palette's favourites and recent tools. */
+    getSettings(): Promise<{ palette: { favourites: string[]; recent: string[] } }> {
+      return ipcRenderer.invoke('get-settings');
+    },
+
+    setPalettePrefs(palette: {
+      favourites: string[];
+      recent: string[];
+    }): Promise<{ palette: { favourites: string[]; recent: string[] } }> {
+      return ipcRenderer.invoke('set-palette-prefs', palette);
+    },
+
     pauseWorkflow() {
       ipcRenderer.send('pause-workflow');
     },

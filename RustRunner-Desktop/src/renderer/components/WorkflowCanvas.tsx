@@ -10,6 +10,7 @@ import {
   Handle,
   Position,
   MiniMap,
+  Panel as FlowPanel,
   BaseEdge,
   getBezierPath,
   type EdgeProps,
@@ -21,7 +22,8 @@ import { firstFreePosition, type Rect } from '../nodePlacement';
 import type { TypeCheck } from '../tools/catalog';
 import { nodeColorVar, normalizeNodeColor } from '../nodeColors';
 import { edgeLabelWidth, mismatchLabel } from '../edgeLabel';
-import { Badge, Icon, type IconName } from '../ui';
+import { useState } from 'react';
+import { Badge, Button, Icon, type IconName } from '../ui';
 
 /**
  * Chooses where a newly added node should appear.
@@ -332,6 +334,14 @@ export function WorkflowCanvas({
   /** A drag of one or several nodes is about to begin (one undo step). */
   onDragStart?: () => void;
 }) {
+  const [minimapOpen, setMinimapOpen] = useState(readMinimapOpen);
+  const toggleMinimap = () => {
+    setMinimapOpen((open) => {
+      writeMinimapOpen(!open);
+      return !open;
+    });
+  };
+
   return (
     <ReactFlow
       nodes={nodes}
@@ -360,7 +370,65 @@ export function WorkflowCanvas({
       />
       {/* Top right: the run controls own the left edge, the minimap the bottom right. */}
       <Controls position="top-right" orientation="horizontal" />
-      <MiniMap nodeStrokeWidth={1} nodeColor={(node: any) => nodeColorVar(node.data?.color)} />
+      <MinimapToggle open={minimapOpen} onToggle={toggleMinimap} />
+      {minimapOpen && (
+        <MiniMap
+          className="canvas-minimap"
+          style={{ width: MINIMAP_WIDTH, height: MINIMAP_HEIGHT }}
+          nodeStrokeWidth={1}
+          nodeColor={(node: any) => nodeColorVar(node.data?.color)}
+          ariaLabel="Overview of the workflow"
+        />
+      )}
     </ReactFlow>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Overview map
+// -----------------------------------------------------------------------------
+
+/** Small on purpose: it shows where the steps are, it does not compete with them. */
+export const MINIMAP_WIDTH = 132;
+export const MINIMAP_HEIGHT = 84;
+const MINIMAP_KEY = 'rustrunner.minimap-open';
+
+/** Whether the overview was left open last time (open by default); a per-viewer convenience. */
+function readMinimapOpen(): boolean {
+  try {
+    return window.localStorage.getItem(MINIMAP_KEY) !== 'closed';
+  } catch {
+    return true;
+  }
+}
+
+function writeMinimapOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(MINIMAP_KEY, open ? 'open' : 'closed');
+  } catch {
+    /* private window or blocked storage: the choice only lasts for this session */
+  }
+}
+
+/** The button that hides or shows the overview; it sits just above the map, or alone when the map is hidden. */
+function MinimapToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <FlowPanel
+      position="bottom-right"
+      className="minimap-toggle"
+      style={{ marginBottom: open ? MINIMAP_HEIGHT + 24 : 24 }}
+    >
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={open ? 'chevron-down' : 'chevron-right'}
+        pressed={open}
+        aria-expanded={open}
+        data-testid="minimap-toggle"
+        onClick={onToggle}
+      >
+        {open ? 'Hide overview' : 'Show overview'}
+      </Button>
+    </FlowPanel>
   );
 }

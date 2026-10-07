@@ -68,6 +68,17 @@ for (const scheme of SCHEMES) {
 
     await page.getByTestId('open-palette').click();
     await shoot('catalog-palette');
+    // A category opened with the keyboard, the way a person browses.
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowDown');
+    await shoot('catalog-palette-browse-category');
+    await page.getByTestId('palette-toggle-all').click();
+    await shoot('catalog-palette-all-open');
+    await page.getByTestId('palette-toggle-all').click();
+    // A favourite and a recent tool fill the two sections at the top.
+    await page.getByTestId('palette-search').fill('fastqc');
+    await page.getByTestId('palette-favourite').click();
+    await shoot('catalog-palette-search-favourite');
     await page.getByTestId('palette-search').fill('sam');
     await shoot('catalog-palette-search');
     await page.getByTestId('palette-search').fill('qqqzzz');
@@ -77,6 +88,21 @@ for (const scheme of SCHEMES) {
 
     await addFromPalette(page, 'bwa', 'bwa-mem');
     await shoot('node-selected-catalog-tool');
+
+    // With a catalog step selected: the favourites and recent sections, the
+    // filter for tools that fit after it, and a tool that needs a database.
+    await page.getByTestId('open-palette').click();
+    await shoot('catalog-palette-favourites-recent');
+    await page.getByTestId('palette-fits-after').check();
+    await shoot('catalog-palette-fits-after');
+    await page.getByTestId('palette-fits-after').uncheck();
+    await page.getByTestId('palette-search').fill('kraken2');
+    await page.getByTestId('palette-item-kraken2').hover();
+    await shoot('catalog-palette-needs-database');
+    await page.getByTestId('palette-search').press('Escape');
+    await page.getByTestId('minimap-toggle').click();
+    await shoot('overview-map-hidden');
+    await page.getByTestId('minimap-toggle').click();
     for (const section of ['reliability', 'checks', 'advanced'] as const) {
       await openSection(page, section);
     }
@@ -261,6 +287,9 @@ for (const scheme of SCHEMES) {
     await shoot('empty-canvas');
     await page.getByTestId('open-palette').click();
     await shoot('catalog-palette');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowDown');
+    await shoot('catalog-palette-category-open');
     await page.getByTestId('palette-search').press('Escape');
 
     await buildChain(page, [

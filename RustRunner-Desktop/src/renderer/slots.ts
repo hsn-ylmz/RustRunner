@@ -240,6 +240,13 @@ const EXTENSION_TYPES: Record<string, string> = {
   json: 'json',
 };
 
+/** The extensions that name a file type (`fastq` is `fastq` and `fq`), for searching by what a file ends in. */
+export function extensionsOfType(type: string): string[] {
+  return Object.entries(EXTENSION_TYPES)
+    .filter(([, t]) => t === type)
+    .map(([ext]) => ext);
+}
+
 /** The file type a path's extension names (`reads.fq.gz` is fastq), or none. */
 export function typesOfPath(path: string): string[] {
   const base = path.trim().split(/[\\/]/).pop() ?? '';

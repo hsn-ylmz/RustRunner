@@ -45,6 +45,9 @@ test('adding fastqc from the palette gives a prefilled node', async ({ page, con
 test('the palette searches by name and category, and closes with Escape', async ({ page }) => {
   await page.getByTestId('open-palette').click();
   const items = page.locator('[data-testid^="palette-item-"]');
+  // Browsing starts with the categories folded; one button opens them all.
+  await expect(items).toHaveCount(0);
+  await page.getByTestId('palette-toggle-all').click();
   const all = await items.count();
   expect(all).toBeGreaterThanOrEqual(79);
 

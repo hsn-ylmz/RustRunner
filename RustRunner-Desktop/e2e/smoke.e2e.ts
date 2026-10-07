@@ -180,9 +180,13 @@ test('a failed blocking output check fails the step and skips the one after it',
 
   const failed = stepRow(page, 'empty');
   await expect(failed).toHaveAttribute('data-state', 'failed');
-  await expect(failed.locator('.step-row-details')).toContainText('output check failed');
+  // Plain words, the same as the failure card: no engine check names.
+  await expect(failed.locator('.step-row-details')).toContainText('empty.txt is empty');
+  await expect(failed.locator('.step-row-details')).toContainText('Outputs must be non-empty');
+  await expect(failed.locator('.step-row-details')).not.toContainText('non_empty');
   await expect(stepRow(page, 'next')).toHaveAttribute('data-state', 'skipped');
-  await expect(stepRow(page, 'next').locator('.step-row-details')).toContainText('not run');
+  await expect(stepRow(page, 'next').locator('.step-row-details')).toContainText('Did not run because "Empty" failed.');
+  await expect(stepRow(page, 'next').locator('.step-row-details')).not.toContainText("step 'empty'");
   await expect(page.getByTestId('run-from-scratch')).toBeEnabled();
 });
 
@@ -388,7 +392,7 @@ test('keep going runs the independent branch after a failure', async ({ page, sa
 
   await expect(stepRow(page, 'bad')).toHaveAttribute('data-state', 'failed');
   await expect(stepRow(page, 'after')).toHaveAttribute('data-state', 'skipped');
-  await expect(stepRow(page, 'after').locator('.step-row-details')).toContainText("step 'bad' failed");
+  await expect(stepRow(page, 'after').locator('.step-row-details')).toContainText('Did not run because "Bad" failed.');
   await expect(stepRow(page, 'free')).toHaveAttribute('data-state', 'succeeded');
   await expect(stepRow(page, 'free2')).toHaveAttribute('data-state', 'succeeded');
   await expect(page.getByTestId('run-from-scratch')).toBeEnabled();

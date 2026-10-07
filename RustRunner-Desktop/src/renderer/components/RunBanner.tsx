@@ -68,9 +68,32 @@ export function RunBanner({
       {failure && (
         <div className="failure-card" data-testid="failure-card" role="group" aria-label="Failed step">
           <div className="failure-main">
-            <h4 className="failure-title" data-testid="failure-title">
-              <Icon name="x" size={14} /> {failure.headline}
-            </h4>
+            <div className="failure-head">
+              <h4 className="failure-title" data-testid="failure-title">
+                <Icon name="x" size={14} /> {failure.headline}
+              </h4>
+              <div className="failure-actions">
+                <Button
+                  size="sm"
+                  data-testid="failure-show-report"
+                  disabledReason={hasReport ? undefined : 'This run has no report'}
+                  onClick={onOpenReport}
+                >
+                  Show in report
+                </Button>
+                <Button size="sm" data-testid="failure-show-logs" onClick={onShowLogs}>
+                  Show logs
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  data-testid="failure-edit-step"
+                  onClick={() => onEditStep(failure)}
+                >
+                  Edit step
+                </Button>
+              </div>
+            </div>
             <p className="failure-what" data-testid="failure-what">
               {failure.what}
             </p>
@@ -85,27 +108,6 @@ export function RunBanner({
                 of this.
               </p>
             )}
-            <div className="failure-actions">
-              <Button
-                size="sm"
-                data-testid="failure-show-report"
-                disabledReason={hasReport ? undefined : 'This run has no report'}
-                onClick={onOpenReport}
-              >
-                Show in report
-              </Button>
-              <Button size="sm" data-testid="failure-show-logs" onClick={onShowLogs}>
-                Show logs
-              </Button>
-              <Button
-                size="sm"
-                variant="primary"
-                data-testid="failure-edit-step"
-                onClick={() => onEditStep(failure)}
-              >
-                Edit step
-              </Button>
-            </div>
           </div>
           {failure.stderr.length > 0 && (
             <figure className="failure-output">

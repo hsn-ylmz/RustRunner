@@ -25,6 +25,11 @@ function headlessLinuxArgs(): string[] {
   return ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'];
 }
 
+/** Screenshots for the UX review are taken at 1x so the PNGs stay small. */
+function captureArgs(): string[] {
+  return process.env.UX_OUT ? ['--force-device-scale-factor=1'] : [];
+}
+
 export interface Sandbox {
   /** Directory the workflow runs in (set through the mocked directory dialog). */
   workDir: string;
@@ -36,6 +41,25 @@ export interface Fixtures {
   page: Page;
   /** console.error output and uncaught page errors seen so far. */
   consoleErrors: string[];
+}
+
+/**
+ * Starts the app with HOME, TMPDIR and the profile (the app's data folder)
+ * inside `root`. Calling it again with the same root is a restart: the second
+ * run finds what the first saved.
+ */
+export function launchApp(root: string): Promise<ElectronApplication> {
+  return _electron.launch({
+    args: [DESKTOP_DIR, `--user-data-dir=${path.join(root, 'profile')}`, ...headlessLinuxArgs(), ...captureArgs()],
+    cwd: DESKTOP_DIR,
+    env: {
+      ...(process.env as Record<string, string>),
+      HOME: path.join(root, 'home'),
+      TMPDIR: path.join(root, 'tmp'),
+      NODE_ENV: 'production',
+      RUSTRUNNER_BIN: ENGINE_BIN,
+    },
+  });
 }
 
 export const test = base.extend<Fixtures>({
@@ -53,22 +77,10 @@ export const test = base.extend<Fixtures>({
     const root = path.dirname(sandbox.workDir);
     // HOME, TMPDIR and the profile all point into the sandbox so a test run
     // leaves nothing in the real user directories.
-    const home = path.join(root, 'home');
-    const tmp = path.join(root, 'tmp');
-    fs.mkdirSync(home);
-    fs.mkdirSync(tmp);
+    fs.mkdirSync(path.join(root, 'home'));
+    fs.mkdirSync(path.join(root, 'tmp'));
 
-    const app = await _electron.launch({
-      args: [DESKTOP_DIR, `--user-data-dir=${path.join(root, 'profile')}`, ...headlessLinuxArgs()],
-      cwd: DESKTOP_DIR,
-      env: {
-        ...(process.env as Record<string, string>),
-        HOME: home,
-        TMPDIR: tmp,
-        NODE_ENV: 'production',
-        RUSTRUNNER_BIN: ENGINE_BIN,
-      },
-    });
+    const app = await launchApp(root);
 
     // Native dialogs cannot be driven from the page: answer the directory
     // picker with the sandbox, and "Discard" for any unsaved-changes prompt.

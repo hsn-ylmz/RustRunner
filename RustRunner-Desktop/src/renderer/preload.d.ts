@@ -118,6 +118,13 @@ interface ElectronAPI {
     ): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
     /** Opens a tool's documentation page (https links only) in the default browser. */
     openDocs(url: string): Promise<{ ok: true } | { ok: false; error: string }>;
+    /** Settings kept for this person in the app's data folder. */
+    getSettings(): Promise<{ palette: { favourites: string[]; recent: string[] } }>;
+    /** Saves the palette's favourites and recently used tools; resolves to what was stored. */
+    setPalettePrefs(palette: {
+      favourites: string[];
+      recent: string[];
+    }): Promise<{ palette: { favourites: string[]; recent: string[] } }>;
     pauseWorkflow(): void;
     resumeWorkflow(): void;
     stopWorkflow(): void;

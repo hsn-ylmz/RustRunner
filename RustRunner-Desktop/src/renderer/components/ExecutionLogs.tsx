@@ -173,18 +173,22 @@ export function ExecutionLogs({
           </Button>
         </div>
       </div>
-      {banner && visible && <div className="execution-banner">{banner}</div>}
-      {visible && showSteps && (
+      {/* The summary, the failure card and the tab content scroll together, so
+          nothing (the card's buttons included) is ever cut off by the panel's height. */}
+      {visible && (
+      <div className="execution-body" data-testid="execution-body">
+      {banner && <div className="execution-banner">{banner}</div>}
+      {showSteps && (
         <div className="execution-panel-content" {...panelProps('steps')}>
           {stepsView}
         </div>
       )}
-      {visible && showHistory && (
+      {showHistory && (
         <div className="execution-panel-content" {...panelProps('history')}>
           {historyView}
         </div>
       )}
-      {visible && showLogs && (
+      {showLogs && (
         <div className="log-view" {...panelProps('logs')}>
           <div className="log-toolbar" role="toolbar" aria-label="Log tools">
             <div className="log-filter" role="group" aria-label="Show">
@@ -285,6 +289,8 @@ export function ExecutionLogs({
             ))}
           </div>
         </div>
+      )}
+      </div>
       )}
     </div>
   );
