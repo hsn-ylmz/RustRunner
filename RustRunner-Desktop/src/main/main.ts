@@ -588,6 +588,34 @@ const getThemedIconPath = (getAssetPath: (...paths: string[]) => string): string
   return getAssetPath(`${iconName}.png`);
 };
 
+/**
+ * Switches the app icon to match the system theme.
+ *
+ * macOS has no per-window icon (BrowserWindow.setIcon is Windows/Linux only and
+ * throws "Failed to load image" for an .icns path), so there the Dock icon is
+ * set instead, from the PNG. A failure is logged, never thrown: an icon must not
+ * crash the main process.
+ */
+const applyThemedIcon = (
+  window: BrowserWindow,
+  getAssetPath: (...paths: string[]) => string,
+): void => {
+  try {
+    if (process.platform === 'darwin') {
+      const iconName = nativeTheme.shouldUseDarkColors ? 'icon_dark' : 'icon_light';
+      const pngPath = getAssetPath(`${iconName}.png`);
+      log.info(`System theme changed — switching Dock icon to: ${path.basename(pngPath)}`);
+      app.dock?.setIcon(pngPath);
+    } else {
+      const iconPath = getThemedIconPath(getAssetPath);
+      log.info(`System theme changed — switching icon to: ${path.basename(iconPath)}`);
+      window.setIcon(iconPath);
+    }
+  } catch (err) {
+    log.warn('Could not switch the app icon for the new theme:', err);
+  }
+};
+
 const createWindow = async (): Promise<void> => {
 
   const RESOURCES_PATH = app.isPackaged
@@ -653,12 +681,10 @@ const createWindow = async (): Promise<void> => {
     mainWindow = null;
   });
 
-  // Listen for system theme changes and update the window icon dynamically
+  // Listen for system theme changes and update the icon dynamically
   nativeTheme.on('updated', () => {
     if (mainWindow) {
-      const newIconPath = getThemedIconPath(getAssetPath);
-      log.info(`System theme changed — switching icon to: ${path.basename(newIconPath)}`);
-      mainWindow.setIcon(newIconPath);
+      applyThemedIcon(mainWindow, getAssetPath);
     }
   });
 
