@@ -140,7 +140,8 @@ describe('each version 1 tool becomes a version 2 step with the same files', () 
       v1('cutadapt', 'cutadapt', { adapter: 'AAAA', min_length: 25, quality_cutoff: 10 }, 'in.fq.gz', 'out.fq.gz')
     ).data;
     expect(data.slotFiles).toEqual({ trimmed: 'out.fq.gz', report: 'cutadapt.txt', reads: 'in.fq.gz' });
-    expect(data.command).toContain('-a AAAA -m 25 -q 10 -o {trimmed} {reads} > {report}');
+    // The v2 template also carries the new error-rate and overlap options at Cutadapt's own defaults.
+    expect(data.command).toContain('-a AAAA -e 0.1 -O 3 -m 25 -q 10 -o {trimmed} {reads} > {report}');
   });
 
   it('bwa mem: the reference option becomes the reference slot', () => {

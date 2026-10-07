@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": "2026.16.0",
+  "version": "2026.17.0",
   "file_types": [
     "fastq",
     "fasta",
@@ -520,8 +520,27 @@
           "label": "3' adapter sequence",
           "type": "string",
           "default": "AGATCGGAAGAGC",
-          "description": "Adapter to cut from the 3' end. The default is the Illumina universal adapter.",
+          "description": "Adapter to cut from the 3' end. Default: the Illumina universal adapter. D-Plex small RNA kit: AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC, with overlap 10.",
           "required": true
+        },
+        {
+          "id": "error_rate",
+          "label": "Allowed errors in the adapter",
+          "type": "number",
+          "default": 0.1,
+          "description": "Share of the adapter that may be mismatched, for example 0.1 allows one error in 10 bases. Cutadapt's own default is 0.1.",
+          "min": 0,
+          "max": 0.5,
+          "step": 0.05
+        },
+        {
+          "id": "min_overlap",
+          "label": "Minimum overlap with the adapter",
+          "type": "number",
+          "default": 3,
+          "description": "Bases of the read that must match the start of the adapter before it is cut. 3 is Cutadapt's default; use 10 when the adapter starts with poly(A), so a run of A is not taken for it.",
+          "min": 1,
+          "max": 60
         },
         {
           "id": "min_length",
@@ -539,9 +558,17 @@
           "description": "Trim low-quality bases from the 3' end below this Phred score.",
           "min": 0,
           "max": 60
+        },
+        {
+          "id": "discard_untrimmed",
+          "label": "Discard reads without the adapter",
+          "type": "boolean",
+          "default": false,
+          "flag": "--discard-untrimmed",
+          "description": "Drops reads in which no adapter was found. Off keeps them: in a footprint library these are long fragments rather than footprints, which a later length filter can remove."
         }
       ],
-      "command": "cutadapt -j {threads} -a {adapter} -m {min_length} -q {quality_cutoff} -o {trimmed} {reads} > {report}",
+      "command": "cutadapt -j {threads} -a {adapter} -e {error_rate} -O {min_overlap} -m {min_length} -q {quality_cutoff} {discard_untrimmed} -o {trimmed} {reads} > {report}",
       "threads": 4,
       "docs": "https://cutadapt.readthedocs.io/"
     },
@@ -1322,9 +1349,17 @@
           "default": true,
           "flag": "-F 4",
           "description": "Drops reads that did not align."
+        },
+        {
+          "id": "forward_only",
+          "label": "Keep reads on the forward strand only",
+          "type": "boolean",
+          "default": false,
+          "flag": "-G 16",
+          "description": "Drops reverse-strand alignments. In a transcript BAM from a sense library (most Ribo-seq kits) they are mostly artefacts, and riboWaltz ignores them."
         }
       ],
-      "command": "samtools view -@ {threads} -b -q {min_mapq} {mapped_only} -o {filtered} {alignments}",
+      "command": "samtools view -@ {threads} -b -q {min_mapq} {mapped_only} {forward_only} -o {filtered} {alignments}",
       "threads": 2,
       "docs": "https://www.htslib.org/doc/samtools-view.html"
     },
@@ -2770,7 +2805,7 @@
         {
           "name": "annotation",
           "label": "Gene annotation",
-          "description": "Optional but recommended: STAR then knows the splice junctions of your genes. GTF format.",
+          "description": "Optional but recommended: STAR then knows the splice junctions of your genes. GTF format. Required for the Ribo-seq STAR step, which writes alignments in transcript coordinates.",
           "types": [
             "gtf"
           ],
@@ -2797,7 +2832,7 @@
           "label": "Splice junction overhang",
           "type": "number",
           "default": 100,
-          "description": "Read length minus 1. 100 suits reads up to 101 bases. Only used when a gene annotation is given.",
+          "description": "Longest read length minus 1. 100 suits reads up to 101 bases, which covers ribosome footprints (about 20 to 40 bases, up to 85 when long fragments are kept). Only used when a gene annotation is given.",
           "min": 1
         },
         {
@@ -6669,6 +6704,616 @@
       "command": "dorado summary {calls} > {summary}",
       "threads": 1,
       "docs": "https://github.com/nanoporetech/dorado"
+    },
+    {
+      "id": "umi-tools-extract",
+      "name": "UMI-tools extract",
+      "description": "Moves each read's UMI (unique molecular identifier) into its name and cuts it, and any spacer next to it, out of the sequence. Run it before aligning so duplicates can be removed later.",
+      "category": "trimming",
+      "subcategory": "UMI handling",
+      "install": {
+        "kind": "conda",
+        "package": "umi_tools",
+        "channel": "bioconda",
+        "version": "1.1.6"
+      },
+      "inputs": [
+        {
+          "name": "reads",
+          "label": "Reads",
+          "description": "Sequencing reads in FASTQ format (plain or .gz). For a library with a 3' adapter, trim the adapter first.",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "trimmed.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "extracted",
+          "label": "Reads without the UMI",
+          "description": "Reads with the UMI cut out. The UMI is now at the end of the read name, after an underscore.",
+          "types": [
+            "fastq"
+          ],
+          "pattern": "umi_extracted.fastq.gz",
+          "is_dir": false
+        },
+        {
+          "name": "log",
+          "label": "Extraction log",
+          "description": "How many reads were read and written. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "umi_extract.log",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "umi_end",
+          "label": "Where the UMI sits in the read",
+          "type": "select",
+          "default": "5prime",
+          "options": [
+            "5prime",
+            "3prime"
+          ],
+          "option_labels": {
+            "5prime": "5' end (the start of the read)",
+            "3prime": "3' end (the end of the read)"
+          },
+          "description": "Most small-RNA and Ribo-seq kits put the UMI at the start of the read. Choose the 3' end only if your kit puts it at the end (after the adapter was trimmed)."
+        },
+        {
+          "id": "umi_length",
+          "label": "UMI length (bases)",
+          "type": "number",
+          "default": 12,
+          "min": 1,
+          "max": 100,
+          "description": "The number of bases of the UMI. 12 is the Diagenode D-Plex kit; check the manual of your kit."
+        },
+        {
+          "id": "spacer_length",
+          "label": "Spacer bases to remove (next to the UMI)",
+          "type": "number",
+          "default": 4,
+          "min": 0,
+          "max": 100,
+          "description": "Bases between the UMI and the insert that are not part of the sample and are removed too, for example a template-switching motif or a linker. 4 is the D-Plex kit; use 0 if there is none."
+        },
+        {
+          "id": "custom_pattern",
+          "label": "Your own pattern (advanced)",
+          "type": "string",
+          "default": "",
+          "description": "Leave empty to use the settings above. Otherwise a regular expression with a group umi_1 for the UMI and, optionally, discard_1, for example ^(?P<umi_1>.{8})(?P<discard_1>.{2})"
+        }
+      ],
+      "command": "CUSTOM={custom_pattern}; if [ -n \"$CUSTOM\" ]; then PATTERN=\"$CUSTOM\"; elif [ {umi_end} = 3prime ]; then PATTERN=\".*(?P<discard_1>.{{spacer_length}})(?P<umi_1>.{{umi_length}})\\$\"; else PATTERN=\"^(?P<umi_1>.{{umi_length}})(?P<discard_1>.{{spacer_length}})\"; fi; umi_tools extract --extract-method=regex --bc-pattern=\"$PATTERN\" -I {reads} -S {extracted} -L {log}",
+      "threads": 1,
+      "docs": "https://umi-tools.readthedocs.io/en/latest/reference/extract.html"
+    },
+    {
+      "id": "umi-tools-dedup",
+      "name": "UMI-tools dedup",
+      "description": "Removes PCR duplicates: reads with the same start and UMI (allowing for UMI errors) count once. Needs a sorted BAM with its index, and read names that end in the UMI.",
+      "category": "processing",
+      "subcategory": "Duplicates",
+      "install": {
+        "kind": "conda",
+        "package": "umi_tools",
+        "channel": "bioconda",
+        "version": "1.1.6"
+      },
+      "inputs": [
+        {
+          "name": "alignments",
+          "label": "Sorted alignments",
+          "description": "A coordinate-sorted BAM whose read names end in _UMI (made by UMI-tools extract before aligning).",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam"
+        },
+        {
+          "name": "index",
+          "label": "BAM index",
+          "description": "The .bai file next to the BAM (made by samtools index). It has to be called like the BAM with .bai added.",
+          "types": [
+            "bai"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "sorted.bam.bai"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "deduplicated",
+          "label": "Alignments without duplicates",
+          "description": "The BAM with one read kept for every group of duplicates.",
+          "types": [
+            "bam"
+          ],
+          "pattern": "deduplicated.bam",
+          "is_dir": false
+        },
+        {
+          "name": "log",
+          "label": "Deduplication log",
+          "description": "How many reads went in and came out. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "umi_dedup.log",
+          "is_dir": false
+        },
+        {
+          "name": "stats_dir",
+          "label": "UMI statistics folder",
+          "description": "Tables about UMI errors and counts per position (UMI-tools --output-stats), for your own checks. MultiQC needs only the log.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "umi_stats/",
+          "is_dir": true
+        }
+      ],
+      "params": [
+        {
+          "id": "method",
+          "label": "How to count UMIs",
+          "type": "select",
+          "default": "directional",
+          "options": [
+            "directional",
+            "unique",
+            "percentile",
+            "cluster",
+            "adjacency"
+          ],
+          "option_labels": {
+            "directional": "Directional (recommended)",
+            "unique": "Unique: only identical UMIs are one molecule",
+            "percentile": "Percentile: ignores UMIs far rarer than the commonest",
+            "cluster": "Cluster: every UMI linked by a single error is one molecule",
+            "adjacency": "Adjacency: like cluster, with more careful choosing"
+          },
+          "description": "Directional treats a rare UMI one error away from a much more common one as an error of the common one. It is the usual choice and the tool's default."
+        },
+        {
+          "id": "group_by",
+          "label": "Compare reads by",
+          "type": "select",
+          "default": "position",
+          "options": [
+            "position",
+            "transcript"
+          ],
+          "option_labels": {
+            "position": "Position (right for Ribo-seq)",
+            "transcript": "Whole transcript (counts molecules per transcript)"
+          },
+          "description": "Position: duplicates must start at the same place and share a UMI, as is standard for footprints. Whole transcript keeps one read per UMI and transcript and would erase the codon-level signal."
+        },
+        {
+          "id": "use_read_length",
+          "label": "Also compare the read length",
+          "type": "boolean",
+          "default": true,
+          "flag": "--read-length",
+          "description": "Reads with the same start and UMI but different lengths are different molecules (the 3' end of a footprint is where the enzyme cut), so they are kept. Untick to compare the start only."
+        },
+        {
+          "id": "edit_distance",
+          "label": "UMI errors to allow",
+          "type": "number",
+          "default": 1,
+          "min": 0,
+          "max": 5,
+          "description": "How many differing bases still count as the same UMI (not used by the Unique method). 1 is the tool default."
+        },
+        {
+          "id": "seed",
+          "label": "Random seed",
+          "type": "number",
+          "default": 1,
+          "min": 0,
+          "description": "Which read is kept from a group of duplicates is picked at random; the same seed gives the same result every time."
+        }
+      ],
+      "command": "BAM={alignments}; BAI={index}; if [ ! -s \"$BAM.bai\" ]; then echo \"UMI-tools needs the BAM index next to the BAM, named $BAM.bai. The index given is $BAI.\" >&2; exit 1; fi; GROUP=\"\"; if [ {group_by} = transcript ]; then GROUP=\"--per-gene --per-contig\"; fi; umi_tools dedup -I \"$BAM\" -S {deduplicated} -L {log} --output-stats={stats_dir}dedup --method={method} --edit-distance-threshold={edit_distance} --random-seed={seed} {use_read_length} $GROUP",
+      "threads": 1,
+      "docs": "https://umi-tools.readthedocs.io/en/latest/reference/dedup.html"
+    },
+    {
+      "id": "bowtie2-remove-reads",
+      "name": "Remove reads matching a database (bowtie2)",
+      "description": "Aligns reads to sequences you do not want (rRNA, tRNA, small RNAs, PhiX, a contaminant genome) and keeps the reads that do not match. Matches are counted in the log, not saved.",
+      "category": "trimming",
+      "subcategory": "Remove contaminant reads",
+      "install": {
+        "kind": "conda",
+        "package": "bowtie2",
+        "channel": "bioconda",
+        "version": "2.5.5"
+      },
+      "inputs": [
+        {
+          "name": "index",
+          "label": "Database index",
+          "description": "The index made with Bowtie2 build from the FASTA of the sequences to remove (connect it), or the prefix of one you built yourself.",
+          "types": [
+            "index"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "rRNA_index"
+        },
+        {
+          "name": "reads",
+          "label": "Reads",
+          "description": "Single-end reads in FASTQ format (plain or .gz).",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "unaligned",
+          "label": "Reads that did not match",
+          "description": "The reads that are left, as compressed FASTQ. Connect it to the next step.",
+          "types": [
+            "fastq"
+          ],
+          "pattern": "unmatched.fastq.gz",
+          "is_dir": false
+        },
+        {
+          "name": "log",
+          "label": "Alignment summary",
+          "description": "How many reads matched the database. MultiQC reads it; give each depletion step its own name.",
+          "types": [
+            "txt"
+          ],
+          "pattern": "bowtie2_removal.log",
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "alignment",
+          "label": "How much of a read must match",
+          "type": "select",
+          "default": "--local",
+          "options": [
+            "--local",
+            "--end-to-end"
+          ],
+          "option_labels": {
+            "--local": "Part of the read may match (local, finds the most)",
+            "--end-to-end": "The whole read must match (end to end)"
+          },
+          "description": "Local removes a read when most of it matches, which also catches reads with leftover adapter or linker bases. End to end only removes reads that match along their whole length."
+        },
+        {
+          "id": "sensitivity",
+          "label": "Sensitivity",
+          "type": "select",
+          "default": "very-sensitive",
+          "options": [
+            "very-fast",
+            "fast",
+            "sensitive",
+            "very-sensitive"
+          ],
+          "option_labels": {
+            "very-fast": "Very fast (least thorough)",
+            "fast": "Fast",
+            "sensitive": "Sensitive",
+            "very-sensitive": "Very sensitive (slowest, finds the most)"
+          },
+          "description": "Speed against thoroughness. Very sensitive is worth it here: a read that escapes removal is counted as sample."
+        },
+        {
+          "id": "seed_length",
+          "label": "Seed length (0 = keep the preset)",
+          "type": "number",
+          "default": 0,
+          "min": 0,
+          "max": 31,
+          "description": "Length of the exact match (-L) bowtie2 starts from. 0 keeps the preset's (20); otherwise 4 to 31. A shorter seed such as 16 finds more distant matches in 25 to 35 base reads."
+        }
+      ],
+      "command": "set -o pipefail; set --; if [ {seed_length} -gt 0 ]; then set -- -L {seed_length}; fi; bowtie2 -p {threads} --reorder --{sensitivity} {alignment} \"$@\" -x {index} -U {reads} --un-gz {unaligned} -S /dev/null 2>&1 | tee {log} >&2",
+      "threads": 4,
+      "docs": "https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml#reporting-options"
+    },
+    {
+      "id": "star-riboseq",
+      "name": "STAR (Ribo-seq, transcriptome BAM)",
+      "description": "Aligns footprint reads to the genome and writes them in transcript coordinates, as riboWaltz needs. Defaults suit short footprints; reads that did not align stay in the BAM, marked unmapped.",
+      "category": "alignment",
+      "subcategory": "RNA-seq aligners",
+      "install": {
+        "kind": "conda",
+        "package": "star",
+        "channel": "bioconda",
+        "version": "2.7.10b",
+        "osx64": true
+      },
+      "inputs": [
+        {
+          "name": "index",
+          "label": "Genome index folder (built with the gene annotation)",
+          "description": "The folder made with STAR genome index (connect it). It must have been built with the gene annotation, otherwise STAR cannot write transcript coordinates.",
+          "types": [
+            "index"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "star_index/"
+        },
+        {
+          "name": "reads",
+          "label": "Reads",
+          "description": "Single-end reads in FASTQ format (plain or .gz).",
+          "types": [
+            "fastq"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "reads.fastq.gz"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out_dir",
+          "label": "Output folder",
+          "description": "STAR writes the transcript BAM, its logs and, if asked, the genome BAM into this folder.",
+          "types": [
+            "bam",
+            "txt"
+          ],
+          "pattern": "star_riboseq/",
+          "is_dir": true
+        },
+        {
+          "name": "transcriptome_bam",
+          "label": "Alignments in transcript coordinates",
+          "description": "Aligned.toTranscriptome.out.bam: every read against the transcripts, in the order of the reads. Unaligned reads are in it too (flag 4); filter them with samtools view, then sort and index.",
+          "types": [
+            "bam"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "Aligned.toTranscriptome.out.bam"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "log",
+          "label": "Mapping summary",
+          "description": "STAR's mapping statistics. MultiQC reads it.",
+          "types": [
+            "txt"
+          ],
+          "derived": {
+            "from": "out_dir",
+            "suffix": "Log.final.out"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "align_ends",
+          "label": "How much of a read must align",
+          "type": "select",
+          "default": "EndToEnd",
+          "options": [
+            "EndToEnd",
+            "Local"
+          ],
+          "option_labels": {
+            "EndToEnd": "The whole read (end to end, recommended)",
+            "Local": "Part of the read (soft clipping allowed)"
+          },
+          "description": "End to end keeps every aligned footprint: STAR leaves reads with soft clipping or indels out of the transcript BAM. Local loses the clipped ones from it."
+        },
+        {
+          "id": "max_mismatches",
+          "label": "Most mismatches per read",
+          "type": "number",
+          "default": 2,
+          "min": 0,
+          "max": 10,
+          "description": "Reads with more mismatches are not aligned. 2 suits 25 to 35 base footprints; STAR's own default is 10, which is loose for short reads."
+        },
+        {
+          "id": "max_multimap",
+          "label": "Most places a read may align to",
+          "type": "number",
+          "default": 1,
+          "min": 1,
+          "max": 100,
+          "description": "1 keeps only reads that align to one place, so every footprint has a single position (usual for Ribo-seq). Raise it to keep multi-mapping reads, which are then counted at each place."
+        },
+        {
+          "id": "min_matched",
+          "label": "Fewest matched bases per read",
+          "type": "number",
+          "default": 20,
+          "min": 0,
+          "max": 200,
+          "description": "Reads with fewer matched bases are not aligned. Keep it at or below the shortest read you kept when trimming."
+        },
+        {
+          "id": "genome_bam",
+          "label": "Genome-coordinate BAM",
+          "type": "select",
+          "default": "None",
+          "options": [
+            "None",
+            "BAM SortedByCoordinate"
+          ],
+          "option_labels": {
+            "None": "Do not write one (faster)",
+            "BAM SortedByCoordinate": "Also write it (for a genome browser)"
+          },
+          "description": "The transcript BAM is what riboWaltz uses. A genome BAM is only needed to look at the alignments in a genome browser; it is written as Aligned.sortedByCoord.out.bam in the output folder."
+        }
+      ],
+      "command": "STAR --runThreadN {threads} --genomeDir {index} --readFilesIn {reads} --readFilesCommand gzip -cdf --outFileNamePrefix {out_dir} --outSAMtype {genome_bam} --quantMode TranscriptomeSAM --quantTranscriptomeBan IndelSoftclipSingleend --alignEndsType {align_ends} --outFilterMismatchNmax {max_mismatches} --outFilterMultimapNmax {max_multimap} --outFilterMatchNmin {min_matched} --outSAMunmapped Within",
+      "threads": 8,
+      "docs": "https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf"
+    },
+    {
+      "id": "ribowaltz-report",
+      "name": "riboWaltz report",
+      "description": "Finds where the ribosome sits in each footprint (the P-site offset) and writes one HTML report: lengths, offsets, 3-nt periodicity, start and stop profiles, regions, codon usage, plus TSV tables.",
+      "category": "signal",
+      "subcategory": "Ribosome profiling",
+      "install": {
+        "kind": "conda",
+        "package": "ribowaltz",
+        "channel": "bioconda",
+        "version": "2.0"
+      },
+      "inputs": [
+        {
+          "name": "bams",
+          "label": "Alignments in transcript coordinates",
+          "description": "One BAM per sample, aligned to transcripts (STAR Ribo-seq output after samtools view, sort and UMI-tools dedup). Connect several steps to compare samples.",
+          "types": [
+            "bam"
+          ],
+          "required": true,
+          "multiple": true,
+          "example": "deduplicated.bam"
+        },
+        {
+          "name": "annotation",
+          "label": "Gene annotation",
+          "description": "The GTF the STAR index was built with. Its transcript names must be the ones in the BAM, and each gene should have one transcript.",
+          "types": [
+            "gtf"
+          ],
+          "required": true,
+          "multiple": false,
+          "example": "genes.gtf"
+        },
+        {
+          "name": "genome",
+          "label": "Genome FASTA (optional)",
+          "description": "The genome FASTA of the same release. Without it the report has no codon usage; everything else is still made.",
+          "types": [
+            "fasta"
+          ],
+          "required": false,
+          "multiple": false,
+          "example": "genome.fa"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report_dir",
+          "label": "Report folder",
+          "description": "The report and its tables.",
+          "types": [
+            "html",
+            "tsv"
+          ],
+          "pattern": "ribowaltz/",
+          "is_dir": true
+        },
+        {
+          "name": "report",
+          "label": "HTML report",
+          "description": "ribowaltz_report.html: one self-contained page you can open or send as it is.",
+          "types": [
+            "html"
+          ],
+          "derived": {
+            "from": "report_dir",
+            "suffix": "ribowaltz_report.html"
+          },
+          "is_dir": false
+        },
+        {
+          "name": "offsets",
+          "label": "P-site offsets table",
+          "description": "psite_offsets.tsv: for every read length, where the P-site sits.",
+          "types": [
+            "tsv"
+          ],
+          "derived": {
+            "from": "report_dir",
+            "suffix": "psite_offsets.tsv"
+          },
+          "is_dir": false
+        }
+      ],
+      "params": [
+        {
+          "id": "min_length",
+          "label": "Shortest footprint to analyse",
+          "type": "number",
+          "default": 28,
+          "min": 15,
+          "max": 60,
+          "description": "Reads shorter than this are left out of the offsets and the plots. Look at the read-length plot of your own data; 28 to 34 suits a library whose footprints peak at 31 to 32."
+        },
+        {
+          "id": "max_length",
+          "label": "Longest footprint to analyse",
+          "type": "number",
+          "default": 34,
+          "min": 15,
+          "max": 60,
+          "description": "Reads longer than this are left out. Must not be smaller than the shortest."
+        },
+        {
+          "id": "extremity",
+          "label": "Read end used to find the offset",
+          "type": "select",
+          "default": "auto",
+          "options": [
+            "auto",
+            "5end",
+            "3end"
+          ],
+          "option_labels": {
+            "auto": "Chosen automatically (recommended)",
+            "5end": "5' end of the reads",
+            "3end": "3' end of the reads"
+          },
+          "description": "riboWaltz can place the P-site from either end of the footprint. Automatic picks the end that gives the clearer signal."
+        },
+        {
+          "id": "flanking",
+          "label": "Bases around the start codon",
+          "type": "number",
+          "default": 6,
+          "min": 0,
+          "max": 30,
+          "description": "A read is used to find the offset only if it extends at least this many bases on both sides of the start codon. riboWaltz's default is 6."
+        }
+      ],
+      "command": "GEN=\"{genome}\"; Rscript --vanilla {app_resource:ribowaltz/ribowaltz_report.R} --gtf {annotation} --out {report_dir} --min-length {min_length} --max-length {max_length} --extremity {extremity} --flanking {flanking} --threads {threads} ${GEN:+--fasta \"$GEN\"} -- {bams}",
+      "threads": 2,
+      "docs": "https://github.com/LabTranslationalArchitectomics/riboWaltz"
     }
   ]
 }

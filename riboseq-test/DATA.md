@@ -168,3 +168,31 @@ These are properties of the tools, not of the data, and each needs handling in t
    transcript; for a sense library these are mostly multi-locus artifacts. Filtering them with `samtools view -F 20`
    in the "mapped only" step is closer to what riboWaltz expects than `-F 4`; this is a choice for the user.
 5. On macOS the system `zcat` looks for `file.Z`; use `gzip -dc` in shell steps.
+
+## 7. Running it in RustRunner (catalog entries and test chains)
+
+The catalog (2026.17.0) has an entry for every step of the pipeline; each is run for real on this data by
+`npm run test:tools` (domain `riboseq`, `RustRunner-Desktop/test-tools/chains/riboseq.tools.ts`):
+
+| Pipeline step | Catalog entry | Settings that follow this data (the defaults) |
+|---|---|---|
+| cutadapt | Cutadapt | 3' adapter `AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC`, minimum overlap 10, allowed errors 0.1, minimum length 20 (type the adapter and the overlap: the entry's own defaults are the plain Illumina ones) |
+| umi_tools extract | UMI-tools extract | UMI at the 5' end, length 12, spacer 4 (the entry always uses the regex method with a `discard_1` group, see section 6.1) |
+| bowtie2 vs rRNA, tRNA, ncRNA | Remove reads matching a database (bowtie2), after Bowtie2 build, three times | local, very sensitive, `--reorder`, unaligned reads written with `--un-gz` |
+| STAR | STAR genome index (with the GTF), then STAR (Ribo-seq, transcriptome BAM) | 2.7.10b, end to end, 2 mismatches, one place, `--outSAMunmapped Within`, `--quantMode TranscriptomeSAM` |
+| samtools view, sort, index | samtools view (mapped only, forward strand), samtools sort, samtools index | `-F 4 -G 16`, MAPQ 20 |
+| umi_tools dedup | UMI-tools dedup | directional, by position, read length compared, seed 1 |
+| riboWaltz | riboWaltz report | lengths 28 to 34, automatic read end, 6 flanking bases, genome FASTA for codon usage |
+| MultiQC | MultiQC | every FastQC report and every log |
+
+Run the two chains (the data must have been built with `prepare_data.sh`):
+
+```
+cd RustRunner-Desktop
+TOOLS_DOMAIN=riboseq TOOLS_CHAIN=tiny npm run test:tools             # 200 000 reads, about 90 s
+RIBOSEQ_FULL=1 TOOLS_DOMAIN=riboseq TOOLS_CHAIN=full npm run test:tools   # 5 million reads, about 15 minutes
+```
+
+On the 200 000-read set riboWaltz cannot estimate offsets (13 reads cover an annotated start codon with 6 bases
+on each side); its report then says so in a warning at the top and leaves the sections that need offsets empty.
+The 5-million-read set gives a start-codon pile-up of 351 reads and offsets of 12 to 13 nt for the 30 to 34 nt reads.

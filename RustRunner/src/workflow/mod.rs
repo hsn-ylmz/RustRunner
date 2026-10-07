@@ -9,6 +9,7 @@
 //! - [`parser`]: YAML parsing and loading
 //! - [`validator`]: Validation rules and dependency checking
 //! - [`slots`]: Command placeholders and named file slots
+//! - [`resources`]: Files that ship with the app, used as `{app_resource:path}`
 //! - [`freshness`]: Up-to-date checks that decide which steps can be skipped
 //! - [`planner`]: Execution planning and scheduling
 
@@ -16,6 +17,7 @@ pub mod freshness;
 pub mod model;
 pub mod parser;
 pub mod planner;
+pub mod resources;
 pub mod slots;
 pub mod state;
 pub mod validator;

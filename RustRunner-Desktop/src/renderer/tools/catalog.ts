@@ -297,6 +297,37 @@ const SHA256 = /^[0-9a-f]{64}$/;
 const CONSTRAINT = /^[A-Za-z0-9][A-Za-z0-9._-]*[<>=!~][A-Za-z0-9._+*,<>=!~-]*$/;
 const SLOT_NAME = /^[a-z][a-z0-9_]*$/;
 
+/** The text before the path in a bundled-file placeholder (`RESOURCE_PREFIX` in resources.rs). */
+export const RESOURCE_PREFIX = 'app_resource:';
+
+/** The path of a `{app_resource:path}` placeholder name, or `null` for any other name. */
+export function resourceOf(name: string): string | null {
+  return name.startsWith(RESOURCE_PREFIX) ? name.slice(RESOURCE_PREFIX.length) : null;
+}
+
+/**
+ * Why `path` cannot name a file that ships with the app, or `null` when its
+ * shape is fine. The same rules as `path_problem` in the engine's resources.rs:
+ * relative, plain segments, no `.`, `..` or hidden parts, at most 120 characters.
+ */
+export function resourcePathProblem(path: string): string | null {
+  if (path === '') return 'no file is named after "app_resource:"';
+  if ([...path].length > 120) return 'the path is longer than 120 characters';
+  if (path.startsWith('/')) return "the path must be relative to the app's resources folder";
+  for (const segment of path.split('/')) {
+    if (segment === '') return 'the path has an empty part (a leading, trailing or double /)';
+    if (segment === '.' || segment === '..') return 'the path may not use . or .. parts';
+    if (segment.startsWith('.')) return 'the path may not name hidden files';
+    if (!/^[A-Za-z0-9_.-]+$/.test(segment)) return "the path may only use letters, digits, '_', '-', '.' and '/'";
+  }
+  return null;
+}
+
+/** How the preview names a bundled file: the real folder is the engine's to find. */
+export function resourcePreview(path: string): string {
+  return `RustRunner/app_resources/${path}`;
+}
+
 /** Matches `{name}` placeholders, with the one space before it (see `renderCommand`). */
 const PLACEHOLDER = / ?\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 
@@ -595,6 +626,11 @@ export function validateCatalog(raw: unknown): string[] {
     if (!nonEmpty(entry.command)) {
       errors.push(`${where}: needs a command`);
       continue;
+    }
+    // Files that ship with the app: `{app_resource:path}`, checked like the engine checks them.
+    for (const match of entry.command.matchAll(/\{app_resource:([^}]*)\}/g)) {
+      const problem = resourcePathProblem(match[1]);
+      if (problem) errors.push(`${where}: {app_resource:${match[1]}}: ${problem}`);
     }
     const defined = new Set<string>(['threads', ...slotNamesSeen, ...params.map((p) => p.id)]);
     const used = templatePlaceholders(entry.command);

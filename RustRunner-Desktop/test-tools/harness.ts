@@ -114,6 +114,8 @@ export interface Chain {
    */
   build?: () => BuiltChain;
   verify?: (dir: string) => Check[];
+  /** The chain runs only when this environment variable is set to 1 (a long chain on a big data set). */
+  requiresEnv?: string;
 }
 
 export interface DomainDefinition {
@@ -224,9 +226,17 @@ export function ensurePod5Data(): void {
   fs.writeFileSync(stamp, wanted);
 }
 
-function sandboxEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  // HOME is the sandbox so the engine's $HOME/.rustrunner never touches the real home.
-  return { ...process.env, HOME, PATH: `${BIN}:${process.env.PATH}`, ...extra };
+export function sandboxEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  // HOME is the sandbox so the engine's $HOME/.rustrunner never touches the real home. Tools
+  // that keep a cache of their own (matplotlib's font cache, XDG caches) are pointed there too.
+  return {
+    ...process.env,
+    HOME,
+    MPLCONFIGDIR: path.join(HOME, '.matplotlib'),
+    XDG_CACHE_HOME: path.join(HOME, '.cache'),
+    PATH: `${BIN}:${process.env.PATH}`,
+    ...extra,
+  };
 }
 
 export function run(cmd: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
@@ -268,6 +278,10 @@ function installEngine(): string {
   fs.copyFileSync(path.join(ENGINE_DIR, 'target', 'debug', 'rustrunner'), exe);
   fs.chmodSync(exe, 0o755);
   fs.writeFileSync(path.join(BIN, 'env_map.json'), JSON.stringify({ map: {} }));
+  // Files that ship with the app ({app_resource:...}): the engine looks for `app_resources/` beside its
+  // own executable, as in the packaged app. Copied fresh so a changed script is the one that runs.
+  fs.rmSync(path.join(BIN, 'app_resources'), { recursive: true, force: true });
+  fs.cpSync(path.join(ENGINE_DIR, 'runtime', 'app_resources'), path.join(BIN, 'app_resources'), { recursive: true });
   return exe;
 }
 
@@ -476,7 +490,7 @@ export function defineDomain(definition: DomainDefinition): void {
     });
 
     for (const chain of chains) {
-      it.skipIf(!chainSelected(chain.name))(`chain: ${chain.name}`, async () => {
+      it.skipIf(!chainSelected(chain.name) || (chain.requiresEnv !== undefined && process.env[chain.requiresEnv] !== '1'))(`chain: ${chain.name}`, async () => {
         const dir = path.join(RUNS, chain.name);
         fs.rmSync(dir, { recursive: true, force: true });
         fs.mkdirSync(dir, { recursive: true });

@@ -9,6 +9,7 @@
 //! | `{output}`, `{outputs}` | the step's `output` files |
 //! | `{threads}` | the step's thread count |
 //! | `{name}` | the files of the named input or output `name` |
+//! | `{app_resource:path}` | the absolute path of a file that ships with the app (see [`super::resources`]) |
 //!
 //! Steps without `named_inputs` and `named_outputs` keep the original, plain
 //! behaviour: the four `{input}`-style placeholders are replaced and nothing
@@ -35,6 +36,7 @@
 use std::collections::HashMap;
 
 use super::model::Step;
+use super::resources;
 
 /// Placeholders the engine fills for every step.
 pub const BUILTIN_PLACEHOLDERS: [&str; 5] = ["input", "output", "inputs", "outputs", "threads"];
@@ -123,8 +125,8 @@ const PROBLEM_NESTED: &str =
     "it follows a double-quoted string that also holds $(...) or a backtick";
 const PROBLEM_BACKTICK: &str = "it is inside a `...` command; write $(...) instead";
 
-/// If `chars[i..]` starts with `{identifier}`, returns the identifier and the
-/// index just after the closing brace.
+/// If `chars[i..]` starts with `{identifier}` (or `{app_resource:path}`),
+/// returns the name and the index just after the closing brace.
 fn brace_name(chars: &[char], i: usize) -> Option<(String, usize)> {
     if chars.get(i) != Some(&'{') {
         return None;
@@ -133,9 +135,14 @@ fn brace_name(chars: &[char], i: usize) -> Option<(String, usize)> {
     let mut name = String::new();
     while let Some(&c) = chars.get(j) {
         if c == '}' {
-            return is_identifier(&name).then_some((name, j + 1));
+            let ok = is_identifier(&name)
+                || resources::resource_of(&name).is_some_and(|rel| !rel.is_empty());
+            return ok.then_some((name, j + 1));
         }
-        if !(c.is_ascii_alphanumeric() || c == '_') {
+        // Letters, digits and `_` make a slot name. A bundled-file reference
+        // may also hold `:`, `.`, `/` and `-`; the path itself is checked
+        // where it is resolved, so a bad one gets a message of its own.
+        if !(c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.' | '/' | '-')) {
             return None;
         }
         name.push(c);
@@ -355,10 +362,22 @@ enum Binding {
     Empty,
     /// A slot of the step that has no usable file.
     Unbound,
+    /// A bundled file that cannot be used; the message says why.
+    Resource(String),
     Unknown,
 }
 
-fn binding_of(step: &Step, name: &str) -> Binding {
+fn binding_of(
+    step: &Step,
+    name: &str,
+    resolve: &dyn Fn(&str) -> Result<String, String>,
+) -> Binding {
+    if let Some(rel) = resources::resource_of(name) {
+        return match resolve(rel) {
+            Ok(path) => Binding::Files(vec![path]),
+            Err(message) => Binding::Resource(message),
+        };
+    }
     match name {
         "input" | "inputs" => Binding::Files(step.plain_inputs()),
         "output" | "outputs" => Binding::Files(step.plain_outputs()),
@@ -436,6 +455,17 @@ pub fn declaration_problems(step: &Step) -> Vec<String> {
 /// never fails. For a step with named slots every placeholder must resolve,
 /// and the errors name each one that does not.
 pub fn render_command(step: &Step) -> Result<String, Vec<String>> {
+    render_command_with(step, &|rel| {
+        resources::resolve(rel).map(|path| path.to_string_lossy().into_owned())
+    })
+}
+
+/// [`render_command`] with the lookup of `{app_resource:...}` files given, so
+/// tests do not depend on where the app is installed.
+pub fn render_command_with(
+    step: &Step,
+    resolve: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<String, Vec<String>> {
     if !step.is_structured() {
         let inputs = shell_join(&step.plain_inputs());
         let outputs = shell_join(&step.plain_outputs());
@@ -462,7 +492,7 @@ pub fn render_command(step: &Step) -> Result<String, Vec<String>> {
                 name,
                 quote,
                 problem,
-            } => match binding_of(step, &name) {
+            } => match binding_of(step, &name, resolve) {
                 Binding::Unknown => note(
                     format!(
                         "Step '{}': the command uses {{{name}}}, but the step has no input or output called \"{name}\". \
@@ -478,6 +508,9 @@ pub fn render_command(step: &Step) -> Result<String, Vec<String>> {
                     ),
                     &mut errors,
                 ),
+                Binding::Resource(message) => {
+                    note(format!("Step '{}': {}", step.id, message), &mut errors)
+                }
                 Binding::Files(_) | Binding::Threads(_) if problem.is_some() => note(
                     format!(
                         "Step '{}': {{{name}}} cannot be filled safely because {}. Move it outside the quotes: the engine quotes file names itself",
@@ -880,6 +913,93 @@ mod tests {
     }
 
     // ---- optional slots ----
+
+    // ---- bundled files: {app_resource:path} ----
+
+    fn fake_resources(rel: &str) -> Result<String, String> {
+        match rel {
+            // An install folder with a space and a quote must still be one word.
+            "tools/run.R" => Ok("/opt/it's Rust Runner/app_resources/tools/run.R".to_string()),
+            other => Err(format!("{{app_resource:{}}}: not installed", other)),
+        }
+    }
+
+    #[test]
+    fn test_app_resource_is_scanned_as_one_placeholder() {
+        assert_eq!(
+            placeholder_names("Rscript {app_resource:ribowaltz/a-b_c.R} {bam}"),
+            vec!["app_resource:ribowaltz/a-b_c.R", "bam"]
+        );
+        // Not a bundled-file reference: nothing after the prefix, or odd characters.
+        assert_eq!(
+            placeholder_names("{app_resource:} {app_resource: x} {app_resource:a;b} {other:x}"),
+            Vec::<String>::new()
+        );
+        // The escape keeps the text.
+        let s = step("echo {{app_resource:a.R}}").with_named_input("x", &["f"]);
+        assert_eq!(
+            render_command_with(&s, &fake_resources).unwrap(),
+            "echo {app_resource:a.R}"
+        );
+    }
+
+    #[test]
+    fn test_app_resource_is_filled_with_a_quoted_absolute_path() {
+        let s =
+            step("Rscript {app_resource:tools/run.R} {reads}").with_named_input("reads", &["a.fq"]);
+        let text = render_command_with(&s, &fake_resources).unwrap();
+        assert_eq!(
+            text,
+            "Rscript '/opt/it'\\''s Rust Runner/app_resources/tools/run.R' 'a.fq'"
+        );
+    }
+
+    #[test]
+    fn test_app_resource_follows_the_quote_context() {
+        let s = step("sh -c \"Rscript {app_resource:tools/run.R}\"").with_named_input("x", &["f"]);
+        assert_eq!(
+            render_command_with(&s, &fake_resources).unwrap(),
+            "sh -c \"Rscript /opt/it's Rust Runner/app_resources/tools/run.R\""
+        );
+        let s = step("echo 'x {app_resource:tools/run.R}'").with_named_input("x", &["f"]);
+        assert_eq!(
+            render_command_with(&s, &fake_resources).unwrap(),
+            "echo 'x /opt/it'\\''s Rust Runner/app_resources/tools/run.R'"
+        );
+    }
+
+    #[test]
+    fn test_app_resource_that_cannot_be_used_is_an_error_naming_it() {
+        let s =
+            step("Rscript {app_resource:ribowaltz/missing.R} {x}").with_named_input("x", &["f"]);
+        let errors = render_command_with(&s, &fake_resources).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("Step 's'"), "{:?}", errors);
+        assert!(errors[0].contains("ribowaltz/missing.R"), "{:?}", errors);
+    }
+
+    #[test]
+    fn test_app_resource_is_refused_where_nothing_can_be_filled_safely() {
+        let s = step("cat <<EOF\n{app_resource:tools/run.R}\nEOF").with_named_input("x", &["f"]);
+        let errors = render_command_with(&s, &fake_resources).unwrap_err();
+        assert!(errors[0].contains("here-document"), "{:?}", errors);
+    }
+
+    #[test]
+    fn test_app_resource_in_a_plain_step_stays_text() {
+        // A step without slots keeps the original plain replacement.
+        let s = step("echo {app_resource:a.R} {input}").with_input("i");
+        assert_eq!(
+            render_command_with(&s, &fake_resources).unwrap(),
+            "echo {app_resource:a.R} 'i'"
+        );
+    }
+
+    #[test]
+    fn test_app_resource_is_not_an_unused_slot() {
+        let s = step("Rscript {app_resource:a.R} {reads}").with_named_input("reads", &["f"]);
+        assert!(unused_slots(&s).is_empty());
+    }
 
     #[test]
     fn test_optional_empty_slot_expands_to_nothing() {

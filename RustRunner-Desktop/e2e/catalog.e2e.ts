@@ -117,19 +117,19 @@ test('a required option is flagged until it is filled in, and a free-form node s
   await addFromPalette(page, 'cutadapt', 'cutadapt');
   await openSection(page, 'advanced');
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'cutadapt -j 4 -a AGATCGGAAGAGC -m 20 -q 20 -o {trimmed} {reads} > {report}'
+    'cutadapt -j 4 -a AGATCGGAAGAGC -e 0.1 -O 3 -m 20 -q 20 -o {trimmed} {reads} > {report}'
   );
   await expect(page.getByTestId('catalog-missing')).toHaveCount(0);
 
   await page.getByTestId('catalog-param-adapter').fill('');
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'cutadapt -j 4 -a {adapter} -m 20 -q 20 -o {trimmed} {reads} > {report}'
+    'cutadapt -j 4 -a {adapter} -e 0.1 -O 3 -m 20 -q 20 -o {trimmed} {reads} > {report}'
   );
   await expect(page.getByTestId('catalog-missing')).toContainText("3' adapter sequence");
 
   await page.getByTestId('catalog-param-adapter').fill('CTGTCTCTTATA');
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'cutadapt -j 4 -a CTGTCTCTTATA -m 20 -q 20 -o {trimmed} {reads} > {report}'
+    'cutadapt -j 4 -a CTGTCTCTTATA -e 0.1 -O 3 -m 20 -q 20 -o {trimmed} {reads} > {report}'
   );
   await expect(page.getByTestId('catalog-missing')).toHaveCount(0);
 
@@ -137,7 +137,7 @@ test('a required option is flagged until it is filled in, and a free-form node s
   await page.getByTestId('prop-tool').fill('bash');
   await expect(page.getByTestId('catalog-params')).toHaveCount(0);
   await expect(page.getByTestId('prop-command')).toHaveValue(
-    'cutadapt -j 4 -a CTGTCTCTTATA -m 20 -q 20 -o {trimmed} {reads} > {report}'
+    'cutadapt -j 4 -a CTGTCTCTTATA -e 0.1 -O 3 -m 20 -q 20 -o {trimmed} {reads} > {report}'
   );
 
   // The plain button still adds an empty custom node.

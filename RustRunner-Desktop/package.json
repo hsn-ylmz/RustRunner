@@ -80,6 +80,10 @@
         "to": "env_map.json"
       },
       {
+        "from": "../RustRunner/runtime/app_resources",
+        "to": "app_resources"
+      },
+      {
         "from": "assets",
         "to": "assets",
         "filter": [

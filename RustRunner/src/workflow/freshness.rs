@@ -86,6 +86,11 @@ struct Definition<'a> {
     named_inputs: BTreeMap<&'a str, &'a [String]>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     named_outputs: BTreeMap<&'a str, &'a [String]>,
+    /// Content digest of each bundled file the command runs
+    /// (`{app_resource:...}`), so an app update that changes a script runs the
+    /// step again. Left out when the command names none.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    resources: BTreeMap<String, String>,
 }
 
 /// Hash of a step's effective definition, as recorded in the run state.
@@ -107,6 +112,11 @@ pub fn definition_hash(step: &Step, env: Option<&str>) -> String {
         checks: &step.checks,
         named_inputs: ordered(&step.named_inputs),
         named_outputs: ordered(&step.named_outputs),
+        resources: if step.is_structured() {
+            super::resources::digests(&step.command)
+        } else {
+            BTreeMap::new()
+        },
     };
     // Serializing plain strings and numbers cannot fail.
     let canonical = serde_json::to_string(&definition).unwrap_or_default();

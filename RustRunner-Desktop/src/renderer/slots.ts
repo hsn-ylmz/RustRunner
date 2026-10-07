@@ -25,6 +25,9 @@ import {
   ANY_TYPE,
   CATALOG,
   findTool,
+  resourceOf,
+  resourcePathProblem,
+  resourcePreview,
   shellQuote,
   typesFit,
   type Catalog,
@@ -57,14 +60,18 @@ const PROBLEM_BACKTICK = 'it is inside a `...` command; write $(...) instead';
 const isNameChar = (c: string) => /[A-Za-z0-9_]/.test(c);
 const isIdentifier = (name: string) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
 
-/** `{identifier}` starting at `i`: the name and the index after the closing brace. */
+/**
+ * `{identifier}` (or a bundled-file reference, `{app_resource:path}`) starting
+ * at `i`: the name and the index after the closing brace. A reference may also
+ * hold `:`, `.`, `/` and `-`; its path is checked where it is resolved.
+ */
 function braceName(text: string, i: number): { name: string; end: number } | null {
   if (text[i] !== '{') return null;
   let name = '';
   for (let j = i + 1; j < text.length; j++) {
     const c = text[j];
-    if (c === '}') return isIdentifier(name) ? { name, end: j + 1 } : null;
-    if (!isNameChar(c)) return null;
+    if (c === '}') return isIdentifier(name) || (resourceOf(name) ?? '') !== '' ? { name, end: j + 1 } : null;
+    if (!(isNameChar(c) || ':./-'.includes(c))) return null;
     name += c;
   }
   return null;
@@ -455,7 +462,10 @@ export function slotDefsFor(data: any, catalog: Catalog = CATALOG): SlotDef[] {
   const kinds = slotKindsOf(data);
   const command = typeof data?.command === 'string' ? data.command : '';
   return placeholderNames(command)
-    .filter((name) => !BUILTIN_PLACEHOLDERS.includes(name.toLowerCase()) && name !== wildcard)
+    .filter(
+      (name) =>
+        !BUILTIN_PLACEHOLDERS.includes(name.toLowerCase()) && name !== wildcard && resourceOf(name) === null
+    )
     .map((name) => {
       const known = declared.find((d) => d.id === name);
       if (known) return known;
@@ -1005,6 +1015,20 @@ export function previewCommand(command: string, ctx: PreviewContext): Preview {
     const { name, quote, problem } = part;
     if (name === 'threads') {
       pieces.push({ text: String(ctx.threads), state: 'filled', name });
+      continue;
+    }
+    const bundled = resourceOf(name);
+    if (bundled !== null) {
+      // A file that ships with the app: the engine fills in its real path.
+      const bad = resourcePathProblem(bundled);
+      if (ctx.structured && bad === null && !problem) {
+        pieces.push({ text: fillFiles([resourcePreview(bundled)], quote), state: 'filled', name });
+      } else if (ctx.structured) {
+        pieces.push({ text: `{${name}}`, state: 'missing', name, reason: bad === null ? 'unsafe' : 'unknown' });
+        addMissing(name);
+      } else {
+        addText(`{${name}}`);
+      }
       continue;
     }
     const files = builtin(name) ?? (ctx.structured ? ctx.slots[name] : undefined);
