@@ -1,6 +1,6 @@
 {
   "name": "rustrunner-desktop",
-  "version": "0.11.1",
+  "version": "1.0.0-beta.1",
   "description": "Visual Workflow Execution Engine for Bioinformatics Pipelines",
   "main": "dist/main/main.js",
   "scripts": {
@@ -21,7 +21,9 @@
     "test": "vitest run",
     "test:tools": "cross-env RUSTRUNNER_REAL_TOOLS=1 vitest run --config vitest.tools.config.mts",
     "ux:screens": "cargo build --manifest-path ../RustRunner/Cargo.toml && npm run build && node scripts/ux-screens.js",
-    "test:e2e": "cargo build --manifest-path ../RustRunner/Cargo.toml && npm run build && playwright test"
+    "test:e2e": "cargo build --manifest-path ../RustRunner/Cargo.toml && npm run build && playwright test",
+    "docs:gifs": "cargo build --manifest-path ../RustRunner/Cargo.toml && npm run build && cross-env PLAYWRIGHT_BROWSERS_PATH=../.sandbox/pw-browsers playwright install ffmpeg && cross-env PLAYWRIGHT_BROWSERS_PATH=../.sandbox/pw-browsers playwright test -c playwright.docs.config.ts && node scripts/docs-gifs.js",
+    "docs:site": "node scripts/docs-site.js"
   },
   "author": "Hasan Yilmaz",
   "license": "MIT",

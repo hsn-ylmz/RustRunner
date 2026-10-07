@@ -1,6 +1,7 @@
 /** Slim banner reporting auto-update status. */
 
 import { Button, Icon, IconButton, type IconName } from '../ui';
+import { versionLabel } from '../versionLabel';
 
 /**
  * Status payloads emitted by the main process over the 'update-status'
@@ -87,7 +88,7 @@ export function UpdateBanner({
       busy = true;
       break;
     case 'available':
-      title = `Update available — v${status.version}`;
+      title = `Update available — ${versionLabel(status.version)}`;
       if (status.canAutoInstall) {
         detail = 'Downloading in the background…';
       } else {
@@ -109,7 +110,7 @@ export function UpdateBanner({
       break;
     }
     case 'downloaded':
-      title = `Update ready — v${status.version}`;
+      title = `Update ready — ${versionLabel(status.version)}`;
       detail = status.canAutoInstall
         ? 'Restart RustRunner to install.'
         : 'Open the GitHub release page to install.';
@@ -121,7 +122,7 @@ export function UpdateBanner({
       icon = 'check';
       break;
     case 'up-to-date':
-      title = `You're up to date — v${status.version}`;
+      title = `You're up to date — ${versionLabel(status.version)}`;
       variant = 'success';
       icon = 'check';
       break;

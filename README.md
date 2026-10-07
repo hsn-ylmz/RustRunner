@@ -3,429 +3,215 @@
 
 # RustRunner
 
-**Visual Workflow Execution Engine for Bioinformatics Pipelines**
+**Build and run bioinformatics pipelines by drawing them. No workflow language, no command line.**
 
+[![Version: 1.0.0-beta.1](https://img.shields.io/badge/version-1.0.0--beta.1-orange.svg)](CHANGELOG.md)
+[![Status: open beta](https://img.shields.io/badge/status-open%20beta-orange.svg)](#limitations-of-the-beta)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Electron](https://img.shields.io/badge/Electron-35.0.2-47848F.svg)](https://www.electronjs.org/)
-[![Rust](https://img.shields.io/badge/Rust-2021_Edition-orange.svg)](https://www.rust-lang.org/)
-[![React](https://img.shields.io/badge/React-18.3-61DAFB.svg)](https://reactjs.org/)
 
----
+> ## Open beta
+>
+> **1.0.0-beta.1 is the first public beta of RustRunner 1.0.** It is meant to be used and criticised. macOS on Apple silicon is
+> the best tested platform; Windows and Linux builds are published but have not been tested end to end. Please
+> [report what breaks](https://github.com/hsn-ylmz/RustRunner/issues). The [limitations](#limitations-of-the-beta) are listed
+> below, and what changed since 0.11.1 is in the [changelog](CHANGELOG.md).
 
-## Overview
+## What it is
 
-RustRunner is a desktop application for creating and executing bioinformatics workflow pipelines through a visual, node-based interface. It is designed for researchers who need powerful workflow automation without command-line expertise.
+RustRunner is a desktop app for people who analyse sequencing data but are not programmers. You pick a template or add tools
+from a catalog, connect them on a canvas, and press **Run**. Every setting is a labelled field with a hint, and every tool
+installs itself into its own isolated conda environment the first time it is needed. Nothing has to be written in a workflow
+language, and the pipeline never needs a terminal.
 
-The application pairs a **React/Electron** frontend with a **Rust** backend execution engine, offering real-time output streaming, parallel job scheduling, pause/resume control, and integrated conda environment management via micromamba.
+Under the canvas is a Rust engine that schedules the steps in parallel, retries and times them out, checks their output files,
+skips what is already up to date, and writes an HTML report of every run.
 
-### Key Features
+From a template to a finished run (the real app on public Ribo-seq data; long waits are cut from the video, nothing is simulated):
 
-- **Visual Workflow Editor** -- Drag-and-drop node-based interface built with React Flow for designing pipelines
-- **Parallel Execution** -- Configurable parallel job scheduling with dependency-aware DAG resolution
-- **Batch Processing** -- Wildcard pattern support (`{sample}.fastq`) for processing multiple files in one run
-- **Dry Run Mode** -- Preview generated commands without executing them
-- **Pause / Resume** -- Pause and resume running workflows at any time
-- **Conda Integration** -- Automatic per-tool environment isolation via micromamba
-- **Real-Time Logging** -- Live execution output streamed from the Rust engine to the GUI
-- **Resource Monitoring** -- CPU and memory usage tracking during execution
-- **Cross-Platform** -- Builds for macOS, Windows, and Linux
+![Choosing the Ribo-seq template, picking the input files, creating the workflow and running it](docs/media/template-to-run.gif)
 
----
+## Features
 
-## Technology Stack
+### Start from a template
 
-| Layer | Technology | Role |
-|-------|-----------|------|
-| **Frontend** | Electron 35.0.2, React 18.3, TypeScript 5.8 | Desktop shell, visual workflow editor |
-| **Visual Editor** | React Flow (@xyflow/react 12.4) | Node-based graph interface |
-| **Bundler** | Webpack 5.98 | Module bundling for the renderer process |
-| **Backend** | Rust (2021 edition), Tokio 1.35 | Workflow parsing, execution engine, process management |
-| **Serialization** | serde, serde_yaml, serde_json | YAML/JSON workflow parsing |
-| **Env Management** | Micromamba | Lightweight conda alternative for tool isolation |
-| **Packaging** | electron-builder 26.7 | Cross-platform application packaging |
+14 templates build a whole pipeline from your files. The settings that depend on your library (adapter, UMI, strandedness, genome
+size) are asked before the workflow is created, not hidden in a step.
 
----
+| Field | Templates |
+|---|---|
+| Read quality | Basic read quality check (FastQC, fastp, MultiQC) |
+| RNA sequencing | Ribo-seq with UMIs (riboWaltz); RNA-seq alignment and gene counts (HISAT2, featureCounts); RNA-seq quantification (Salmon) |
+| DNA sequencing | Germline variant calling with bcftools (single-end and paired-end); with GATK |
+| Epigenomics | ChIP-seq peaks (MACS3); ATAC-seq open chromatin (Genrich) |
+| Long reads | Nanopore reads from FASTQ to coverage; Nanopore from raw signal to coverage (Dorado) |
+| Metagenomics | Kraken2 and Bracken |
+| Genome assembly | Short reads (SPAdes and QUAST); long reads (Flye and QUAST) |
 
-## GUI
-<img width="1704" height="956" alt="Screenshot 2026-02-02 at 23 21 03" src="https://github.com/user-attachments/assets/e655deeb-ca1c-4204-9cff-0292cac81ba8" />
+The full list, with the tools each one uses, is on the [project site](docs/library.html) (generated from the app's own data).
 
-<img width="839" height="805" alt="Screenshot 2026-02-02 at 23 22 05" src="https://github.com/user-attachments/assets/639c99ab-959e-4be4-8a78-2e1d8d67c149" />
+### A catalog of 85 tools
 
+Search by name, job or file type. Every entry names each file it reads and writes, installs the tool at a pinned version, and was
+run against the real program (not a mock) on small data. "Only tools that fit after the selected step" hides what cannot read
+the step's output. The catalog covers quality control, trimming, alignment, BAM processing, variant calling and annotation,
+RNA-seq quantification, ChIP and ATAC peak calling and signal tracks, genome intervals, FASTA and FASTQ tools, assembly,
+metagenomics, Nanopore signal and Ribo-seq.
+
+![Searching the catalog, filtering to tools that fit, connecting steps so the file slot fills in, and an orange edge for a file type that does not fit](docs/media/catalog-and-slots.gif)
+
+### Named input slots and typed connections
+
+A command is built from named file slots ("Reads", "Reference genome"), not from `{placeholders}` you have to know. Connect two
+steps and the output goes to the slot that accepts its file type; if two slots fit, you are asked which. A green edge fits, an
+orange dashed edge says what the next step expects and what it gets. Everything done by dragging also has a form ("Runs after").
+
+### Runs you can trust
+
+- **Retries, timeouts and output checks.** Set retries (fixed or exponential delay), a time limit per attempt, and checks that
+  an output exists, is not empty, or has enough lines. A failed blocking check stops the steps that depend on it.
+- **Test runs.** A step can be mocked: the tool is skipped and empty outputs are made, to test the rest of a pipeline.
+- **Up-to-date skipping.** Run skips a step whose settings are unchanged, whose outputs exist and whose inputs are not newer;
+  Run from scratch runs everything. Edit one step and only it and the steps after it run again.
+- **Keep going.** After a failure the independent branches still run, and the run ends as failed.
+- **Live status.** Each step shows waiting, running, retrying (with the attempt), done, failed or skipped with an icon and words;
+  the log can be searched, filtered and copied. Stop ends the whole process tree of every step.
+- **Run report and history.** Every run writes a self-contained HTML report (graph, per-step status, duration, command, checks,
+  resource use) and is listed in the Run history. Templates that end in MultiQC give one combined quality report.
+- **Failures that explain themselves.** A card names the step, the file and the setting; **Edit step** opens exactly that setting.
+
+![A blocking output check fails, the failure card names it, the step is edited, the run repeated and the report opened](docs/media/failure-and-report.gif)
+
+### Also
+
+Pause and resume, dry run, resource monitoring, favourites and recently used tools in the palette, your own templates (save any
+canvas as a template), light and dark themes, and a keyboard path for building and running a workflow.
+
+## Install
+
+Download the file for your system from the [releases page](https://github.com/hsn-ylmz/RustRunner/releases). The open beta is
+marked as a pre-release.
+
+| System | File |
+|---|---|
+| macOS, Apple silicon | `.dmg` or `.zip` (arm64) |
+| macOS, Intel | `.dmg` or `.zip` (x64) |
+| Windows 64-bit | `.exe` installer |
+| Linux 64-bit | `.AppImage` |
+
+**macOS and Windows warn about an unknown developer.** The builds are not signed. On macOS, drag RustRunner to Applications,
+Control-click it, choose **Open**, and confirm. If macOS still refuses ("damaged" or "cannot be opened"), run once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/RustRunner.app
+```
+
+**Updates.** The app checks GitHub for a new release when it starts and from **Help > Check for Updates**. On Windows and Linux it
+downloads and installs the update; on macOS (unsigned) it tells you and links to the download page. A beta build is offered the
+next beta and then the final 1.0; a stable build (0.11.x) is never offered a beta.
+
+**First run.** The app needs micromamba to install tools. If it is missing, Run stops before any step with a card and an
+**Install the tool installer** button (a pinned, checksummed download over https). Each tool is installed the first time a
+workflow needs it, so the first run needs a network and several GB of disk space; later runs reuse the environments.
+
+## First run: a five-minute tour
+
+1. Open RustRunner and click **Start from a template** (or **Templates** in the toolbar).
+2. Pick **Basic read quality check**, choose a FASTQ file under **Your files**, and click **Create workflow**.
+3. Click **Choose results folder** (top left) and pick an empty folder.
+4. Click **Run**. The steps turn from waiting to running to done; **Open report** on the summary card shows the run report.
+5. Try the catalog: **Tool catalog**, search a tool, add it, and drag from one step's lower handle to the next step's upper
+   handle. The slot fills in and the edge shows green when the file types fit.
+
+## Example with real data: Ribo-seq
+
+[`riboseq-test/`](riboseq-test/README.md) runs the template **Ribo-seq with UMIs (riboWaltz)** (20 steps) on public human
+HEK293T data (GEO GSE158374, run SRR12693498): UMI extraction, rRNA, tRNA and ncRNA depletion, STAR to transcripts, UMI
+deduplication, a riboWaltz report and MultiQC. `riboseq-test/prepare_data.sh` downloads and builds the data (checksummed), and the
+README there lists the files to choose, the settings, the numbers to expect and what to look at critically. A walkthrough is on the
+[project site](docs/ribo-seq.html).
+
+## Run from source
+
+Requirements: [Rust](https://www.rust-lang.org/tools/install) (stable, 2021 edition), [Node.js](https://nodejs.org/) 20 or
+newer with npm, and, on Linux, the system libraries Electron needs. micromamba is installed by the app when needed.
+
+```bash
+git clone https://github.com/hsn-ylmz/RustRunner.git
+cd RustRunner/RustRunner && cargo build          # the engine (debug build, found by the app in development)
+cd ../RustRunner-Desktop && npm install
+npm start                                        # builds the app and starts it
+```
+
+Other scripts in `RustRunner-Desktop`:
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Webpack dev server with hot reload, then Electron |
+| `npm test` | Unit tests (vitest), including the design-system checks |
+| `npm run test:e2e` | Builds the engine and app and drives the real app with Playwright |
+| `npm run test:tools` | Opt-in: runs catalog tools and templates against the real programs (installs conda environments; slow) |
+| `npm run docs:gifs` | Re-records the GIFs in `docs/media/` from the real app (needs the environments `test:tools` builds, and ffmpeg) |
+| `npm run docs:site` | Regenerates the project site in `docs/` from the catalog and templates |
+| `npm run package:mac`, `package:win`, `package:linux` | Packages the app (needs `cargo build --release` first) |
+
+Engine tests: `cd RustRunner && cargo test`. The engine can also run a workflow file directly:
+`cargo run -- workflow.yaml --dry-run`; `rustrunner --help` lists the options.
 
 ## Architecture
 
 ```
-+----------------------------+         IPC          +-------------------------+
-|   Electron Renderer        | <------------------> |   Electron Main Process |
-|   (React + React Flow)     |   contextBridge      |   (TypeScript/Node.js)  |
-|                            |                      |                         |
-|  - Visual node editor      |                      |  - Window management    |
-|  - Workflow configuration   |                      |  - File dialogs         |
-|  - Real-time log display   |                      |  - YAML serialization   |
-|  - File/dir selection      |                      |  - Child process spawn  |
-+----------------------------+                      +------------+------------+
-                                                                 |
-                                                          spawns |  stdin/stdout
-                                                                 v
-                                                    +-------------------------+
-                                                    |   Rust Engine (CLI)     |
-                                                    |                         |
-                                                    |  - YAML workflow parser |
-                                                    |  - DAG dependency graph |
-                                                    |  - Parallel scheduler   |
-                                                    |  - Micromamba envs      |
-                                                    |  - Resource monitoring  |
-                                                    |  - Pause flag polling   |
-                                                    +-------------------------+
++-----------------------------+   IPC (contextBridge)   +-----------------------------+
+|  Renderer (React + Flow)    | <---------------------> |  Main process (Electron)    |
+|  canvas, palette, forms,    |                         |  windows, dialogs, settings,|
+|  status, logs, history      |                         |  updates, YAML, run history |
++-----------------------------+                         +--------------+--------------+
+                                                                        | spawns, stderr events
+                                                                        v
+                                                         +-----------------------------+
+                                                         |  Rust engine (CLI)          |
+                                                         |  parse, validate, plan,     |
+                                                         |  schedule, run, check,      |
+                                                         |  report; micromamba envs    |
+                                                         +-----------------------------+
 ```
 
-**Communication flow:**
-
-1. The React UI sends workflow data to the main process via Electron IPC
-2. The main process serializes the workflow to YAML and writes it to a temp directory
-3. The main process spawns the Rust binary as a child process
-4. The Rust engine parses the YAML, builds a dependency graph, and executes steps
-5. stdout/stderr from the Rust process is streamed back to the UI in real time
-6. Pause/resume is controlled by the presence/absence of a `pause.flag` file
-
----
-
-## Prerequisites
-
-- **Node.js** >= 18.x
-- **npm** >= 9.x
-- **Rust** >= 1.70 (2021 edition)
-- **Cargo** (included with Rust toolchain)
-
-### Platform-Specific
-
-| Platform | Additional Requirements |
-|----------|------------------------|
-| macOS | Xcode Command Line Tools |
-| Windows | Visual Studio Build Tools (C++ workload) |
-| Linux | `build-essential`, `libgtk-3-dev`, `libwebkit2gtk-4.0-dev` |
-
-### Optional
-
-- **Micromamba** -- Required for workflows that use conda-managed tools. Download from [micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html) and place the binary at `RustRunner/runtime/micromamba`.
-
----
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/rustrunner/rustrunner.git
-cd rustrunner
-
-# Install Node.js dependencies
-cd RustRunner-Desktop
-npm install
-
-# Build the Rust backend (release mode)
-cd ../RustRunner
-cargo build --release
-
-# Return to project root
-cd ..
-```
-
----
-
-## Development
-
-### Run in Development Mode
-
-```bash
-# Terminal 1: Start the Electron app (builds both main + renderer, then launches)
-cd RustRunner-Desktop
-npm start
-```
-
-The `npm start` script runs `npm run build && electron .`, which compiles TypeScript for the main process and bundles the React renderer with Webpack before launching Electron.
-
-### Run with Hot Reload (Renderer)
-
-```bash
-# Start Webpack dev server + Electron concurrently
-cd RustRunner-Desktop
-npm run dev
-```
-
-This launches `webpack-dev-server` on port 3000 with hot module replacement for the React UI, then starts the Electron main process once the dev server is ready.
-
-### Build Rust Backend (Debug)
-
-```bash
-cd RustRunner
-cargo build
-```
-
-### Build Rust Backend (Release)
-
-```bash
-cd RustRunner
-cargo build --release
-```
-
-### Run Rust Tests
-
-```bash
-cd RustRunner
-cargo test
-```
-
-### Run Rust CLI Directly
-
-```bash
-cd RustRunner
-cargo run -- workflow.yaml --dry-run
-cargo run -- workflow.yaml --parallel 8 --working-dir /path/to/data
-```
-
----
-
-## Building for Production
-
-### Build All Components
-
-```bash
-# 1. Build the Rust binary (release mode, optimized)
-cd RustRunner
-cargo build --release
-
-# 2. Build and package the Electron app
-cd ../RustRunner-Desktop
-npm run package
-```
-
-### Platform-Specific Packaging
-
-```bash
-# macOS (DMG + ZIP)
-npm run package:mac
-
-# Windows (NSIS installer)
-npm run package:win
-
-# Linux (AppImage)
-npm run package:linux
-```
-
-### Build Outputs
-
-| Output | Location |
-|--------|----------|
-| Rust binary (release) | `RustRunner/target/release/rustrunner` |
-| Compiled Electron JS | `RustRunner-Desktop/dist/` |
-| Packaged application | `RustRunner-Desktop/release/build/` |
-
-The `afterPack.js` script automatically copies the Rust binary, micromamba, `env_map.json`, and icon assets into the packaged application resources during the build.
-
----
-
-## Project Structure
-
-```
-RustRunner/
-├── .gitignore                          # Git ignore rules
-├── README.md                           # This file
-│
-├── RustRunner/                         # Rust backend (execution engine)
-│   ├── Cargo.toml                      # Rust package manifest
-│   ├── Cargo.lock                      # Dependency lock file
-│   ├── src/
-│   │   ├── main.rs                     # CLI entry point
-│   │   ├── lib.rs                      # Library root & module exports
-│   │   ├── workflow/                   # Workflow parsing & data models
-│   │   │   ├── mod.rs                  # Module exports
-│   │   │   ├── model.rs               # Step & Workflow structs
-│   │   │   ├── parser.rs              # YAML workflow parsing
-│   │   │   ├── validator.rs           # Workflow validation
-│   │   │   ├── planner.rs             # Execution planning & DAG
-│   │   │   ├── state.rs               # State persistence
-│   │   │   └── wildcards.rs           # Batch file pattern expansion
-│   │   ├── execution/                  # Execution engine
-│   │   │   ├── mod.rs
-│   │   │   ├── engine.rs              # Parallel scheduler & runner
-│   │   │   └── step.rs               # Individual step execution
-│   │   ├── environment/                # Conda/micromamba integration
-│   │   │   ├── mod.rs
-│   │   │   └── conda.rs              # Environment creation & activation
-│   │   └── monitoring/                 # Execution monitoring
-│   │       ├── mod.rs
-│   │       ├── resource.rs            # CPU/memory tracking
-│   │       └── timeline.rs            # Event timeline
-│   └── runtime/
-│       ├── env_map.json               # Tool-to-conda-environment mappings
-│       └── micromamba                  # Micromamba binary (not tracked)
-│
-└── RustRunner-Desktop/                 # Electron frontend (desktop GUI)
-    ├── package.json                    # Node dependencies & build config
-    ├── package-lock.json               # Dependency lock file
-    ├── webpack.config.js               # Webpack bundler configuration
-    ├── tsconfig.json                   # Renderer TypeScript config
-    ├── tsconfig.main.json              # Main process TypeScript config
-    ├── assets/                         # Application icons
-    │   ├── icon_light.{png,icns,ico}   # Light mode icons
-    │   └── icon_dark.{png,icns,ico}    # Dark mode icons
-    ├── scripts/
-    │   └── afterPack.js               # Post-build: copies binaries to app bundle
-    └── src/
-        ├── main/                       # Electron main process
-        │   ├── main.ts                # App lifecycle, IPC handlers, process spawning
-        │   ├── preload.ts             # Context bridge (safe API for renderer)
-        │   ├── menu.ts                # Application menu
-        │   └── util.ts                # HTML path resolution helper
-        └── renderer/                   # React renderer process
-            ├── index.tsx              # React entry point
-            ├── index.html             # HTML template
-            ├── App.tsx                # Main workflow editor component
-            ├── App.css                # Application styles
-            └── preload.d.ts           # Type definitions for preload API
-```
-
----
-
-## Configuration
-
-### Environment Mappings (`RustRunner/runtime/env_map.json`)
-
-Maps bioinformatics tool names to their conda environment names. When the Rust engine encounters a step using a mapped tool, it activates the corresponding micromamba environment before execution.
-
-```json
-{
-  "map": {
-    "fastqc": "fastqc",
-    "bowtie2": "bowtie2",
-    "samtools": "samtools",
-    "bwa": "bwa",
-    "hisat2": "hisat2"
-  }
-}
-```
-
-Add entries here for any new tools that require isolated conda environments.
-
-### Electron Builder (`RustRunner-Desktop/package.json` > `build`)
-
-Key packaging settings:
-
-- `asar: false` -- App is not compressed into an ASAR archive (required for native binary access)
-- `extraResources` -- Copies the Rust binary, micromamba, env_map.json, and icons into the packaged app
-- `afterPack` -- Runs `scripts/afterPack.js` for additional binary setup
-
-### Rust CLI Options
-
-```
-Usage: rustrunner [OPTIONS] <WORKFLOW_FILE> [PAUSE_FLAG_PATH]
-
-Arguments:
-  <WORKFLOW_FILE>     Path to workflow YAML file
-  [PAUSE_FLAG_PATH]   Optional path for pause/resume control
-
-Options:
-  --dry-run           Preview commands without execution
-  --working-dir PATH  Set working directory for file operations
-  --parallel N        Maximum parallel jobs (default: 4)
-  --verbose           Enable debug logging
-  --help              Show help message
-  --version           Show version information
-```
-
----
-
-## Troubleshooting
-
-### Rust binary not found when running in development
-
-The main process looks for the debug binary at `../RustRunner/target/debug/rustrunner` relative to the compiled Electron main process. Make sure you have run `cargo build` in the `RustRunner/` directory.
-
-### `npm run package` fails with "Rust executable not found"
-
-The `afterPack.js` script requires a release build of the Rust binary. Run:
-
-```bash
-cd RustRunner
-cargo build --release
-```
-
-### Micromamba-dependent workflows fail
-
-Download the micromamba binary for your platform from [micro.mamba.pm](https://micro.mamba.pm/) and place it at `RustRunner/runtime/micromamba`. Make sure it has executable permissions (`chmod +x`).
-
-### macOS: "app is damaged" or Gatekeeper warnings
-
-The default build configuration disables code signing (`identity: null`). For local development, bypass Gatekeeper:
-
-```bash
-xattr -cr /path/to/RustRunner.app
-```
-
-For distribution, configure code signing in `package.json` under `build.mac`.
-
-### Windows: Missing Visual C++ redistributable
-
-Ensure the Visual Studio Build Tools are installed with the "Desktop development with C++" workload, which provides the MSVC compiler and linker needed by Rust.
-
-### Large `node_modules` or `target/` directories
-
-These directories are build artifacts and can be safely deleted and regenerated:
-
-```bash
-# Regenerate Node dependencies
-cd RustRunner-Desktop && npm install
-
-# Regenerate Rust build
-cd RustRunner && cargo build
-```
-
----
+- The renderer holds the canvas and the forms. It knows the tool catalog (`RustRunner-Desktop/src/renderer/tools/catalog.json`)
+  and the templates (`RustRunner-Desktop/src/renderer/templates/*.json`), and turns a canvas into a workflow.
+- The main process writes the workflow as YAML, starts the engine, passes its events to the renderer, keeps the run history and
+  the settings, and does updates. Pause works by a flag file the engine watches.
+- The engine (`RustRunner/`) builds the dependency graph, runs independent steps in parallel, installs and enters a conda
+  environment per tool, enforces retries, timeouts and output checks, saves the run state under `.rustrunner/`, and reports
+  progress as one JSON event per line (`--json-events`) that the app turns into step status and the run report.
+
+## Limitations of the beta
+
+- macOS on Apple silicon is the primary tested platform. Windows and Linux builds are produced by CI but have not been tested
+  end to end.
+- STAR and a few other tools have no native Apple-silicon build and run as Intel builds, which needs Rosetta.
+- Tool versions are pinned, but their conda dependencies are not fully locked, so a later install can resolve a dependency
+  differently.
+- Tool commands were validated on synthetic and small real data, not on every kind of project. Check the settings of a template
+  against your library before trusting its numbers.
+- Builds are not signed (see Install). On macOS the app does not install updates by itself.
+- Some tools need a database you provide (for example Kraken2); the palette says so before you add them.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Make your changes
-4. Run Rust tests (`cargo test`) and verify the Electron app builds (`npm run build`)
-5. Commit with a descriptive message
-6. Push to your fork and open a Pull Request
+Issues and pull requests are welcome. Please run the checks before opening a pull request:
 
-### Code Style
+```bash
+cd RustRunner && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+cd ../RustRunner-Desktop && npx tsc -p tsconfig.main.json --noEmit && npx tsc -p tsconfig.json --noEmit && npm test && npm run test:e2e
+```
 
-- **Rust**: Follow standard `rustfmt` formatting. Run `cargo fmt` before committing.
-- **TypeScript/React**: Follow the existing project conventions. Use TypeScript strict mode for main process code.
+UI changes follow the design rules in `.claude/skills/ui-ux/SKILL.md` (tokens only, primitives from `src/renderer/ui`, plain
+words). To add a catalog tool, add an entry to `catalog.json` and a case to the real-tool suite (`npm run test:tools`).
 
----
+## Citation and license
 
-## License
+If you use RustRunner in published work, please cite this repository and the version you used (`rustrunner --version` or
+**Help > About RustRunner**), and cite the tools your pipeline ran; each template lists its references. RustRunner is released
+under the [MIT License](LICENSE). Author: Hasan Yilmaz.
 
-This project is licensed under the MIT License.
-
----
-
-## Authors
-
-- **Hasan Yilmaz** -- Creator and primary developer
-
----
-
-## Acknowledgments
-
-- [Electron](https://www.electronjs.org/) -- Cross-platform desktop framework
-- [React Flow](https://reactflow.dev/) -- Node-based graph editor
-- [Tokio](https://tokio.rs/) -- Async Rust runtime
-- [Micromamba](https://mamba.readthedocs.io/) -- Fast conda package manager
-- [electron-builder](https://www.electron.build/) -- Application packaging
-
----
-
-## Roadmap
-
-- [ ] Workflow templates and presets for common bioinformatics pipelines
-- [ ] Workflow import/export in standard formats (CWL, WDL)
-- [ ] Integrated tool documentation and parameter help
-- [ ] Execution history and result comparison
-- [ ] Remote execution support (SSH, cloud runners)
-- [ ] Plugin system for custom node types
-- [ ] Support for custom scripts
+Built with [Electron](https://www.electronjs.org/), [React Flow](https://reactflow.dev/), [Rust](https://www.rust-lang.org/),
+[Tokio](https://tokio.rs/) and [micromamba](https://mamba.readthedocs.io/).

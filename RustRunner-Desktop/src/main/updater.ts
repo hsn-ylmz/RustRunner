@@ -32,6 +32,7 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import log from 'electron-log';
+import { describeVersion, updatePolicyFor } from './appVersion';
 
 // =============================================================================
 // Types
@@ -196,6 +197,16 @@ export function setupAutoUpdater(mainWindow: BrowserWindow): void {
   initialized = true;
 
   autoUpdater.logger = log;
+
+  // A beta build follows the prerelease line (the next beta, then 1.0.0); a
+  // stable build is never offered a prerelease; nobody is downgraded. See
+  // appVersion.ts. Set explicitly: the intent should not depend on a library default.
+  const policy = updatePolicyFor(app.getVersion());
+  autoUpdater.allowPrerelease = policy.allowPrerelease;
+  autoUpdater.allowDowngrade = policy.allowDowngrade;
+  log.info(
+    `[updater] running ${describeVersion(app.getVersion()).label}; prereleases ${policy.allowPrerelease ? 'allowed' : 'not offered'}`
+  );
 
   // On platforms that can't auto-install we also disable auto-download —
   // downloading a .dmg that we can't install just wastes bandwidth.

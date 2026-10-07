@@ -23,6 +23,7 @@ import yaml from 'js-yaml';
 
 import MenuBuilder from './menu';
 import { setupAutoUpdater } from './updater';
+import { describeVersion } from './appVersion';
 import { resolveHtmlPath } from './util';
 import { readResumeInfoFor, workflowFileStem } from './resumeState';
 import { readRunHistory, resolveReportPath, type RunHistoryEntry } from './runHistory';
@@ -636,6 +637,20 @@ const createWindow = async (): Promise<void> => {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+
+  // The window title and the About panel say which build this is ("open beta").
+  const versionInfo = describeVersion(app.getVersion());
+  const windowTitle = `RustRunner ${versionInfo.label}`;
+  app.setAboutPanelOptions({
+    applicationName: 'RustRunner',
+    applicationVersion: versionInfo.label,
+    copyright: 'MIT License',
+    website: 'https://github.com/hsn-ylmz/RustRunner',
+  });
+  mainWindow.setTitle(windowTitle);
+  mainWindow.on('page-title-updated', (event) => {
+    event.preventDefault();
   });
 
   mainWindow.loadURL(resolveHtmlPath('index.html'));

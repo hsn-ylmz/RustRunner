@@ -1,6 +1,12 @@
 name: Release
 
-# Fires on a version tag, e.g. `git tag v0.11.1 && git push origin v0.11.1`.
+# Fires on a version tag, e.g. `git tag v1.0.0-beta.1 && git push origin v1.0.0-beta.1`.
+#
+# The tag must equal the version in package.json and Cargo.toml (with a leading v).
+# A tag with a pre-release part (v1.0.0-beta.1) produces beta-*.yml update files; when
+# the draft is published by hand, tick "Set as a pre-release". Builds that are already
+# on a beta then follow it (see RustRunner-Desktop/src/main/appVersion.ts), and 0.11.x
+# builds, which only look at the latest stable release, are not offered it.
 on:
   push:
     tags:

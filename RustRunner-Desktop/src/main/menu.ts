@@ -314,6 +314,10 @@ export default class MenuBuilder {
             label: 'Check for Updates…',
             click: () => checkForUpdatesManually(),
           },
+          {
+            label: 'About RustRunner',
+            click: () => app.showAboutPanel(),
+          },
           { type: 'separator' },
           {
             label: 'Documentation',

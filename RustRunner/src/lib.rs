@@ -52,6 +52,17 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Application name
 pub const APP_NAME: &str = "RustRunner";
 
+/// `version` as shown to people: a beta build says it is the open beta
+/// (`1.0.0-beta.1 (open beta)`), any other version is returned unchanged.
+pub fn version_label(version: &str) -> String {
+    match version.split_once('-') {
+        Some((_, pre)) if pre == "beta" || pre.starts_with("beta.") => {
+            format!("{version} (open beta)")
+        }
+        _ => version.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,15 +91,56 @@ mod tests {
         assert!(workflow.is_empty());
     }
 
+    /// True for `MAJOR.MINOR.PATCH` with an optional `-pre.release` part.
+    fn is_semver(version: &str) -> bool {
+        let (core, pre) = match version.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (version, None),
+        };
+        let numeric = core.split('.').count() == 3
+            && core
+                .split('.')
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+        let pre_ok = pre.is_none_or(|p| {
+            !p.is_empty()
+                && p.split('.').all(|id| {
+                    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                })
+        });
+        numeric && pre_ok
+    }
+
     #[test]
     fn test_version_format() {
-        let parts: Vec<&str> = VERSION.split('.').collect();
-        assert!(parts.len() >= 2, "Version should have at least major.minor");
-        for part in parts {
-            assert!(
-                part.parse::<u32>().is_ok(),
-                "Version components should be numeric"
-            );
+        assert!(
+            is_semver(VERSION),
+            "{VERSION} is not MAJOR.MINOR.PATCH[-pre.release]"
+        );
+    }
+
+    #[test]
+    fn test_version_label_marks_only_beta_builds() {
+        assert_eq!(version_label("1.0.0-beta.1"), "1.0.0-beta.1 (open beta)");
+        assert_eq!(version_label("1.0.0-beta"), "1.0.0-beta (open beta)");
+        assert_eq!(version_label("0.11.1"), "0.11.1");
+        assert_eq!(version_label("1.0.0"), "1.0.0");
+        assert_eq!(version_label("1.0.0-rc.1"), "1.0.0-rc.1");
+        assert_eq!(version_label("1.0.0-betamax"), "1.0.0-betamax");
+    }
+
+    #[test]
+    fn test_semver_check_accepts_stable_and_prerelease() {
+        for ok in [
+            "0.11.1",
+            "1.0.0",
+            "1.0.0-beta.1",
+            "2.3.4-rc.2",
+            "1.0.0-alpha",
+        ] {
+            assert!(is_semver(ok), "{ok} should be valid");
+        }
+        for bad in ["1.0", "1.0.0-", "1.0.x", "1.0.0-beta..1", "", "v1.0.0"] {
+            assert!(!is_semver(bad), "{bad} should be rejected");
         }
     }
 }

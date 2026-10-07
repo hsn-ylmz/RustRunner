@@ -362,6 +362,10 @@ export function WorkflowCanvas({
       // A lone first node would otherwise be fitted at React Flow's 2x maximum
       // zoom, which makes it huge and throws off where later nodes land.
       fitViewOptions={{ maxZoom: 1 }}
+      // A 20-step pipeline laid out left to right is wider than the canvas at React Flow's
+      // default minimum zoom of 0.5, so "fit view" could not show all of it (the Ribo-seq
+      // template lost its last steps off the right edge).
+      minZoom={0.2}
     >
       <Background
         variant={BackgroundVariant.Dots}

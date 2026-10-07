@@ -545,3 +545,25 @@ test('a workflow with a step written by hand cannot become a template, and says 
   await save.hover();
   await expect(page.getByRole('tooltip')).toContainText('custom step');
 });
+
+test('"fit view" shows every step of the 20-step Ribo-seq pipeline', async ({ page, app }) => {
+  await setWindow(app, 1280, 800);
+  await openGallery(page);
+  await page.getByTestId('template-card-riboseq-umi-ribowaltz').click();
+  await expect(page.getByTestId('template-setup')).toBeVisible();
+  await page.getByTestId('template-create').click();
+  await expect(page.getByTestId('template-dialog')).toHaveCount(0);
+  await expect(nodes(page)).toHaveCount(20);
+
+  // Wide pipelines used to need more zoom-out than the canvas allowed, so the last steps stayed off screen.
+  await page.locator('.react-flow__controls-fitview').click();
+  await expect
+    .poll(async () => {
+      const pane = (await page.locator('.react-flow__renderer').boundingBox())!;
+      const boxes = await nodes(page).evaluateAll((els) => els.map((e) => e.getBoundingClientRect().toJSON()));
+      return boxes.filter(
+        (b) => b.left < pane.x - 1 || b.right > pane.x + pane.width + 1 || b.top < pane.y - 1 || b.bottom > pane.y + pane.height + 1
+      ).length;
+    })
+    .toBe(0);
+});
