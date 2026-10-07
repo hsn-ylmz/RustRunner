@@ -18,13 +18,24 @@ import {
   findTool,
   renderCommand,
   type Catalog,
+  type ParamValue,
 } from '../tools/catalog';
 import { edgeIdFor } from '../connections';
 import { extensionsOfType, linkPatch, typesOfPath } from '../slots';
-import { parseTemplate, stepLabels, type TemplateInput, type WorkflowTemplate } from './schema';
+import {
+  parseTemplate,
+  settingDefault,
+  settingParam,
+  stepLabels,
+  type TemplateInput,
+  type WorkflowTemplate,
+} from './schema';
 
 /** What the person gave for each input: a list of file paths per input id. */
 export type InputValues = Record<string, string[]>;
+
+/** What the setup step's setting fields hold, by setting id: text for numbers and words, true/false for a checkbox. */
+export type SettingTexts = Record<string, string | number | boolean>;
 
 export interface InstantiateOptions {
   catalog?: Catalog;
@@ -32,6 +43,8 @@ export interface InstantiateOptions {
   origin?: { x: number; y: number };
   /** Options every new connection carries (the canvas's edge type and animation). */
   edgeDefaults?: Record<string, unknown>;
+  /** The template's settings as the setup step holds them; a setting left out keeps the template's value. */
+  settings?: SettingTexts;
 }
 
 export interface InstantiatedWorkflow {
@@ -78,7 +91,8 @@ export function typeWarning(input: Pick<TemplateInput, 'types' | 'label'>, files
   for (const file of files) {
     const found = typesOfPath(file);
     if (found.length > 0 && !found.some((t) => input.types.includes(t))) {
-      return `${file.split(/[\\/]/).pop()} looks like a ${found[0].toUpperCase()} file, but ${input.label} should be ${input.types.join(' or ')}. You can still use it.`;
+      const wanted = input.types.map((t) => t.toUpperCase()).join(' or ');
+      return `${file.split(/[\\/]/).pop()} looks like a ${found[0].toUpperCase()} file, but ${input.label} should be ${wanted}. You can still use it.`;
     }
   }
   return null;
@@ -107,6 +121,21 @@ export function instantiateTemplate(
   if (parsed.ok === false) return parsed;
   const problems = Object.values(inputProblems(template, values));
   if (problems.length > 0) return { ok: false, errors: problems };
+  const settingErrors = settingProblems(template, options.settings ?? {}, catalog);
+  if (Object.keys(settingErrors).length > 0) {
+    return {
+      ok: false,
+      errors: (template.settings ?? []).filter((s) => settingErrors[s.id]).map((s) => `${s.label}: ${settingErrors[s.id]}`),
+    };
+  }
+  const chosen = settingValues(template, options.settings ?? {}, catalog);
+  const overrides = new Map<string, Record<string, ParamValue>>();
+  for (const setting of template.settings ?? []) {
+    if (!(setting.id in chosen)) continue;
+    for (const target of setting.targets) {
+      overrides.set(target.step, { ...overrides.get(target.step), [target.param]: chosen[setting.id] });
+    }
+  }
 
   const origin = options.origin ?? DEFAULT_ORIGIN;
   const labels = stepLabels(template, catalog);
@@ -116,7 +145,7 @@ export function instantiateTemplate(
   let nodes: any[] = template.steps.map((step) => {
     const tool = findTool(step.tool, catalog)!;
     const data: Record<string, any> = buildCatalogNodeData(tool, [], catalog);
-    const params = { ...defaultParams(tool), ...step.params };
+    const params = { ...defaultParams(tool), ...step.params, ...overrides.get(step.key) };
     data.label = labels[step.key];
     data.catalogParams = params;
     data.command = renderCommand(tool, params, tool.threads);
@@ -180,4 +209,81 @@ export function pickerExtensions(input: Pick<TemplateInput, 'types'>): string[] 
   if (input.types.includes('any')) return [];
   const names = input.types.flatMap((t) => extensionsOfType(t));
   return names.length > 0 ? [...new Set([...names, 'gz'])] : [];
+}
+
+// -----------------------------------------------------------------------------
+// Settings
+// -----------------------------------------------------------------------------
+
+/** What each setting field starts with: the template's value, as the field shows it. */
+export function initialSettingTexts(template: WorkflowTemplate, catalog: Catalog = CATALOG): SettingTexts {
+  const texts: SettingTexts = {};
+  for (const setting of template.settings ?? []) {
+    const value = settingDefault(template, setting, catalog);
+    if (value === undefined) continue;
+    texts[setting.id] = typeof value === 'boolean' ? value : String(value);
+  }
+  return texts;
+}
+
+/** The value a field holds, converted to the option's type; undefined when it is not usable. */
+function valueOf(
+  param: NonNullable<ReturnType<typeof settingParam>>,
+  raw: string | number | boolean
+): { value?: ParamValue; problem?: string } {
+  switch (param.type) {
+    case 'boolean':
+      return { value: raw === true || raw === 'true' };
+    case 'number': {
+      const text = String(raw).trim();
+      const n = text === '' ? NaN : Number(text);
+      if (!Number.isFinite(n)) {
+        return { problem: `Enter a number, for example ${String(param.default)}.` };
+      }
+      if (param.min !== undefined && n < param.min) return { problem: `Use ${param.min} or more.` };
+      if (param.max !== undefined && n > param.max) return { problem: `Use ${param.max} or less.` };
+      return { value: n };
+    }
+    case 'select': {
+      const text = String(raw);
+      return param.options?.includes(text) ? { value: text } : { problem: 'Pick one of the choices.' };
+    }
+    case 'string': {
+      const text = String(raw).trim();
+      if (text === '' && param.required) return { problem: 'Fill this in.' };
+      return { value: text };
+    }
+  }
+}
+
+/** What is wrong with each setting field, by setting id. A field left out of `texts` keeps the template's value. */
+export function settingProblems(
+  template: WorkflowTemplate,
+  texts: SettingTexts,
+  catalog: Catalog = CATALOG
+): Record<string, string> {
+  const problems: Record<string, string> = {};
+  for (const setting of template.settings ?? []) {
+    const param = settingParam(template, setting, catalog);
+    if (!param || !(setting.id in texts)) continue;
+    const { problem } = valueOf(param, texts[setting.id]);
+    if (problem) problems[setting.id] = problem;
+  }
+  return problems;
+}
+
+/** The usable setting values in `texts`, converted to their options' types, by setting id. */
+export function settingValues(
+  template: WorkflowTemplate,
+  texts: SettingTexts,
+  catalog: Catalog = CATALOG
+): Record<string, ParamValue> {
+  const values: Record<string, ParamValue> = {};
+  for (const setting of template.settings ?? []) {
+    const param = settingParam(template, setting, catalog);
+    if (!param || !(setting.id in texts)) continue;
+    const { value } = valueOf(param, texts[setting.id]);
+    if (value !== undefined) values[setting.id] = value;
+  }
+  return values;
 }

@@ -17,9 +17,11 @@ import {
   Badge,
   Button,
   Callout,
+  Checkbox,
   Dialog,
   Icon,
   IconButton,
+  NumberField,
   Select,
   TextField,
   type ConfirmRequest,
@@ -29,15 +31,20 @@ import { TemplateDag } from './TemplateDag';
 import { bundledTemplates } from '../templates/registry';
 import {
   DIFFICULTIES,
+  adaptToCatalog,
   databaseNeeds,
+  newerThanApp,
   parseTemplate,
+  settingParam,
   type TemplateInput,
+  type TemplateSetting,
   type WorkflowTemplate,
 } from '../templates/schema';
 import {
   domainLabel,
   domainsOf,
   filterEntries,
+  readLayoutLabel,
   stepCountLabel,
   toolsLine,
   type BrokenTemplate,
@@ -45,11 +52,14 @@ import {
 } from '../templates/gallery';
 import {
   filesOf,
+  initialSettingTexts,
   inputProblems,
   missingInputs,
   pickerExtensions,
+  settingProblems,
   typeWarning,
   valuesFromText,
+  type SettingTexts,
 } from '../templates/instantiate';
 
 type Stage = { kind: 'gallery' } | { kind: 'setup'; entry: GalleryEntry };
@@ -70,11 +80,25 @@ export async function loadUserTemplates(): Promise<UserTemplates> {
       broken.push({ id: file.id, problems: [file.error ?? 'The file cannot be read.'] });
       continue;
     }
-    const parsed = parseTemplate(file.raw);
+    // A file from a newer app version: say so, rather than list what this version does not understand.
+    const newer = newerThanApp(file.raw);
+    if (newer) {
+      broken.push({ id: file.id, problems: [newer] });
+      continue;
+    }
+    // A file from an older version: options the tools no longer have are left out, and the setup step says so.
+    const adapted = adaptToCatalog(file.raw);
+    const parsed = parseTemplate(adapted.raw);
     if (parsed.ok === false) broken.push({ id: file.id, problems: parsed.errors });
     else if (parsed.template.id !== file.id) {
       broken.push({ id: file.id, problems: ['The id inside the file does not match its file name.'] });
-    } else entries.push({ template: parsed.template, source: 'user' });
+    } else {
+      entries.push({
+        template: parsed.template,
+        source: 'user',
+        ...(adapted.notes.length > 0 ? { notes: adapted.notes } : {}),
+      });
+    }
   }
   return { entries, broken, loaded: true };
 }
@@ -94,6 +118,7 @@ function TemplateCard({
 }) {
   const { template } = entry;
   const database = databaseNeeds(template).length > 0;
+  const layout = readLayoutLabel(template);
   return (
     <li className="template-card-wrap">
       <button
@@ -115,6 +140,11 @@ function TemplateCard({
           <Badge tone="neutral" variant="outline">
             {domainLabel(template.domain)}
           </Badge>
+          {layout && (
+            <Badge tone="neutral" variant="outline" data-testid="template-read-layout">
+              {layout}
+            </Badge>
+          )}
           {database && (
             <Badge tone="warning" variant="subtle" icon="alert" data-testid="template-needs-database">
               Needs a database
@@ -176,6 +206,122 @@ function Gallery({
     } else notify('danger', result.error);
   };
 
+  const bundledSection = (
+    <section aria-labelledby="templates-bundled-title" className="template-section">
+      <h4 className="template-section-title" id="templates-bundled-title">
+        Ready-made templates
+      </h4>
+      {shownBundled.length > 0 ? (
+        <ul className="template-grid" data-testid="template-grid-bundled">
+          {shownBundled.map((entry) => (
+            <TemplateCard key={entry.template.id} entry={entry} onPick={() => onPick(entry)} />
+          ))}
+        </ul>
+      ) : (
+        <p className="template-empty" data-testid="template-empty">
+          {searching ? 'No ready-made template matches. Try fewer words or another topic.' : 'No templates yet.'}
+        </p>
+      )}
+    </section>
+  );
+
+  const userSection = (
+    <section aria-labelledby="templates-user-title" className="template-section" data-testid="my-templates">
+      <h4 className="template-section-title" id="templates-user-title">
+        My templates
+      </h4>
+      {shownUser.length > 0 && (
+        <ul className="template-grid" data-testid="template-grid-user">
+          {shownUser.map((entry) => {
+            const { template } = entry;
+            const editing = renaming?.id === template.id;
+            return (
+              <TemplateCard
+                key={template.id}
+                entry={entry}
+                onPick={() => onPick(entry)}
+                actions={
+                  editing ? (
+                    <div className="template-card-edit">
+                      <TextField
+                        label="Template name"
+                        value={renaming.name}
+                        data-testid="template-rename-input"
+                        autoFocus
+                        onChange={(e) => setRenaming({ id: template.id, name: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void doRename();
+                          if (e.key === 'Escape') {
+                            e.stopPropagation();
+                            setRenaming(null);
+                          }
+                        }}
+                      />
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        data-testid="template-rename-save"
+                        disabledReason={renaming.name.trim() ? undefined : 'Give the template a name'}
+                        onClick={() => void doRename()}
+                      >
+                        Save name
+                      </Button>
+                      <Button size="sm" onClick={() => setRenaming(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="template-card-actions">
+                      <IconButton
+                        icon="pencil"
+                        size="sm"
+                        label={`Rename ${template.name}`}
+                        data-testid={`template-rename-${template.id}`}
+                        onClick={() => setRenaming({ id: template.id, name: template.name })}
+                      />
+                      <IconButton
+                        icon="trash"
+                        size="sm"
+                        label={`Delete ${template.name}`}
+                        data-testid={`template-delete-${template.id}`}
+                        onClick={() => void doDelete(template.id, template.name)}
+                      />
+                    </div>
+                  )
+                }
+              />
+            );
+          })}
+        </ul>
+      )}
+      {user.entries.length === 0 && user.loaded && (
+        <p className="template-empty" data-testid="my-templates-empty">
+          Templates you save from a workflow appear here. Build a workflow, then choose Save as template.
+        </p>
+      )}
+      {user.entries.length > 0 && shownUser.length === 0 && (
+        <p className="template-empty">None of your templates match the search.</p>
+      )}
+      {user.broken.length > 0 && (
+        <ul className="template-broken" data-testid="template-broken">
+          {user.broken.map((b) => (
+            <li key={b.id}>
+              <Icon name="alert" size={14} />
+              <span className="template-broken-text">
+                <strong>{b.id}.json cannot be used.</strong> {b.problems[0]}
+                {b.problems.length > 1 &&
+                  ` (${b.problems.length - 1} more ${b.problems.length === 2 ? 'problem' : 'problems'})`}
+              </span>
+              <Button size="sm" onClick={() => void doDelete(b.id, `${b.id}.json`)}>
+                Delete
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+
   return (
     <>
       <div className="template-filters">
@@ -205,115 +351,18 @@ function Gallery({
         </Select>
       </div>
 
-      <section aria-labelledby="templates-bundled-title" className="template-section">
-        <h4 className="template-section-title" id="templates-bundled-title">
-          Ready-made templates
-        </h4>
-        {shownBundled.length > 0 ? (
-          <ul className="template-grid" data-testid="template-grid-bundled">
-            {shownBundled.map((entry) => (
-              <TemplateCard key={entry.template.id} entry={entry} onPick={() => onPick(entry)} />
-            ))}
-          </ul>
-        ) : (
-          <p className="template-empty" data-testid="template-empty">
-            {searching ? 'No ready-made template matches. Try fewer words or another topic.' : 'No templates yet.'}
-          </p>
-        )}
-      </section>
-
-      <section aria-labelledby="templates-user-title" className="template-section" data-testid="my-templates">
-        <h4 className="template-section-title" id="templates-user-title">
-          My templates
-        </h4>
-        {shownUser.length > 0 && (
-          <ul className="template-grid" data-testid="template-grid-user">
-            {shownUser.map((entry) => {
-              const { template } = entry;
-              const editing = renaming?.id === template.id;
-              return (
-                <TemplateCard
-                  key={template.id}
-                  entry={entry}
-                  onPick={() => onPick(entry)}
-                  actions={
-                    editing ? (
-                      <div className="template-card-edit">
-                        <TextField
-                          label="Template name"
-                          value={renaming.name}
-                          data-testid="template-rename-input"
-                          autoFocus
-                          onChange={(e) => setRenaming({ id: template.id, name: e.target.value })}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') void doRename();
-                            if (e.key === 'Escape') {
-                              e.stopPropagation();
-                              setRenaming(null);
-                            }
-                          }}
-                        />
-                        <Button
-                          size="sm"
-                          variant="primary"
-                          data-testid="template-rename-save"
-                          disabledReason={renaming.name.trim() ? undefined : 'Give the template a name'}
-                          onClick={() => void doRename()}
-                        >
-                          Save name
-                        </Button>
-                        <Button size="sm" onClick={() => setRenaming(null)}>
-                          Cancel
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="template-card-actions">
-                        <IconButton
-                          icon="pencil"
-                          size="sm"
-                          label={`Rename ${template.name}`}
-                          data-testid={`template-rename-${template.id}`}
-                          onClick={() => setRenaming({ id: template.id, name: template.name })}
-                        />
-                        <IconButton
-                          icon="trash"
-                          size="sm"
-                          label={`Delete ${template.name}`}
-                          data-testid={`template-delete-${template.id}`}
-                          onClick={() => void doDelete(template.id, template.name)}
-                        />
-                      </div>
-                    )
-                  }
-                />
-              );
-            })}
-          </ul>
-        )}
-        {user.entries.length === 0 && user.loaded && (
-          <p className="template-empty" data-testid="my-templates-empty">
-            Templates you save from a workflow appear here. Build a workflow, then choose Save as template.
-          </p>
-        )}
-        {user.entries.length > 0 && shownUser.length === 0 && (
-          <p className="template-empty">None of your templates match the search.</p>
-        )}
-        {user.broken.length > 0 && (
-          <ul className="template-broken" data-testid="template-broken">
-            {user.broken.map((b) => (
-              <li key={b.id}>
-                <Icon name="alert" size={14} />
-                <span className="template-broken-text">
-                  <strong>{b.id}.json cannot be used.</strong> {b.problems[0]}
-                </span>
-                <Button size="sm" onClick={() => void doDelete(b.id, `${b.id}.json`)}>
-                  Delete
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* The person's own templates lead once there are any; until then their hint waits below the ready-made ones. */}
+      {user.entries.length > 0 ? (
+        <>
+          {userSection}
+          {bundledSection}
+        </>
+      ) : (
+        <>
+          {bundledSection}
+          {userSection}
+        </>
+      )}
     </>
   );
 }
@@ -352,7 +401,16 @@ function InputField({
           label={input.label}
           required={input.required}
           optional={!input.required}
-          hint={error ? undefined : warning ?? input.hint}
+          hint={
+            error ? undefined : warning ? (
+              <span className="template-input-warning" data-testid={`template-input-warning-${input.id}`}>
+                <Icon name="alert" size={14} />
+                <span>{warning}</span>
+              </span>
+            ) : (
+              input.hint
+            )
+          }
           error={error}
           placeholder={input.example}
           value={value}
@@ -373,22 +431,101 @@ function InputField({
   );
 }
 
+function SettingField({
+  template,
+  setting,
+  value,
+  error,
+  onChange,
+}: {
+  template: WorkflowTemplate;
+  setting: TemplateSetting;
+  value: string | number | boolean | undefined;
+  error?: string;
+  onChange: (value: string | boolean) => void;
+}) {
+  const param = settingParam(template, setting);
+  if (!param) return null;
+  const testId = `template-setting-${setting.id}`;
+  if (param.type === 'boolean') {
+    return (
+      <Checkbox
+        label={setting.label}
+        hint={setting.hint}
+        checked={value === true || value === 'true'}
+        data-testid={testId}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+    );
+  }
+  if (param.type === 'select') {
+    return (
+      <Select
+        label={setting.label}
+        hint={setting.hint}
+        error={error}
+        value={String(value ?? '')}
+        data-testid={testId}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {param.options?.map((option) => (
+          <option key={option} value={option}>
+            {param.option_labels?.[option] ?? option}
+          </option>
+        ))}
+      </Select>
+    );
+  }
+  if (param.type === 'number') {
+    return (
+      <NumberField
+        label={setting.label}
+        hint={setting.hint}
+        error={error}
+        min={param.min}
+        max={param.max}
+        step={param.step ?? 1}
+        value={String(value ?? '')}
+        data-testid={testId}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    );
+  }
+  return (
+    <TextField
+      label={setting.label}
+      hint={setting.hint}
+      error={error}
+      required={param.required}
+      value={String(value ?? '')}
+      data-testid={testId}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+}
+
 function Setup({
   entry,
   name,
   texts,
+  settings,
   onName,
   onText,
+  onSetting,
   onOpenDocs,
 }: {
   entry: GalleryEntry;
   name: string;
   texts: Record<string, string>;
+  settings: SettingTexts;
   onName: (name: string) => void;
   onText: (id: string, text: string) => void;
+  onSetting: (id: string, value: string | boolean) => void;
   onOpenDocs: (url: string) => void;
 }) {
   const { template } = entry;
+  const settingErrors = settingProblems(template, settings);
+  const layout = readLayoutLabel(template);
   const needs = databaseNeeds(template);
   const problems = inputProblems(template, valuesFromText(template, texts));
   const missing = missingInputs(template, valuesFromText(template, texts));
@@ -396,6 +533,17 @@ function Setup({
     <div className="template-setup" data-testid="template-setup">
       <div className="template-setup-main">
         <p className="template-details">{template.details}</p>
+
+        {entry.notes && entry.notes.length > 0 && (
+          <Callout tone="info" data-testid="template-adapted-note">
+            <strong>Made with an older version of the tool list.</strong> These options were changed to fit:
+            <ul className="template-list">
+              {entry.notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          </Callout>
+        )}
 
         {needs.map((need) => (
           <Callout key={need.tool} tone="warning" data-testid="template-database-note">
@@ -450,12 +598,35 @@ function Setup({
             )}
           </>
         )}
+
+        {(template.settings ?? []).length > 0 && (
+          <section className="template-settings" aria-labelledby="template-settings-title" data-testid="template-settings">
+            <h4 className="template-section-title" id="template-settings-title">
+              Check these settings
+            </h4>
+            <p className="template-hint">
+              They depend on your organism or library, so check them before you create the workflow. Every other option
+              keeps its usual value and can be changed in its step later.
+            </p>
+            {(template.settings ?? []).map((setting) => (
+              <SettingField
+                key={setting.id}
+                template={template}
+                setting={setting}
+                value={settings[setting.id]}
+                error={settingErrors[setting.id]}
+                onChange={(value) => onSetting(setting.id, value)}
+              />
+            ))}
+          </section>
+        )}
       </div>
 
       <aside className="template-setup-side" aria-label="About this template">
         <TemplateDag template={template} className="template-dag-large" />
         <p className="template-side-meta">
-          {stepCountLabel(template)}, {DIFFICULTIES[template.difficulty].toLowerCase()}. Uses {toolsLine(template)}.
+          {stepCountLabel(template)}, {DIFFICULTIES[template.difficulty].toLowerCase()}
+          {layout ? `, ${layout.toLowerCase()}` : ''}. Uses {toolsLine(template)}.
         </p>
         {template.outputs.length > 0 && (
           <>
@@ -506,7 +677,12 @@ export function TemplateGallery({
 }: {
   onClose: () => void;
   /** Builds the workflow. Resolves false when the person declined to discard their work. */
-  onCreate: (template: WorkflowTemplate, texts: Record<string, string>, name: string) => Promise<boolean>;
+  onCreate: (
+    template: WorkflowTemplate,
+    texts: Record<string, string>,
+    name: string,
+    settings: SettingTexts
+  ) => Promise<boolean>;
   onSaveCurrent: () => void;
   /** Why "Save current workflow as a template" is unavailable, or undefined. */
   saveBlockedReason?: string;
@@ -521,6 +697,7 @@ export function TemplateGallery({
   const [stage, setStage] = useState<Stage>({ kind: 'gallery' });
   const [name, setName] = useState('');
   const [texts, setTexts] = useState<Record<string, string>>({});
+  const [settings, setSettings] = useState<SettingTexts>({});
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(async () => {
@@ -537,6 +714,7 @@ export function TemplateGallery({
   const pick = (entry: GalleryEntry) => {
     setName(entry.template.name);
     setTexts({});
+    setSettings(initialSettingTexts(entry.template));
     setStage({ kind: 'setup', entry });
   };
 
@@ -550,11 +728,13 @@ export function TemplateGallery({
         ? 'Give the workflow a name'
         : Object.keys(inputProblems(template, values)).length > 0
           ? 'Fix the file fields marked above'
-          : undefined;
+          : Object.keys(settingProblems(template, settings)).length > 0
+            ? 'Fix the settings marked above'
+            : undefined;
     const create = async () => {
       setBusy(true);
       try {
-        if (await onCreate(template, texts, name.trim())) onClose();
+        if (await onCreate(template, texts, name.trim(), settings)) onClose();
       } finally {
         setBusy(false);
       }
@@ -588,8 +768,10 @@ export function TemplateGallery({
           entry={stage.entry}
           name={name}
           texts={texts}
+          settings={settings}
           onName={setName}
           onText={(id, text) => setTexts((t) => ({ ...t, [id]: text }))}
+          onSetting={(id, value) => setSettings((v) => ({ ...v, [id]: value }))}
           onOpenDocs={openDocs}
         />
       </Dialog>

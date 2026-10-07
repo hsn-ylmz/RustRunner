@@ -8,8 +8,10 @@
  * tools, slots that fit) is decided in the renderer against the tool catalog,
  * so a template written by hand or by a newer version still shows up, with a
  * reason when it cannot be used. What is checked here is what protects the
- * disk: ids are plain names (no path can be built from one), files are
- * size-capped, and writes go through a temp file and a rename.
+ * disk: ids are plain names (no path can be built from one), only regular
+ * files are read (a pipe or device named `x.json` would block the read), files
+ * are size-capped, writes go through a temp file and a rename, and a new
+ * template never replaces an existing file, even one created a moment earlier.
  */
 
 import fs from 'fs';
@@ -58,25 +60,83 @@ export function listUserTemplates(dir: string): StoredTemplate[] {
     const id = name.replace(/\.json$/, '');
     if (!name.endsWith('.json') || !TEMPLATE_ID.test(id)) continue;
     if (out.length >= MAX_TEMPLATES) break;
-    try {
-      const file = fileFor(dir, id);
-      if (fs.statSync(file).size > MAX_TEMPLATE_BYTES) {
-        out.push({ id, error: 'The file is too large to be a template.' });
-        continue;
-      }
-      out.push({ id, raw: JSON.parse(fs.readFileSync(file, 'utf8')) });
-    } catch {
-      out.push({ id, error: 'The file is not valid JSON.' });
-    }
+    const read = readTemplateFile(fileFor(dir, id));
+    out.push(read.ok === false ? { id, error: read.error } : { id, raw: read.raw });
   }
   return out;
 }
 
+/**
+ * The parsed contents of one template file. Only a regular file (or a link to
+ * one) of at most MAX_TEMPLATE_BYTES is read.
+ */
+function readTemplateFile(file: string): { ok: true; raw: unknown } | { ok: false; error: string } {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return { ok: false, error: 'The file cannot be read.' };
+  }
+  if (!stat.isFile()) return { ok: false, error: 'This is not a regular file.' };
+  if (stat.size > MAX_TEMPLATE_BYTES) return { ok: false, error: 'The file is too large to be a template.' };
+  let text: string;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return { ok: false, error: 'The file cannot be read.' };
+  }
+  // The size may have changed since the check; the cap holds for what was read.
+  if (Buffer.byteLength(text) > MAX_TEMPLATE_BYTES) return { ok: false, error: 'The file is too large to be a template.' };
+  try {
+    return { ok: true, raw: JSON.parse(text) };
+  } catch {
+    return { ok: false, error: 'The file is not valid JSON.' };
+  }
+}
+
+function tempFor(file: string): string {
+  return `${file}.${process.pid}.${Date.now().toString(36)}.tmp`;
+}
+
 function writeAtomic(file: string, text: string): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, text, 'utf8');
-  fs.renameSync(temp, file);
+  const temp = tempFor(file);
+  try {
+    fs.writeFileSync(temp, text, { encoding: 'utf8', flag: 'wx' });
+    fs.renameSync(temp, file);
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
+}
+
+/**
+ * Writes a new file in one step without ever replacing an existing one: the
+ * text goes to a temp file, which is then hard-linked under the final name
+ * (linking fails when the name is taken). On a file system without hard links
+ * (exFAT, some network shares) the file is created exclusively instead, which
+ * also never replaces one. False when the name was taken.
+ */
+function writeNew(file: string, text: string): boolean {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const temp = tempFor(file);
+  try {
+    fs.writeFileSync(temp, text, { encoding: 'utf8', flag: 'wx' });
+    try {
+      fs.linkSync(temp, file);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    }
+    try {
+      fs.writeFileSync(file, text, { encoding: 'utf8', flag: 'wx' });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+      throw error;
+    }
+  } finally {
+    fs.rmSync(temp, { force: true });
+  }
 }
 
 /** The id a template object carries, when it is a plain object with a usable one. */
@@ -91,9 +151,8 @@ export function saveUserTemplate(dir: string, raw: unknown): StoreResult {
   if (!id) return { ok: false, error: 'The template needs an id of lowercase letters, digits and dashes.' };
   const text = JSON.stringify(raw, null, 2);
   if (Buffer.byteLength(text) > MAX_TEMPLATE_BYTES) return { ok: false, error: 'The template is too large.' };
-  if (fs.existsSync(fileFor(dir, id))) return { ok: false, error: 'A template with this id already exists.' };
   try {
-    writeAtomic(fileFor(dir, id), text);
+    if (!writeNew(fileFor(dir, id), text)) return { ok: false, error: 'A template with this id already exists.' };
     return { ok: true };
   } catch {
     return { ok: false, error: 'The templates folder could not be written to.' };
@@ -118,13 +177,17 @@ export function renameUserTemplate(dir: string, id: string, name: string): Store
   if (clean === '' || clean.length > MAX_NAME_LENGTH) {
     return { ok: false, error: `Use a name of 1 to ${MAX_NAME_LENGTH} characters.` };
   }
+  const file = fileFor(dir, id);
+  const read = readTemplateFile(file);
+  if (read.ok === false) return { ok: false, error: read.error };
+  const raw = read.raw;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, error: 'The file is not a template.' };
+  }
+  const text = JSON.stringify({ ...raw, name: clean }, null, 2);
+  if (Buffer.byteLength(text) > MAX_TEMPLATE_BYTES) return { ok: false, error: 'The template is too large.' };
   try {
-    const file = fileFor(dir, id);
-    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-      return { ok: false, error: 'The file is not a template.' };
-    }
-    writeAtomic(file, JSON.stringify({ ...raw, name: clean }, null, 2));
+    writeAtomic(file, text);
     return { ok: true };
   } catch {
     return { ok: false, error: 'The template could not be renamed.' };

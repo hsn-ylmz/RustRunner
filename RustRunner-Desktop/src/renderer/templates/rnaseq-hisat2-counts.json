@@ -3,10 +3,11 @@
   "id": "rnaseq-hisat2-counts",
   "name": "RNA-seq alignment and gene counts",
   "description": "Align RNA-seq reads to a genome with HISAT2 and count the reads per gene, ready for differential expression.",
-  "details": "Use this when you have a reference genome and a gene annotation and want a table of read counts per gene, for example as input to DESeq2 or edgeR. The pipeline trims the reads with fastp, builds a HISAT2 index from your genome, aligns the reads (HISAT2 handles reads that span introns), sorts and indexes the alignments with samtools, counts reads per gene with featureCounts, and gathers everything into a MultiQC report. HISAT2 was chosen because it runs everywhere with modest memory. If you prefer STAR, build its index with the STAR genome generate step and swap the aligner by hand; the rest of the pipeline stays the same. Check the strandedness option of the featureCounts step against your library kit (the default counts unstranded). The genome index is built again on every run, which takes a few minutes for a large genome; this template suits small to medium genomes best. One single-end sample at a time.",
+  "details": "Use this when you have a reference genome and a gene annotation and want a table of read counts per gene, for example as input to DESeq2 or edgeR. The pipeline trims the reads with fastp, builds a HISAT2 index from your genome, aligns the reads (HISAT2 handles reads that span introns), sorts and indexes the alignments with samtools, counts reads per gene with featureCounts, and gathers everything into a MultiQC report. HISAT2 was chosen because it runs everywhere with modest memory. If you prefer STAR, build its index with the STAR genome generate step and swap the aligner by hand; the rest of the pipeline stays the same. The setup step asks how your library was made (its strandedness), because a wrong choice loses most reads. The genome index is built again on every run, which takes a few minutes for a large genome; this template suits small to medium genomes best. One single-end sample at a time.",
   "domain": "rna",
   "difficulty": "intermediate",
   "minCatalogVersion": "2026.15.0",
+  "readLayout": "single",
   "inputs": [
     {
       "id": "reads",
@@ -56,6 +57,19 @@
         {
           "step": "featurecounts",
           "slot": "annotation"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "strand",
+      "label": "Library strandedness",
+      "hint": "Pick what your library kit makes. Most stranded Illumina kits (TruSeq stranded, dUTP) are reverse-stranded. A wrong choice loses most reads; if unsure, run RSeQC infer experiment on the alignments first.",
+      "targets": [
+        {
+          "step": "featurecounts",
+          "param": "strand"
         }
       ]
     }

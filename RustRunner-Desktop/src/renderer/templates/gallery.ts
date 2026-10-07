@@ -7,6 +7,7 @@ import { CATALOG, findTool, type Catalog } from '../tools/catalog';
 import { normalizeNodeColor } from '../nodeColors';
 import {
   DIFFICULTIES,
+  READ_LAYOUTS,
   TEMPLATE_DOMAINS,
   TEMPLATE_NODE_SIZE,
   databaseNeeds,
@@ -19,6 +20,8 @@ export type TemplateSource = 'bundled' | 'user';
 export interface GalleryEntry {
   template: WorkflowTemplate;
   source: TemplateSource;
+  /** What was changed to fit this app's tool list (a user template from an older version); shown in the setup step. */
+  notes?: string[];
 }
 
 /** A user template file that could not be used, with what is wrong. */
@@ -47,6 +50,7 @@ function haystack(template: WorkflowTemplate, catalog: Catalog): string {
     template.details,
     domainLabel(template.domain),
     DIFFICULTIES[template.difficulty] ?? '',
+    template.readLayout ? READ_LAYOUTS[template.readLayout] : '',
     ...toolsUsed(template, catalog),
   ]
     .join(' ')
@@ -66,6 +70,11 @@ export function filterEntries(
     const text = haystack(entry.template, catalog);
     return words.every((w) => text.includes(w));
   });
+}
+
+/** "Paired-end reads" for a short-read template that says how it wants its reads; null otherwise. */
+export function readLayoutLabel(template: Pick<WorkflowTemplate, 'readLayout'>): string | null {
+  return template.readLayout ? READ_LAYOUTS[template.readLayout] ?? null : null;
 }
 
 /** "4 steps", "1 step". */

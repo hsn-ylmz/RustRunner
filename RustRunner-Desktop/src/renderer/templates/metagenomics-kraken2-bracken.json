@@ -3,15 +3,16 @@
   "id": "metagenomics-kraken2-bracken",
   "name": "Who is in my sample? Kraken2 and Bracken",
   "description": "Find which organisms a metagenomic sample contains and how abundant they are: trim, classify the reads with Kraken2, estimate abundances with Bracken and gather the results in one report.",
-  "details": "Use this to profile a mixed sample such as a gut, soil or water metagenome, or to check a culture for contamination. The pipeline trims the reads with fastp, assigns each read to an organism with Kraken2, re-estimates how many reads belong to each species with Bracken, and gathers the fastp and Kraken2 results in a MultiQC report. It needs a Kraken2 database, which is a large folder of reference genomes that you download or build once: pick a ready-made one from the Kraken2 index downloads (the standard ones need 8 to 70 GB of memory; the \"Standard-8\" and \"Standard-16\" collections fit an ordinary computer). Choose one that also has the Bracken files for your read length, or prepare it with the \"Bracken prepare database\" tool first. The same folder is used for both Kraken2 and Bracken. The default Bracken read length is 150; set it to the length of your reads in the Bracken step. Bracken reports species by default; change the level in its step for genera or families. The reads are single-end; for paired reads add the second file in the Kraken2 step by hand. One sample per run.",
+  "details": "Use this to profile a mixed sample such as a gut, soil or water metagenome, or to check a culture for contamination. The pipeline trims the reads with fastp, assigns each read to an organism with Kraken2, re-estimates how many reads belong to each species with Bracken, and gathers the fastp and Kraken2 results in a MultiQC report. It needs a Kraken2 database, which is a large folder of reference genomes that you download or build once: pick a ready-made one from the Kraken2 index downloads (the standard ones need 8 to 70 GB of memory; the \"Standard-8\" and \"Standard-16\" collections fit an ordinary computer). Choose one that also has the Bracken files for your read length, or prepare it with the \"Bracken prepare database\" tool first. The same folder is used for both Kraken2 and Bracken. The setup step asks for your read length, which must be one the database was prepared for. Bracken reports species by default; change the level in its step for genera or families. The reads are single-end. For read pairs, choose the first file of each pair (R1): Kraken2 and Bracken give a sound profile from it, and the trimming step takes one file at a time. One sample per run.",
   "domain": "metagenomics",
   "difficulty": "intermediate",
   "minCatalogVersion": "2026.16.0",
+  "readLayout": "single",
   "inputs": [
     {
       "id": "reads",
       "label": "Sequencing reads",
-      "hint": "One FASTQ file of reads from the sample, plain or compressed.",
+      "hint": "One FASTQ file of reads from the sample, plain or compressed. For read pairs, choose the first file (R1).",
       "types": [
         "fastq"
       ],
@@ -43,6 +44,19 @@
         {
           "step": "bracken",
           "slot": "db"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "read_length",
+      "label": "Read length (bases)",
+      "hint": "The length of your reads, for example 150. The database must hold the Bracken files for this length (database150mers.kmer_distrib for 150).",
+      "targets": [
+        {
+          "step": "bracken",
+          "param": "read_length"
         }
       ]
     }

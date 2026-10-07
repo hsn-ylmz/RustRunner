@@ -4,9 +4,10 @@
   "name": "Genome assembly from short reads (SPAdes and QUAST)",
   "description": "Put Illumina reads of a microbial genome together without a reference, then measure how good the assembly is.",
   "details": "Use this to assemble the genome of a cultured organism such as a bacterium, a virus or a small fungus from Illumina reads. SPAdes builds contigs (and scaffolds) from one file of reads or a pair of files, set up here for a single cultured organism sequenced deeply; for a mixture of organisms or a single cell, change \"Kind of sample\" in the SPAdes step. QUAST then reports how many contigs there are, how long they are (N50), the total size and the share of G and C. If you also give a reference genome of a close relative, QUAST says how much of it the assembly covers and how many misassemblies it finds. Reads are used as they are, because SPAdes corrects read errors itself; trim adapters first if your data still has them. SPAdes needs a few gigabytes of memory, and the limit is set in its step (8 GB by default). For long reads use \"Genome assembly from long reads (Flye and QUAST)\".",
-  "domain": "longread",
+  "domain": "assembly",
   "difficulty": "intermediate",
   "minCatalogVersion": "2026.16.0",
+  "readLayout": "either",
   "inputs": [
     {
       "id": "reads1",

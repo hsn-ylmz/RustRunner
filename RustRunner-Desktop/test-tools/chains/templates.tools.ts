@@ -16,7 +16,7 @@ import { DATA, defineDomain, ensurePod5Data, exists, read, sizeOf, truthSnps, ty
 import { ATAC_TRUTH, CHIP_TRUTH, hits, homerRows, homerSummary, isBigWig, overlap, pngSize, regions, type Region } from '../regions';
 import { fastaRecords, fastqRecords, nanoStat, quastTable, samRecords, tableRows } from '../seqio';
 import { bundledTemplates } from '../../src/renderer/templates/registry';
-import { instantiateTemplate, templateNodeId } from '../../src/renderer/templates/instantiate';
+import { instantiateTemplate, templateNodeId, type SettingTexts } from '../../src/renderer/templates/instantiate';
 import { collectIssues } from '../../src/renderer/validation';
 import { applyParamChange, findTool, buildCatalogNodeData, defaultParams, renderCommand, validateCatalogNodes, type ParamValue } from '../../src/renderer/tools/catalog';
 import { convertNodesToWorkflow, labelToId, validateWorkflow } from '../../src/renderer/workflowConversion';
@@ -26,6 +26,8 @@ interface Setup {
   files: string[];
   /** The files chosen for each template input, as the setup step would pass them. */
   values: Record<string, string[]>;
+  /** Values typed into the setup step's settings (by setting id), as a person would for this data. */
+  settings?: SettingTexts;
   verify: Chain['verify'];
   /**
    * Options changed for the synthetic data, by step key. A template's defaults suit real
@@ -189,7 +191,9 @@ export const SETUPS: Record<string, Setup> = {
   'chipseq-macs3': {
     files: ['chip_R1.fastq.gz', 'input_R1.fastq.gz', 'ref.fa', 'genes.gtf'],
     values: { chip_reads: ['chip_R1.fastq.gz'], control_reads: ['input_R1.fastq.gz'], genome: ['ref.fa'], annotation: ['genes.gtf'] },
-    overrides: { macs3: { genome_size: '5000' }, fingerprint: { sample_regions: 400 } },
+    // The 5 kb test genome is entered in the setup step's "Genome size" field, as a person would for their own genome.
+    settings: { genome_size: '5000' },
+    overrides: { fingerprint: { sample_regions: 400 } },
     verify: (dir) => {
       const truth = CHIP_TRUTH();
       const peaks = regions(read(dir, 'macs3/sample_peaks.narrowPeak'));
@@ -208,6 +212,7 @@ export const SETUPS: Record<string, Setup> = {
         ok('macs3-callpeak', peaks.length === truth.length && truth.every((t) => hits(peaks, t).length === 1), `one peak in each of the ${truth.length} planted regions (${peaks.length} peaks)`),
         ok('macs3-callpeak', peaks.every((p) => hits(truth, p).length === 1) && summits.length === peaks.length, 'no peak outside the planted regions, one summit per peak'),
         ok('macs3-callpeak', /# ChIP-seq file = \['chip\.sorted\.bam'\]/.test(header) && /# control file = \['input\.sorted\.bam'\]/.test(header), 'MACS3 took the ChIP as treatment and the input as control'),
+        ok('macs3-callpeak', /# effective genome size = 5\.00e\+03/.test(header), 'MACS3 used the genome size typed in the setup step (5000)'),
         ok('deeptools-bamcoverage', isBigWig(dir, 'chip.bw') && isBigWig(dir, 'input.bw'), 'both signal tracks are bigWig files'),
         ok('deeptools-plotfingerprint', fp !== null && fp.width > 300 && metrics.length === 2, 'the fingerprint plot is a picture and its numbers have a row for each sample'),
         ok('deeptools-plotfingerprint', auc('chip.sorted.bam') < auc('input.sorted.bam') - 0.1, `the ChIP is more enriched than the control (AUC ${auc('chip.sorted.bam').toFixed(2)} against ${auc('input.sorted.bam').toFixed(2)})`),
@@ -341,7 +346,7 @@ function templateChain(id: string): Chain {
   const build = (): BuiltChain => {
     const template = bundledTemplates().find((t) => t.id === id);
     if (!template) throw new Error(`no bundled template ${id}`);
-    const made = instantiateTemplate(template, setup.values);
+    const made = instantiateTemplate(template, setup.values, { settings: setup.settings });
     if (made.ok === false) throw new Error(made.errors.join('; '));
     // The same switches every chain turns on: a declared output that is not what the tool writes fails the step.
     let nodes = made.nodes.map((n) => {

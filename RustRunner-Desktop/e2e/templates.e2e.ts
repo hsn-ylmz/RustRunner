@@ -8,7 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { ElectronApplication, Page } from '@playwright/test';
-import { test, expect, nodes, type Sandbox } from './fixtures';
+import { test, expect, nodes, selectNode, type Sandbox } from './fixtures';
 
 const userTemplatesDir = (sandbox: Sandbox) => path.join(path.dirname(sandbox.workDir), 'home', '.rustrunner', 'templates');
 
@@ -74,7 +74,7 @@ test('search and the topic filter narrow the list', async ({ page }) => {
   await page.getByTestId('template-domain').selectOption('qc');
   await expect(page.getByTestId('template-card-basic-read-qc')).toBeVisible();
   // The select offers only topics that have a template.
-  await expect(page.getByTestId('template-domain').locator('option')).toHaveText(['All topics', 'Read quality', 'DNA sequencing', 'RNA sequencing', 'Epigenomics', 'Long reads', 'Metagenomics']);
+  await expect(page.getByTestId('template-domain').locator('option')).toHaveText(['All topics', 'Read quality', 'DNA sequencing', 'RNA sequencing', 'Epigenomics', 'Long reads', 'Metagenomics', 'Genome assembly']);
 });
 
 test('the RNA-seq and variant calling templates are listed, and the paired-end one asks for both read files', async ({
@@ -105,7 +105,9 @@ test('the epigenomics, long-read, metagenomics and assembly templates are listed
   await openGallery(page);
   const ids = {
     epigenomics: ['chipseq-macs3', 'atacseq-genrich'],
-    longread: ['nanopore-signal', 'nanopore-fastq', 'assembly-spades-quast', 'assembly-flye-quast'],
+    longread: ['nanopore-signal', 'nanopore-fastq'],
+    // Short-read and long-read assembly share a topic, so someone with Illumina reads finds SPAdes there.
+    assembly: ['assembly-spades-quast', 'assembly-flye-quast'],
     metagenomics: ['metagenomics-kraken2-bracken'],
   };
   for (const [topic, list] of Object.entries(ids)) {
@@ -409,6 +411,89 @@ test('a damaged template file is reported and can be removed', async ({ page, sa
   await broken.getByRole('button', { name: 'Delete' }).first().click();
   await page.getByTestId('confirm-accept').click();
   await expect(broken).not.toContainText('broken.json');
+});
+
+test('the setup step asks for the settings that depend on the organism, and the steps get them', async ({ page }) => {
+  await openGallery(page);
+  // The card says how the reads must come before anything is opened.
+  await expect(page.getByTestId('template-card-chipseq-macs3').getByTestId('template-read-layout')).toHaveText('Single-end reads');
+  await expect(page.getByTestId('template-card-atacseq-genrich').getByTestId('template-read-layout')).toHaveText('Paired-end reads');
+  await expect(page.getByTestId('template-card-nanopore-fastq').getByTestId('template-read-layout')).toHaveCount(0);
+
+  await page.getByTestId('template-card-chipseq-macs3').click();
+  const settings = page.getByTestId('template-settings');
+  await expect(settings).toContainText('Check these settings');
+  const size = page.getByTestId('template-setting-genome_size');
+  await expect(size).toHaveValue('hs');
+  await expect(settings).toContainText('mm for mouse');
+  await size.fill('mm');
+  await page.getByTestId('template-create').click();
+  await expect(page.getByTestId('template-dialog')).toHaveCount(0);
+  await selectNode(page, 'Call peaks (MACS3)');
+  await expect(page.getByTestId('catalog-param-genome_size')).toHaveValue('mm');
+});
+
+test('a setting that is not usable blocks Create and says why', async ({ page }) => {
+  await openGallery(page);
+  await page.getByTestId('template-card-variants-bcftools').click();
+  const depth = page.getByTestId('template-setting-min_depth');
+  await expect(depth).toHaveValue('10');
+  await depth.fill('');
+  await expect(page.getByTestId('template-settings')).toContainText('Enter a number, for example 10.');
+  const create = page.getByTestId('template-create');
+  await expect(create).toHaveAttribute('aria-disabled', 'true');
+  await create.hover();
+  await expect(page.getByRole('tooltip')).toContainText('Fix the settings marked above');
+  await depth.fill('4');
+  await expect(create).not.toHaveAttribute('aria-disabled', 'true');
+  await create.click();
+  await expect(page.getByTestId('template-dialog')).toHaveCount(0);
+  await selectNode(page, 'Filter variants');
+  await expect(page.getByTestId('catalog-param-min_depth')).toHaveValue('4');
+});
+
+test('a file of another kind is flagged as a warning, not a plain hint', async ({ page }) => {
+  await openGallery(page);
+  await page.getByTestId('template-card-basic-read-qc').click();
+  await page.getByTestId('template-input-field-reads').fill('/data/run1.bam');
+  await expect(page.getByTestId('template-input-warning-reads')).toContainText('should be FASTQ. You can still use it.');
+  await page.getByTestId('template-input-field-reads').fill('/data/run1.fastq.gz');
+  await expect(page.getByTestId('template-input-warning-reads')).toHaveCount(0);
+});
+
+test('a template from an older version is adapted and says what changed; one from a newer version asks for an update', async ({
+  page,
+  sandbox,
+}) => {
+  const bundled = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'templates', 'basic-read-qc.json'), 'utf8')
+  );
+  const older = {
+    ...bundled,
+    id: 'old-qc',
+    name: 'Old lab QC',
+    minCatalogVersion: '2026.1.0',
+    steps: bundled.steps.map((s: any) => (s.key === 'fastp' ? { ...s, params: { retired_option: 3 } } : s)),
+  };
+  const newer = { ...bundled, id: 'future-qc', name: 'Future QC', minCatalogVersion: '2999.1.0' };
+  fs.mkdirSync(userTemplatesDir(sandbox), { recursive: true });
+  fs.writeFileSync(path.join(userTemplatesDir(sandbox), 'old-qc.json'), JSON.stringify(older));
+  fs.writeFileSync(path.join(userTemplatesDir(sandbox), 'future-qc.json'), JSON.stringify(newer));
+
+  await openGallery(page);
+  // With templates of their own, the person finds them first, above the ready-made ones.
+  const mine = await page.getByTestId('my-templates').boundingBox();
+  const ready = await page.getByTestId('template-grid-bundled').boundingBox();
+  expect(mine!.y).toBeLessThan(ready!.y);
+  await expect(page.getByTestId('template-broken')).toContainText('future-qc.json cannot be used. It needs a newer tool list');
+  await page.getByTestId('template-card-old-qc').click();
+  const note = page.getByTestId('template-adapted-note');
+  await expect(note).toContainText('Made with an older version of the tool list.');
+  await expect(note).toContainText('the option "retired_option" no longer exists and was left out.');
+  await page.getByTestId('template-input-field-reads').fill('/data/s.fastq.gz');
+  await page.getByTestId('template-create').click();
+  await expect(nodes(page)).toHaveCount(4);
+  await expect(page.getByTestId('problems-toggle')).toHaveCount(0);
 });
 
 test('a workflow with a step written by hand cannot become a template, and says why', async ({ page }) => {

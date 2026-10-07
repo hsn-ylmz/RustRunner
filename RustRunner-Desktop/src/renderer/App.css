@@ -1946,4 +1946,25 @@
 
 .template-list .link-button {
   text-align: left;
+  /* A wrapped link is an inline block: align its first line with the list marker, not its last. */
+  vertical-align: top;
+}
+
+.template-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* A file of another kind than the input asks for: a reminder that must not read as an ordinary hint. */
+.template-input-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1);
+  color: var(--warning);
+}
+
+.template-input-warning .icon {
+  flex: none;
+  margin-top: var(--space-half);
 }

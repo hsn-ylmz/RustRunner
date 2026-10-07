@@ -3,10 +3,11 @@
   "id": "variants-gatk",
   "name": "Germline variant calling with GATK",
   "description": "Find variants in one sample with GATK HaplotypeCaller, the standard caller for human and other diploid genomes.",
-  "details": "Use this to call germline SNPs and small indels with GATK HaplotypeCaller, which re-assembles the reads around every candidate site and is the usual choice for diploid organisms and clinical-style work. The pipeline trims the reads with fastp, indexes your reference and aligns the reads with BWA-MEM, sorts the alignments, marks duplicates with Picard, indexes the result, prepares the reference files GATK requires (a .fai index and a sequence dictionary), calls variants, summarises them with bcftools stats and gathers the reports into MultiQC. The output is a standard VCF; filter it by quality afterwards (add a bcftools filter step) because HaplotypeCaller reports every candidate. GATK needs about 2 GB of memory by default; raise it in the HaplotypeCaller step for large genomes. Base-quality recalibration is not included. One single-end sample at a time.",
+  "details": "Use this to call germline SNPs and small indels with GATK HaplotypeCaller, which re-assembles the reads around every candidate site and is the usual choice for diploid organisms and clinical-style work. The pipeline trims the reads with fastp, indexes your reference and aligns the reads with BWA-MEM, sorts the alignments, marks duplicates with Picard, indexes the result, prepares the reference files GATK requires (a .fai index and a sequence dictionary), calls variants, summarises them with bcftools stats and gathers the reports into MultiQC. The output is a standard VCF; filter it by quality afterwards (add a bcftools filter step) because HaplotypeCaller reports every candidate. The setup step asks how many copies of each chromosome your organism has (2 for most animals and plants, 1 for bacteria). GATK needs about 2 GB of memory by default; raise it in the HaplotypeCaller step for large genomes. Base-quality recalibration is not included. One single-end sample at a time.",
   "domain": "dna",
   "difficulty": "advanced",
   "minCatalogVersion": "2026.15.1",
+  "readLayout": "single",
   "inputs": [
     {
       "id": "reads",
@@ -43,6 +44,19 @@
         {
           "step": "faidx",
           "slot": "ref"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "ploidy",
+      "label": "Copies of each chromosome (ploidy)",
+      "hint": "2 for humans and most animals and plants, 1 for bacteria and haploid yeast.",
+      "targets": [
+        {
+          "step": "hc",
+          "param": "ploidy"
         }
       ]
     }

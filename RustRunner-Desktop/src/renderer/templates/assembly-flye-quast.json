@@ -3,8 +3,8 @@
   "id": "assembly-flye-quast",
   "name": "Genome assembly from long reads (Flye and QUAST)",
   "description": "Put long Nanopore or PacBio reads of a microbial genome together without a reference, then measure how good the assembly is.",
-  "details": "Use this to assemble the genome of a cultured organism, such as a bacterium or a plasmid, from long reads. Flye builds the assembly, polishes it once, and also writes a table that says which contigs are circular and how deeply each is covered. QUAST then reports how many contigs there are, how long they are (N50) and the total size; with a reference genome of a close relative it also measures how much of it is covered and how many misassemblies there are. The reads are set to Nanopore (older chemistry or unknown) by default: in the Flye step, change \"Read type\" to the newest Nanopore chemistry or to PacBio HiFi if that is what you have. The genome size is optional; if you know it roughly (for example 5m for a bacterium), enter it in the Flye step. For a good assembly you need about 30 times coverage or more, and reads that are mostly longer than a few thousand bases; filter poor reads first (the template \"Nanopore reads from FASTQ to coverage\" shows how, with chopper) if your data is mixed. For short reads use \"Genome assembly from short reads (SPAdes and QUAST)\".",
-  "domain": "longread",
+  "details": "Use this to assemble the genome of a cultured organism, such as a bacterium or a plasmid, from long reads. Flye builds the assembly, polishes it once, and also writes a table that says which contigs are circular and how deeply each is covered. QUAST then reports how many contigs there are, how long they are (N50) and the total size; with a reference genome of a close relative it also measures how much of it is covered and how many misassemblies there are. The setup step asks what kind of long reads you have (it starts at Nanopore, older chemistry or unknown) and, optionally, the rough genome size (for example 5m for a bacterium). For a good assembly you need about 30 times coverage or more, and reads that are mostly longer than a few thousand bases; filter poor reads first (the template \"Nanopore reads from FASTQ to coverage\" shows how, with chopper) if your data is mixed. For short reads use \"Genome assembly from short reads (SPAdes and QUAST)\".",
+  "domain": "assembly",
   "difficulty": "intermediate",
   "minCatalogVersion": "2026.16.0",
   "inputs": [
@@ -40,6 +40,30 @@
         {
           "step": "quast",
           "slot": "reference"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "read_type",
+      "label": "Kind of reads",
+      "hint": "Tells Flye how many errors to expect. Pick the newest Nanopore chemistry for reads basecalled at Q20 or better.",
+      "targets": [
+        {
+          "step": "flye",
+          "param": "read_type"
+        }
+      ]
+    },
+    {
+      "id": "genome_size",
+      "label": "Expected genome size (optional)",
+      "hint": "For example 5m for a 5 million base bacterium, or 25k. Leave empty to let Flye work it out.",
+      "targets": [
+        {
+          "step": "flye",
+          "param": "genome_size"
         }
       ]
     }

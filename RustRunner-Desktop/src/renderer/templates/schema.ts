@@ -13,7 +13,10 @@
  *   details           the longer "what this does" text of the setup step
  *   domain, difficulty  for filtering and for setting expectations
  *   minCatalogVersion the oldest tool catalog the template works with
+ *   readLayout        optional: 'single', 'paired' or 'either' for short reads, shown on the card
  *   inputs            the files the person provides; each names the step slots it fills
+ *   settings          optional: the few options the person should check before creating
+ *                     (genome size, strandedness), each naming the step options it sets
  *   steps             catalog tool + options + default file names + a position on the canvas
  *   edges             which step runs after which, and which output fills which slot
  *   outputs           what the finished run produces, shown before the workflow is created
@@ -35,6 +38,7 @@ import {
   type Catalog,
   type CatalogTool,
   type ParamValue,
+  type ToolParam,
 } from '../tools/catalog';
 import { labelToId } from '../stepNames';
 import { rectsOverlap, type Rect } from '../nodePlacement';
@@ -49,10 +53,20 @@ export const TEMPLATE_DOMAINS: Record<string, string> = {
   epigenomics: 'Epigenomics',
   longread: 'Long reads',
   metagenomics: 'Metagenomics',
+  assembly: 'Genome assembly',
   general: 'General',
 };
 
 export type Difficulty = 'beginner' | 'intermediate' | 'advanced';
+
+/** How a short-read template wants its reads, in the words the card shows. */
+export const READ_LAYOUTS = {
+  single: 'Single-end reads',
+  paired: 'Paired-end reads',
+  either: 'Single- or paired-end reads',
+} as const;
+
+export type ReadLayout = keyof typeof READ_LAYOUTS;
 
 export const DIFFICULTIES: Record<Difficulty, string> = {
   beginner: 'Beginner',
@@ -93,6 +107,29 @@ export interface TemplateInput {
   /** A file name shown as placeholder text. */
   example?: string;
   targets: TemplateInputTarget[];
+}
+
+export interface TemplateSettingTarget {
+  /** The key of a step of this template. */
+  step: string;
+  /** An option (catalog parameter id) of that step's tool. */
+  param: string;
+}
+
+/**
+ * An option the setup step asks about before the workflow is created, because
+ * its default cannot suit everyone (MACS3's genome size, featureCounts'
+ * strandedness). The field takes the type, choices and bounds of the tool
+ * option; its starting value is the step's value in the template (or the
+ * tool's default). One setting can set the same option in several steps.
+ */
+export interface TemplateSetting {
+  id: string;
+  /** The field's label: "Genome size". */
+  label: string;
+  /** One or two short lines: what it changes and what to pick. */
+  hint: string;
+  targets: TemplateSettingTarget[];
 }
 
 export interface TemplateStep {
@@ -148,7 +185,9 @@ export interface WorkflowTemplate {
   domain: string;
   difficulty: Difficulty;
   minCatalogVersion: string;
+  readLayout?: ReadLayout;
   inputs: TemplateInput[];
+  settings?: TemplateSetting[];
   steps: TemplateStep[];
   edges: TemplateEdge[];
   outputs: TemplateOutput[];
@@ -242,6 +281,16 @@ export function stepRect(step: Pick<TemplateStep, 'position'>): Rect {
 // Validation
 // -----------------------------------------------------------------------------
 
+/** Two options one setting can set together: same type, same choices and bounds. */
+function sameKindOfParam(a: ToolParam, b: ToolParam): boolean {
+  return (
+    a.type === b.type &&
+    JSON.stringify(a.options ?? []) === JSON.stringify(b.options ?? []) &&
+    a.min === b.min &&
+    a.max === b.max
+  );
+}
+
 export function paramProblem(tool: CatalogTool, id: string, value: unknown): string | null {
   const param = tool.params.find((p) => p.id === id);
   if (!param) return `${tool.name} has no option "${id}"`;
@@ -290,6 +339,9 @@ export function validateTemplate(raw: unknown, catalog: Catalog = CATALOG): stri
   }
   if (typeof raw.difficulty !== 'string' || !(raw.difficulty in DIFFICULTIES)) {
     err(`difficulty must be one of ${Object.keys(DIFFICULTIES).join(', ')}.`);
+  }
+  if (raw.readLayout !== undefined && (typeof raw.readLayout !== 'string' || !(raw.readLayout in READ_LAYOUTS))) {
+    err(`readLayout must be one of ${Object.keys(READ_LAYOUTS).join(', ')}.`);
   }
   if (parseVersion(raw.minCatalogVersion) === null) {
     err('minCatalogVersion must be a version like 2026.15.0.');
@@ -489,6 +541,46 @@ export function validateTemplate(raw: unknown, catalog: Catalog = CATALOG): stri
     }
   }
 
+  // ---- settings: the options asked about in the setup step
+  if (raw.settings !== undefined && !Array.isArray(raw.settings)) err('settings must be a list when present.');
+  const settingIds = new Set<string>();
+  const settingTargets = new Set<string>();
+  for (const [i, item] of (Array.isArray(raw.settings) ? raw.settings : []).entries()) {
+    if (!isRecord(item) || typeof item.id !== 'string' || !KEY_PATTERN.test(item.id)) {
+      err(`Setting ${i + 1}: id must be lowercase letters, digits and underscores, starting with a letter.`);
+      continue;
+    }
+    const name = `Setting "${item.id}"`;
+    if (settingIds.has(item.id)) err(`${name} appears twice.`);
+    settingIds.add(item.id);
+    if (!isText(item.label, 80)) err(`${name}: label is required.`);
+    if (typeof item.hint !== 'string' || item.hint.length > 400) err(`${name}: hint must be text of at most 400 characters.`);
+    if (!Array.isArray(item.targets) || item.targets.length === 0) {
+      err(`${name}: targets must name at least one step option.`);
+      continue;
+    }
+    let first: ToolParam | undefined;
+    for (const target of item.targets) {
+      if (!isRecord(target) || typeof target.step !== 'string' || typeof target.param !== 'string') {
+        err(`${name}: each target needs "step" and "param".`);
+        continue;
+      }
+      const step = byKey.get(target.step);
+      const param = step?.tool.params.find((p) => p.id === target.param);
+      if (!step || !param) {
+        err(`${name}: ${target.step}.${target.param} is not an option of a step.`);
+        continue;
+      }
+      const id = `${target.step}|${target.param}`;
+      if (settingTargets.has(id)) err(`${name}: ${target.step}.${target.param} is set by more than one setting.`);
+      settingTargets.add(id);
+      if (!first) first = param;
+      else if (!sameKindOfParam(first, param)) {
+        err(`${name}: ${target.step}.${target.param} is a different kind of option than the first target.`);
+      }
+    }
+  }
+
   // ---- layout
   for (let i = 0; i < steps.length; i++) {
     for (let j = i + 1; j < steps.length; j++) {
@@ -559,4 +651,113 @@ export function databaseNeeds(template: Pick<WorkflowTemplate, 'steps'>, catalog
     needs.push({ tool: tool.name, ...tool.needs_database });
   }
   return needs;
+}
+
+// -----------------------------------------------------------------------------
+// Settings
+// -----------------------------------------------------------------------------
+
+/** The tool option a setting stands for (its first target's), or undefined when the template does not fit the catalog. */
+export function settingParam(
+  template: Pick<WorkflowTemplate, 'steps'>,
+  setting: TemplateSetting,
+  catalog: Catalog = CATALOG
+): ToolParam | undefined {
+  const target = setting.targets[0];
+  const step = template.steps.find((s) => s.key === target?.step);
+  return findTool(step?.tool, catalog)?.params.find((p) => p.id === target.param);
+}
+
+/** What a setting starts at: the value its first step has in the template, or the tool's default. */
+export function settingDefault(
+  template: Pick<WorkflowTemplate, 'steps'>,
+  setting: TemplateSetting,
+  catalog: Catalog = CATALOG
+): ParamValue | undefined {
+  const param = settingParam(template, setting, catalog);
+  if (!param) return undefined;
+  const step = template.steps.find((s) => s.key === setting.targets[0].step);
+  const own = step?.params?.[param.id];
+  return own !== undefined ? own : param.default;
+}
+
+// -----------------------------------------------------------------------------
+// Templates from another version of the app
+// -----------------------------------------------------------------------------
+
+/**
+ * Why a template file cannot be used because a newer version of the app wrote
+ * it (a newer file format or tool catalog), in words for the person; null when
+ * this app can read it. Checked before the detailed validation, whose messages
+ * would only list the symptoms.
+ */
+export function newerThanApp(raw: unknown, catalog: Catalog = CATALOG): string | null {
+  if (!isRecord(raw)) return null;
+  const format = raw.formatVersion;
+  if (typeof format === 'number' && format > TEMPLATE_FORMAT_VERSION) {
+    return 'It was saved by a newer version of RustRunner. Update the app to use it.';
+  }
+  if (parseVersion(raw.minCatalogVersion) !== null && compareVersions(raw.minCatalogVersion as string, catalog.version) > 0) {
+    return `It needs a newer tool list (${raw.minCatalogVersion}; this app has ${catalog.version}). Update the app to use it.`;
+  }
+  return null;
+}
+
+/**
+ * Brings a template written for an older tool catalog up to this one. Tools
+ * gain and lose options between catalog versions; a saved template must not
+ * become unusable because an option it set was renamed, removed, or lost one of
+ * its choices. Such values are dropped (the tool's default applies), and a
+ * setting left without targets is dropped. Each change is described in
+ * `notes`, which the setup step shows. A template already written for this
+ * catalog (or a newer one), or one that is not an object, is returned as it
+ * is: the validation then reports its problems.
+ */
+export function adaptToCatalog(raw: unknown, catalog: Catalog = CATALOG): { raw: unknown; notes: string[] } {
+  if (!isRecord(raw) || parseVersion(raw.minCatalogVersion) === null) return { raw, notes: [] };
+  if (compareVersions(raw.minCatalogVersion as string, catalog.version) >= 0) return { raw, notes: [] };
+  if (!Array.isArray(raw.steps)) return { raw, notes: [] };
+
+  const notes: string[] = [];
+  const steps = raw.steps.map((item: unknown) => {
+    if (!isRecord(item) || !isRecord(item.params)) return item;
+    const tool = findTool(item.tool, catalog);
+    if (!tool) return item;
+    const name = (typeof item.label === 'string' && item.label.trim()) || tool.name;
+    const params: Record<string, unknown> = {};
+    for (const [id, value] of Object.entries(item.params)) {
+      const param = tool.params.find((p) => p.id === id);
+      if (!param) {
+        notes.push(`${name}: the option "${id}" no longer exists and was left out.`);
+      } else if (paramProblem(tool, id, value) !== null) {
+        notes.push(`${name}: "${param.label}" no longer accepts ${JSON.stringify(value)}; its default is used.`);
+      } else params[id] = value;
+    }
+    return { ...item, params };
+  });
+
+  let settings = raw.settings;
+  if (Array.isArray(raw.settings)) {
+    const stepTools = new Map(
+      steps.filter(isRecord).map((s) => [String(s.key), findTool(s.tool, catalog)] as const)
+    );
+    settings = raw.settings
+      .map((setting: unknown) => {
+        if (!isRecord(setting) || !Array.isArray(setting.targets)) return setting;
+        const targets = setting.targets.filter((t: unknown) => {
+          if (!isRecord(t)) return true;
+          const tool = stepTools.get(String(t.step));
+          return !tool || tool.params.some((p) => p.id === t.param);
+        });
+        if (targets.length === setting.targets.length) return setting;
+        return { ...setting, targets };
+      })
+      .filter((setting: unknown) => {
+        if (!isRecord(setting) || !Array.isArray(setting.targets) || setting.targets.length > 0) return true;
+        notes.push(`The setting "${String(setting.label)}" no longer applies and was left out.`);
+        return false;
+      });
+  }
+  if (notes.length === 0) return { raw, notes };
+  return { raw: { ...raw, steps, ...(settings !== undefined ? { settings } : {}) }, notes };
 }

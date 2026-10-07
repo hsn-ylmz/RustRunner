@@ -3,10 +3,11 @@
   "id": "chipseq-macs3",
   "name": "ChIP-seq peak calling with MACS3",
   "description": "Find where a protein binds the genome: trim, align a ChIP sample and its input control, call peaks, draw the signal and say which genes the peaks lie near.",
-  "details": "Use this for a ChIP-seq experiment on one sample with an input (or IgG) control, for example a transcription factor or a histone mark in a genome you have as a FASTA file and a GTF. The pipeline trims both read files with fastp, builds a Bowtie2 index of your genome, aligns the ChIP and the control, sorts and indexes the alignments with samtools, and calls peaks with MACS3 (the ChIP against the control). deepTools then makes a signal track of each sample that you can open in a genome browser, and a fingerprint plot that shows how strongly the ChIP is enriched compared with the control. HOMER finally tells you for each peak whether it lies in a promoter, an exon, an intron or between genes, and which gene is nearest. Before you run it, open the MACS3 step and set \"Genome size\" to your organism (hs for human, mm for mouse, or a number of bases for other genomes); the default is human. The reads are single-end; for paired reads, align them yourself and set \"Read type\" in the MACS3 step to paired-end. Broad histone marks need MACS3 in broad mode, which this template does not use. One ChIP sample and one control per run.",
+  "details": "Use this for a ChIP-seq experiment on one sample with an input (or IgG) control, for example a transcription factor or a histone mark in a genome you have as a FASTA file and a GTF. The pipeline trims both read files with fastp, builds a Bowtie2 index of your genome, aligns the ChIP and the control, sorts and indexes the alignments with samtools, and calls peaks with MACS3 (the ChIP against the control). deepTools then makes a signal track of each sample that you can open in a genome browser, and a fingerprint plot that shows how strongly the ChIP is enriched compared with the control. HOMER finally tells you for each peak whether it lies in a promoter, an exon, an intron or between genes, and which gene is nearest. The setup step asks for the genome size of your organism, which MACS3 needs to estimate the background; it starts at human (hs). The reads are single-end; for paired reads, align them yourself and set \"Read type\" in the MACS3 step to paired-end. Broad histone marks need MACS3 in broad mode, which this template does not use. One ChIP sample and one control per run.",
   "domain": "epigenomics",
   "difficulty": "advanced",
   "minCatalogVersion": "2026.16.0",
+  "readLayout": "single",
   "inputs": [
     {
       "id": "chip_reads",
@@ -77,6 +78,19 @@
         {
           "step": "homer",
           "slot": "annotation"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "genome_size",
+      "label": "Genome size",
+      "hint": "hs for human, mm for mouse, ce for worm, dm for fly, or the size of your genome in bases, for example 12000000 for yeast. MACS3 uses it to estimate the background.",
+      "targets": [
+        {
+          "step": "macs3",
+          "param": "genome_size"
         }
       ]
     }

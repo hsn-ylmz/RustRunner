@@ -3,10 +3,11 @@
   "id": "variants-bcftools-paired",
   "name": "Germline variant calling, paired-end reads (bcftools)",
   "description": "Find variants in one paired-end sample against a reference genome, with alignment statistics and a filtered VCF.",
-  "details": "Use this when your sequencing run gave two files per sample (R1 and R2). The pipeline indexes your reference, aligns the read pairs with BWA-MEM so mates are placed together, sorts the alignments, marks PCR duplicates with samtools, indexes the result, calls variants with bcftools, keeps calls with enough quality and depth, and reports alignment statistics (samtools flagstat) and variant statistics in one MultiQC report. Trimming is not included because the fastp step of this version handles one file at a time; if your reads need adapter removal, trim them beforehand. The filter keeps calls with quality 20 or more and depth 10 or more; change these in the filter step to match your coverage. For single-end reads use the single-end template, which also trims.",
+  "details": "Use this when your sequencing run gave two files per sample (R1 and R2). The pipeline indexes your reference, aligns the read pairs with BWA-MEM so mates are placed together, sorts the alignments, marks PCR duplicates with samtools, indexes the result, calls variants with bcftools, keeps calls with enough quality and depth, and reports alignment statistics (samtools flagstat) and variant statistics in one MultiQC report. Trimming is not included because the fastp step of this version handles one file at a time; if your reads need adapter removal, trim them beforehand. The filter keeps calls with quality 20 or more and at least the read depth you choose in the setup step (10 suits about 30x coverage; lower it for thinner data). The unfiltered calls are kept too. For single-end reads use the single-end template, which also trims.",
   "domain": "dna",
   "difficulty": "intermediate",
   "minCatalogVersion": "2026.15.1",
+  "readLayout": "paired",
   "inputs": [
     {
       "id": "reads1",
@@ -60,6 +61,19 @@
         {
           "step": "call",
           "slot": "ref"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "min_depth",
+      "label": "Minimum read depth",
+      "hint": "Calls covered by fewer reads are left out of the filtered file; the unfiltered file keeps every call. 10 suits about 30x coverage; use 3 to 5 for thinner data.",
+      "targets": [
+        {
+          "step": "filter",
+          "param": "min_depth"
         }
       ]
     }

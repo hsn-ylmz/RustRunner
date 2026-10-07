@@ -3,10 +3,11 @@
   "id": "variants-bcftools",
   "name": "Germline variant calling with bcftools",
   "description": "Find single-base differences between one sample and a reference genome, from trimming to a filtered, summarised VCF.",
-  "details": "Use this to list the variants (SNPs and small insertions or deletions) of one sample compared with a reference genome, for example a bacterial isolate, a yeast strain or a small panel. The pipeline trims the reads with fastp, indexes your reference and aligns the reads with BWA-MEM, sorts the alignments, marks PCR duplicates with samtools, indexes the result, calls variants with bcftools, keeps only calls with enough quality and depth, summarises them with bcftools stats, and gathers the results into a MultiQC report. The filter keeps calls with quality 20 or more and depth 10 or more; change these in the filter step to match your coverage. bcftools calls diploid genotypes by default; for large human genomes use the GATK template, which is built for them. One single-end sample at a time.",
+  "details": "Use this to list the variants (SNPs and small insertions or deletions) of one sample compared with a reference genome, for example a bacterial isolate, a yeast strain or a small panel. The pipeline trims the reads with fastp, indexes your reference and aligns the reads with BWA-MEM, sorts the alignments, marks PCR duplicates with samtools, indexes the result, calls variants with bcftools, keeps only calls with enough quality and depth, summarises them with bcftools stats, and gathers the results into a MultiQC report. The filter keeps calls with quality 20 or more and at least the read depth you choose in the setup step (10 suits about 30x coverage; lower it for thinner data). The unfiltered calls are kept too. bcftools calls diploid genotypes by default; for large human genomes use the GATK template, which is built for them. One single-end sample at a time.",
   "domain": "dna",
   "difficulty": "intermediate",
   "minCatalogVersion": "2026.15.1",
+  "readLayout": "single",
   "inputs": [
     {
       "id": "reads",
@@ -43,6 +44,19 @@
         {
           "step": "call",
           "slot": "ref"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "min_depth",
+      "label": "Minimum read depth",
+      "hint": "Calls covered by fewer reads are left out of the filtered file; the unfiltered file keeps every call. 10 suits about 30x coverage; use 3 to 5 for thinner data.",
+      "targets": [
+        {
+          "step": "filter",
+          "param": "min_depth"
         }
       ]
     }

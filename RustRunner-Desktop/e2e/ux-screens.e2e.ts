@@ -397,6 +397,14 @@ for (const scheme of SCHEMES) {
       await shoot('gallery-my-templates');
       await page.keyboard.press('Escape');
 
+      // A template with settings that depend on the organism (and a gallery card with its read layout).
+      await page.getByTestId('new-from-template').click();
+      await page.getByTestId('template-card-chipseq-macs3').click();
+      await page.getByTestId('template-settings').scrollIntoViewIfNeeded();
+      await shoot('setup-settings');
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('template-dialog')).toHaveCount(0);
+
       // Left empty: the workflow says what is missing.
       await page.getByTestId('new-from-template').click();
       await page.getByTestId('template-card-basic-read-qc').click();

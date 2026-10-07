@@ -73,7 +73,7 @@ import { EmptyState } from './components/EmptyState';
 import { ProblemsPanel } from './components/ProblemsPanel';
 import { TemplateGallery } from './components/TemplateGallery';
 import { SaveTemplateDialog } from './components/SaveTemplateDialog';
-import { instantiateTemplate, valuesFromText } from './templates/instantiate';
+import { instantiateTemplate, valuesFromText, type SettingTexts } from './templates/instantiate';
 import { templateBlockers } from './templates/fromWorkflow';
 import type { WorkflowTemplate } from './templates/schema';
 import { ExecutionLogs, type ExecutionTab } from './components/ExecutionLogs';
@@ -901,9 +901,15 @@ function WorkflowEditorInner() {
    * workflow instead.
    */
   const handleCreateFromTemplate = useCallback(
-    async (template: WorkflowTemplate, texts: Record<string, string>, name: string): Promise<boolean> => {
+    async (
+      template: WorkflowTemplate,
+      texts: Record<string, string>,
+      name: string,
+      settings: SettingTexts
+    ): Promise<boolean> => {
       const made = instantiateTemplate(template, valuesFromText(template, texts), {
         edgeDefaults: DEFAULT_EDGE_OPTIONS,
+        settings,
       });
       if (made.ok === false) {
         notify('danger', made.errors[0]);

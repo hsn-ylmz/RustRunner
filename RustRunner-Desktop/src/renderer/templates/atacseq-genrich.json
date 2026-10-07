@@ -3,10 +3,11 @@
   "id": "atacseq-genrich",
   "name": "ATAC-seq open chromatin peaks with Genrich",
   "description": "Find open chromatin regions from paired-end ATAC-seq reads: align, call peaks in ATAC mode, merge them and make a signal track.",
-  "details": "Use this for ATAC-seq (or a similar cut-site assay) on one sample with paired-end reads, in a genome you have as a FASTA file. The pipeline builds a Bowtie2 index of your genome and aligns the read pairs, allowing fragments up to 2000 bases because ATAC-seq fragments can be long. The alignments are sorted by read name, which is what Genrich needs, and Genrich calls the peaks in ATAC mode: it looks at where the transposase cut the DNA, drops PCR duplicates and ignores the mitochondrial chromosome chrM (change this in the Genrich step if your mitochondrial chromosome has another name). bedtools merge then joins peaks that touch. A second copy of the alignments, sorted by position and indexed, makes a signal track (bigWig) that you can open in a genome browser. A list of regions to ignore, such as a blacklist of the genome, is optional. The pipeline does not trim adapters, because the trimming step used in the other templates takes one read file at a time; if your fragments are shorter than the reads, trim the files first. Genrich needs paired-end reads, so single-end ATAC-seq cannot be used with this template. One sample per run; to use several replicates, give them to Genrich in its step.",
+  "details": "Use this for ATAC-seq (or a similar cut-site assay) on one sample with paired-end reads, in a genome you have as a FASTA file. The pipeline builds a Bowtie2 index of your genome and aligns the read pairs, allowing fragments up to 2000 bases because ATAC-seq fragments can be long. The alignments are sorted by read name, which is what Genrich needs, and Genrich calls the peaks in ATAC mode: it looks at where the transposase cut the DNA, drops PCR duplicates and ignores the mitochondrial chromosome chrM (the setup step asks for its name, because genomes from Ensembl call it MT). bedtools merge then joins peaks that touch. A second copy of the alignments, sorted by position and indexed, makes a signal track (bigWig) that you can open in a genome browser. A list of regions to ignore, such as a blacklist of the genome, is optional. The pipeline does not trim adapters, because the trimming step used in the other templates takes one read file at a time; if your fragments are shorter than the reads, trim the files first. Genrich needs paired-end reads, so single-end ATAC-seq cannot be used with this template. One sample per run; to use several replicates, give them to Genrich in its step.",
   "domain": "epigenomics",
   "difficulty": "advanced",
   "minCatalogVersion": "2026.16.0",
+  "readLayout": "paired",
   "inputs": [
     {
       "id": "reads1",
@@ -77,6 +78,19 @@
         {
           "step": "coverage",
           "slot": "blacklist"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "skip_chroms",
+      "label": "Chromosomes to ignore",
+      "hint": "The mitochondrial chromosome as your genome FASTA names it: chrM (UCSC), MT (Ensembl) or Mt (some plants). Separate several with commas; leave empty to use every chromosome.",
+      "targets": [
+        {
+          "step": "genrich",
+          "param": "skip_chroms"
         }
       ]
     }

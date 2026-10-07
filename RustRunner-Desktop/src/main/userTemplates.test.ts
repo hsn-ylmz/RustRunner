@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
+import { spawnSync } from 'child_process';
 import path from 'path';
 import {
   MAX_TEMPLATE_BYTES,
@@ -67,6 +68,45 @@ describe('user template storage', () => {
     expect(list.map((t) => t.id)).toEqual(['broken', 'my-qc']);
     expect(list[0].error).toMatch(/not valid JSON/);
     expect(list[1].raw).toBeDefined();
+  });
+
+  it('reads only regular files: a folder or a pipe named like a template is reported, never read', () => {
+    fs.mkdirSync(path.join(dir, 'folder.json'), { recursive: true });
+    if (process.platform !== 'win32') {
+      // Reading a pipe would block until something writes to it: the list must not hang.
+      expect(spawnSync('mkfifo', [path.join(dir, 'pipe.json')]).status).toBe(0);
+    }
+    saveUserTemplate(dir, sample());
+    const list = listUserTemplates(dir);
+    expect(list.find((t) => t.id === 'folder')?.error).toMatch(/not a regular file/);
+    if (process.platform !== 'win32') expect(list.find((t) => t.id === 'pipe')?.error).toMatch(/not a regular file/);
+    expect(list.find((t) => t.id === 'my-qc')?.raw).toEqual(sample());
+    expect(renameUserTemplate(dir, 'folder', 'Name').ok).toBe(false);
+  });
+
+  it('follows a link to a template file, and reports one that points nowhere', () => {
+    const elsewhere = path.join(home, 'shared.json');
+    fs.writeFileSync(elsewhere, JSON.stringify(sample({ id: 'linked' })));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.symlinkSync(elsewhere, path.join(dir, 'linked.json'));
+    fs.symlinkSync(path.join(home, 'gone.json'), path.join(dir, 'dangling.json'));
+    const list = listUserTemplates(dir);
+    expect(list.find((t) => t.id === 'linked')?.raw).toEqual(sample({ id: 'linked' }));
+    expect(list.find((t) => t.id === 'dangling')?.error).toMatch(/cannot be read/);
+  });
+
+  it('reports a file that is too large without reading it, and will not rename it', () => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'huge.json'), JSON.stringify(sample({ id: 'huge', details: 'x'.repeat(MAX_TEMPLATE_BYTES) })));
+    expect(listUserTemplates(dir)).toEqual([{ id: 'huge', error: 'The file is too large to be a template.' }]);
+    expect(renameUserTemplate(dir, 'huge', 'Name')).toEqual({ ok: false, error: 'The file is too large to be a template.' });
+  });
+
+  it('leaves no temporary files behind', () => {
+    saveUserTemplate(dir, sample());
+    saveUserTemplate(dir, sample({ name: 'Taken' }));
+    renameUserTemplate(dir, 'my-qc', 'New name');
+    expect(fs.readdirSync(dir)).toEqual(['my-qc.json']);
   });
 
   it('renames by changing only the name', () => {
