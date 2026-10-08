@@ -22,6 +22,8 @@ const OUT = path.join(REPO, 'docs');
 /** Where releases and the source live. Must match build.publish in package.json. */
 const GITHUB = 'https://github.com/hsn-ylmz/RustRunner';
 const RELEASES = `${GITHUB}/releases`;
+/** Zenodo concept DOI: always resolves to the latest archived release. */
+const DOI = '10.5281/zenodo.22177901';
 
 /** The words the app's template gallery uses (templates/schema.ts). */
 const DOMAINS = {
@@ -138,6 +140,7 @@ ${wrapTables(body)}
 <footer class="site-footer">
   <div class="wrap">
     <p>RustRunner ${esc(version)}${isBeta(version) ? ' (open beta)' : ''}. MIT License. <a href="${GITHUB}">Source code</a> | <a href="${RELEASES}">Releases</a> | <a href="${GITHUB}/issues">Report a problem</a></p>
+    <p>Cite RustRunner: Yilmaz H. RustRunner: a visual, no-code workflow builder for bioinformatics. Zenodo. <a href="https://doi.org/${DOI}">doi:${DOI}</a></p>
   </div>
 </footer>
 </body>
