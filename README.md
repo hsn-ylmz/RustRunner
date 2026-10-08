@@ -8,6 +8,7 @@
 [![Version: 1.0.0-beta.1](https://img.shields.io/badge/version-1.0.0--beta.1-orange.svg)](CHANGELOG.md)
 [![Status: open beta](https://img.shields.io/badge/status-open%20beta-orange.svg)](#limitations-of-the-beta)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/1148338460.svg)](https://doi.org/10.5281/zenodo.22177901)
 
 > ## Open beta
 >
@@ -209,9 +210,19 @@ words). To add a catalog tool, add an entry to `catalog.json` and a case to the 
 
 ## Citation and license
 
-If you use RustRunner in published work, please cite this repository and the version you used (`rustrunner --version` or
-**Help > About RustRunner**), and cite the tools your pipeline ran; each template lists its references. RustRunner is released
-under the [MIT License](LICENSE). Author: Hasan Yilmaz.
+If you use RustRunner in published work, please cite it with its DOI, and cite the tools your pipeline ran; each template
+lists its references.
+
+> Yilmaz H. RustRunner: a visual, no-code workflow builder for bioinformatics. Zenodo.
+> [doi:10.5281/zenodo.22177901](https://doi.org/10.5281/zenodo.22177901)
+
+This DOI always points to the latest release. Each release also has a DOI of its own on
+[Zenodo](https://doi.org/10.5281/zenodo.22177901); to cite the exact version you used (`rustrunner --version` or
+**Help > About RustRunner**), use that one. GitHub's **Cite this repository** button (from [CITATION.cff](CITATION.cff))
+gives the same reference as APA or BibTeX.
+
+RustRunner is released under the [MIT License](LICENSE). Author: Hasan Yilmaz
+([ORCID 0009-0007-8042-8144](https://orcid.org/0009-0007-8042-8144)).
 
 Built with [Electron](https://www.electronjs.org/), [React Flow](https://reactflow.dev/), [Rust](https://www.rust-lang.org/),
 [Tokio](https://tokio.rs/) and [micromamba](https://mamba.readthedocs.io/).
