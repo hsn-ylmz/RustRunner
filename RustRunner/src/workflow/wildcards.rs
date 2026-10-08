@@ -11,6 +11,9 @@ use std::path::Path;
 
 use crate::workflow::Workflow;
 
+/// Names that denote command placeholders and so cannot name a wildcard.
+const RESERVED_WILDCARD_NAMES: [&str; 4] = ["input", "output", "inputs", "outputs"];
+
 /// Extracts wildcard values from a list of file paths.
 ///
 /// Algorithm:
@@ -118,11 +121,10 @@ pub fn has_wildcards(text: &str) -> bool {
 /// ```
 pub fn extract_wildcard_names(pattern: &str) -> Vec<String> {
     let mut names = Vec::new();
-    let mut chars = pattern.chars().peekable();
     let mut in_wildcard = false;
     let mut current_name = String::new();
 
-    while let Some(ch) = chars.next() {
+    for ch in pattern.chars() {
         match ch {
             '{' => {
                 in_wildcard = true;
@@ -156,7 +158,10 @@ pub fn extract_wildcard_names(pattern: &str) -> Vec<String> {
 /// # Arguments
 ///
 /// * `workflow` - The workflow to expand
-/// * `wildcard_files` - Map of wildcard names to concrete file lists
+/// * `wildcard_files` - Workflow-wide fallback map of wildcard names to
+///   concrete file lists. A step's own `wildcard_files` entry for the same
+///   name always wins, so two steps may use the same wildcard name with
+///   different file sets, or different names altogether.
 pub fn expand_workflow_wildcards(
     workflow: &mut Workflow,
     wildcard_files: &HashMap<String, Vec<String>>,
@@ -200,13 +205,27 @@ pub fn expand_workflow_wildcards(
 
         let wildcard_name = wildcard_names.iter().next().unwrap();
 
-        // Get the files for this wildcard
-        let files = wildcard_files.get(wildcard_name).ok_or_else(|| {
-            format!(
-                "Step '{}': No files provided for wildcard '{{{}}}'",
+        // `{input}` / `{output}` are command placeholders; a wildcard with one
+        // of those names would silently rewrite the command.
+        if RESERVED_WILDCARD_NAMES.contains(&wildcard_name.as_str()) {
+            return Err(format!(
+                "Step '{}': '{{{}}}' is a command placeholder and cannot be used as a wildcard name",
                 step.id, wildcard_name
-            )
-        })?;
+            ));
+        }
+
+        // Get the files for this wildcard: the step's own mapping first, then
+        // the workflow-wide fallback.
+        let files = step
+            .wildcard_files
+            .get(wildcard_name)
+            .or_else(|| wildcard_files.get(wildcard_name))
+            .ok_or_else(|| {
+                format!(
+                    "Step '{}': No files provided for wildcard '{{{}}}'",
+                    step.id, wildcard_name
+                )
+            })?;
 
         // Extract wildcard values
         let wildcard_values = extract_wildcard_values(files);
@@ -238,6 +257,14 @@ pub fn expand_workflow_wildcards(
                 .iter()
                 .map(|output| substitute_wildcard(output, wildcard_name, value))
                 .collect();
+
+            // Substitute wildcards in check targets so they keep matching
+            // the expanded outputs
+            for check in &mut new_step.checks {
+                if let Some(target) = check.target.as_mut() {
+                    *target = substitute_wildcard(target, wildcard_name, value);
+                }
+            }
 
             // Substitute wildcards in command
             new_step.command = substitute_wildcard(&step.command, wildcard_name, value);
@@ -284,6 +311,82 @@ fn substitute_wildcard(text: &str, wildcard_name: &str, value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::{CheckKind, OutputCheck, Step};
+
+    #[test]
+    fn test_expansion_substitutes_check_targets() {
+        let step = Step::new("count", "bash", "wc -l {input} > {output}")
+            .with_input("{sample}.txt")
+            .with_output("{sample}.cnt")
+            .with_check(OutputCheck::new(CheckKind::Exists).with_target("{sample}.cnt"));
+        let mut wf = Workflow::from_steps(vec![step]);
+        let mut files = HashMap::new();
+        files.insert(
+            "sample".to_string(),
+            vec!["a.txt".to_string(), "b.txt".to_string()],
+        );
+        expand_workflow_wildcards(&mut wf, &files).unwrap();
+        assert_eq!(wf.steps.len(), 2);
+        for s in &wf.steps {
+            let target = s.checks[0].target.clone().unwrap();
+            assert_eq!(vec![target], s.output);
+        }
+    }
+
+    fn wildcard_step(id: &str, name: &str, files: &[&str]) -> Step {
+        let mut step = Step::new(id, "bash", "cat {input} > {output}")
+            .with_input(format!("in/{{{}}}.txt", name))
+            .with_output(format!("out/{{{}}}.txt", name));
+        step.wildcard_files.insert(
+            name.to_string(),
+            files.iter().map(|f| f.to_string()).collect(),
+        );
+        step
+    }
+
+    #[test]
+    fn test_distinct_wildcard_names_expand_independently() {
+        let mut wf = Workflow::from_steps(vec![
+            wildcard_step("align", "sample", &["a.txt", "b.txt"]),
+            wildcard_step("merge", "lane", &["l1.txt", "l2.txt", "l3.txt"]),
+        ]);
+        expand_workflow_wildcards(&mut wf, &HashMap::new()).unwrap();
+        let ids: Vec<&str> = wf.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["align_a", "align_b", "merge_l1", "merge_l2", "merge_l3"]
+        );
+        assert_eq!(wf.steps[2].input, vec!["in/l1.txt"]);
+        assert_eq!(wf.steps[0].output, vec!["out/a.txt"]);
+    }
+
+    #[test]
+    fn test_same_wildcard_name_keeps_per_step_files() {
+        let mut wf = Workflow::from_steps(vec![
+            wildcard_step("one", "sample", &["a.txt"]),
+            wildcard_step("two", "sample", &["x.txt", "y.txt"]),
+        ]);
+        // The workflow-wide map is the union of both, as the parser builds it.
+        let mut merged = HashMap::new();
+        merged.insert(
+            "sample".to_string(),
+            vec![
+                "a.txt".to_string(),
+                "x.txt".to_string(),
+                "y.txt".to_string(),
+            ],
+        );
+        expand_workflow_wildcards(&mut wf, &merged).unwrap();
+        let ids: Vec<&str> = wf.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["one_a", "two_x", "two_y"]);
+    }
+
+    #[test]
+    fn test_reserved_wildcard_name_is_rejected() {
+        let mut wf = Workflow::from_steps(vec![wildcard_step("s", "input", &["a.txt"])]);
+        let err = expand_workflow_wildcards(&mut wf, &HashMap::new()).unwrap_err();
+        assert!(err.contains("command placeholder"), "{}", err);
+    }
 
     #[test]
     fn test_extract_wildcard_values() {

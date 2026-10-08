@@ -10,21 +10,19 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 
 use crate::environment::conda::{MAMBA_ROOT_PREFIX, MICROMAMBA_PATH};
 use crate::workflow::Step;
 
-/// Tools available in standard system PATH that don't require conda.
-const SYSTEM_TOOLS: &[&str] = &[
-    "bash", "sh", "echo", "cat", "cp", "mv", "rm", "mkdir", "sleep", "touch", "ls", "grep", "sed",
-    "awk", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "tee", "curl", "wget", "gzip",
-    "gunzip", "tar", "zip", "unzip", "bc", "date", "find", "xargs", "diff", "comm", "paste", "rev",
-    "fold", "printf", "test", "true", "false",
-];
+use super::events::{Event, EventSink};
+use super::process::{is_shutting_down, run_tracked_with_timeout, TrackedOutput};
+use super::tools::is_system_tool;
 
 /// Executes a single workflow step.
 ///
@@ -46,6 +44,9 @@ const SYSTEM_TOOLS: &[&str] = &[
 /// * `Ok(())` - Step completed successfully
 /// * `Err` - Step failed with descriptive error
 ///
+/// This runs the step as configured, including its retries and timeout; use
+/// [`execute_step_with_retries`] to also learn how many attempts were made.
+///
 /// # Placeholder Substitution
 ///
 /// The following placeholders are supported:
@@ -56,6 +57,66 @@ pub fn execute_step(
     tool_env_map: &HashMap<String, String>,
     working_dir: &Option<PathBuf>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    execute_step_with_retries(step, tool_env_map, working_dir, None).result
+}
+
+/// Outcome of running a step including every retry.
+#[derive(Debug)]
+pub struct StepRun {
+    /// Number of attempts that were started (at least 1).
+    pub attempts: u32,
+    /// Final result after the last attempt.
+    pub result: Result<(), Box<dyn Error + Send + Sync>>,
+}
+
+/// Why a single attempt did not succeed.
+enum AttemptError {
+    /// The command failed or timed out; another attempt may succeed.
+    Retryable(String),
+    /// Retrying cannot help (setup problem, spawn failure, shutdown).
+    Fatal(String),
+}
+
+/// Interval at which waits re-check for shutdown or a resume signal.
+const WAIT_SLICE: Duration = Duration::from_millis(100);
+
+/// Executes a step, re-running it on failure or timeout according to its
+/// `retries`, `retry_backoff`, `retry_delay_secs` and `timeout_secs`.
+///
+/// Between attempts the function waits out the back-off delay and then, if
+/// `pause_flag` points at an existing file, waits for it to disappear (the
+/// GUI's Pause). A termination signal (the GUI's Stop) aborts the wait and
+/// any further attempts. Failures that retrying cannot fix (for example a
+/// missing conda environment) are not retried.
+///
+/// This is [`execute_step_with_events`] without events.
+pub fn execute_step_with_retries(
+    step: &Step,
+    tool_env_map: &HashMap<String, String>,
+    working_dir: &Option<PathBuf>,
+    pause_flag: Option<&Path>,
+) -> StepRun {
+    execute_step_with_events(
+        step,
+        tool_env_map,
+        working_dir,
+        pause_flag,
+        &EventSink::disabled(),
+    )
+}
+
+/// Like [`execute_step_with_retries`], and also reports run events.
+///
+/// `events` receives `step_retrying` for each failed attempt that will be
+/// repeated and `step_started` for every attempt after the first; the caller
+/// announces the first attempt and the final outcome.
+pub fn execute_step_with_events(
+    step: &Step,
+    tool_env_map: &HashMap<String, String>,
+    working_dir: &Option<PathBuf>,
+    pause_flag: Option<&Path>,
+    events: &EventSink,
+) -> StepRun {
     let step_name = &step.id;
 
     // Parse comma-separated file lists
@@ -63,7 +124,24 @@ pub fn execute_step(
     let output_files = parse_file_list(&step.output);
 
     // Create output directories
-    ensure_output_directories(&output_files, working_dir)?;
+    if let Err(e) = ensure_output_directories(&output_files, working_dir) {
+        return StepRun {
+            attempts: 1,
+            result: Err(e),
+        };
+    }
+
+    // A mocked step stands in for the tool: it makes the outputs and returns.
+    if step.mock {
+        info!(
+            "Step '{}' is mocked: creating its outputs instead of running it",
+            step_name
+        );
+        return StepRun {
+            attempts: 1,
+            result: create_mock_outputs(&output_files, working_dir),
+        };
+    }
 
     // Resolve placeholders. Each file is shell-quoted individually so paths
     // containing spaces or shell metacharacters (e.g. a filename picked from
@@ -79,19 +157,178 @@ pub fn execute_step(
         .replace("{inputs}", &inputs_str)
         .replace("{outputs}", &outputs_str);
 
+    let max_attempts = step.retries.saturating_add(1);
+    let timeout = step.timeout_secs.map(Duration::from_secs);
+
+    for attempt in 1..=max_attempts {
+        if attempt > 1 {
+            let delay = step.retry_delay(attempt - 1);
+            info!(
+                "Step '{}': waiting {}s before attempt {}/{}",
+                step_name,
+                delay.as_secs(),
+                attempt,
+                max_attempts
+            );
+            if !sleep_unless_shutdown(delay) || !wait_while_paused(pause_flag) {
+                return StepRun {
+                    attempts: attempt - 1,
+                    result: Err(format!(
+                        "Step '{}' stopped before retry attempt {}",
+                        step_name, attempt
+                    )
+                    .into()),
+                };
+            }
+        }
+
+        if max_attempts > 1 {
+            info!("Step '{}': attempt {}/{}", step_name, attempt, max_attempts);
+        }
+        if attempt > 1 {
+            events.emit(Event::StepStarted {
+                step: step_name.clone(),
+                attempt,
+                max_attempts,
+            });
+        }
+
+        match run_attempt(
+            step,
+            &command_text,
+            tool_env_map,
+            working_dir,
+            timeout,
+            events,
+        ) {
+            Ok(()) => {
+                if attempt > 1 {
+                    info!(
+                        "Step '{}' succeeded on attempt {}/{}",
+                        step_name, attempt, max_attempts
+                    );
+                }
+                return StepRun {
+                    attempts: attempt,
+                    result: Ok(()),
+                };
+            }
+            Err(AttemptError::Fatal(msg)) => {
+                return StepRun {
+                    attempts: attempt,
+                    result: Err(msg.into()),
+                };
+            }
+            Err(AttemptError::Retryable(msg)) if attempt == max_attempts => {
+                let msg = if max_attempts > 1 {
+                    format!("{} Gave up after {} attempts.", msg, attempt)
+                } else {
+                    msg
+                };
+                return StepRun {
+                    attempts: attempt,
+                    result: Err(msg.into()),
+                };
+            }
+            Err(AttemptError::Retryable(msg)) => {
+                warn!(
+                    "Step '{}': attempt {}/{} failed ({}); will retry",
+                    step_name, attempt, max_attempts, msg
+                );
+                events.emit(Event::StepRetrying {
+                    step: step_name.clone(),
+                    attempt,
+                    max_attempts,
+                    delay_secs: step.retry_delay(attempt).as_secs(),
+                    reason: msg,
+                });
+            }
+        }
+    }
+
+    unreachable!("max_attempts is at least 1 and every iteration returns or continues")
+}
+
+/// Sleeps for `total`, returning early with `false` if a termination signal
+/// arrives.
+fn sleep_unless_shutdown(total: Duration) -> bool {
+    let deadline = Instant::now() + total;
+    loop {
+        if is_shutting_down() {
+            return false;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return true;
+        }
+        thread::sleep(WAIT_SLICE.min(deadline - now));
+    }
+}
+
+/// Blocks while the pause flag file exists. Returns `false` if a termination
+/// signal arrived while waiting.
+fn wait_while_paused(pause_flag: Option<&Path>) -> bool {
+    let Some(path) = pause_flag else {
+        return !is_shutting_down();
+    };
+    if path.exists() {
+        info!("Retry held while the workflow is paused");
+    }
+    while path.exists() {
+        if is_shutting_down() {
+            return false;
+        }
+        thread::sleep(WAIT_SLICE);
+    }
+    !is_shutting_down()
+}
+
+/// Runs the step's command once.
+fn run_attempt(
+    step: &Step,
+    command_text: &str,
+    tool_env_map: &HashMap<String, String>,
+    working_dir: &Option<PathBuf>,
+    timeout: Option<Duration>,
+    events: &EventSink,
+) -> Result<(), AttemptError> {
+    let step_name = &step.id;
+
     // Create execution script
-    let script_path = create_execution_script(step_name, &command_text)?;
+    let script_path = create_execution_script(step_name, command_text)
+        .map_err(|e| AttemptError::Fatal(e.to_string()))?;
 
     // Execute based on tool type
-    let output = if is_system_tool(&step.tool) {
-        execute_with_bash(&script_path, working_dir)?
+    let tracked = if is_system_tool(&step.tool) {
+        execute_with_bash(&script_path, working_dir, timeout)
     } else {
-        execute_with_conda(&script_path, &step.tool, tool_env_map, working_dir)?
+        execute_with_conda(&script_path, &step.tool, tool_env_map, working_dir, timeout)
     };
 
     // Clean up script
     if let Err(e) = fs::remove_file(&script_path) {
         warn!("Failed to clean up script {}: {}", script_path.display(), e);
+    }
+
+    let tracked = tracked.map_err(|e| AttemptError::Fatal(e.to_string()))?;
+    let output = tracked.output;
+
+    if tracked.timed_out {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        events.note_stderr(step_name, &stderr);
+        error!(
+            "Step '{}' exceeded its {}s timeout and was killed",
+            step_name,
+            timeout.map(|t| t.as_secs()).unwrap_or(0)
+        );
+        if !stderr.trim().is_empty() {
+            error!("stderr:\n{}", stderr);
+        }
+        return Err(AttemptError::Retryable(format!(
+            "Step '{}' timed out after {}s and was killed.",
+            step_name,
+            timeout.map(|t| t.as_secs()).unwrap_or(0)
+        )));
     }
 
     // Process result
@@ -107,6 +344,7 @@ pub fn execute_step(
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
+        events.note_stderr(step_name, &stderr);
 
         error!(
             "Step '{}' failed with exit code: {:?}",
@@ -121,7 +359,10 @@ pub fn execute_step(
             debug!("stdout:\n{}", stdout);
         }
 
-        Err(format!("Step '{}' failed. See logs for details.", step_name).into())
+        Err(AttemptError::Retryable(format!(
+            "Step '{}' failed. See logs for details.",
+            step_name
+        )))
     }
 }
 
@@ -177,6 +418,45 @@ fn ensure_output_directories(
     Ok(())
 }
 
+/// Stands in for a mocked step: creates every declared output that is missing
+/// (an empty file, or a directory for a path ending in `/`) and refreshes the
+/// modification time of files that exist, leaving their content alone.
+fn create_mock_outputs(
+    output_files: &[String],
+    working_dir: &Option<PathBuf>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    for output_file in output_files {
+        let path = match working_dir {
+            Some(dir) => dir.join(output_file),
+            None => PathBuf::from(output_file),
+        };
+        if output_file.ends_with('/') || output_file.ends_with('\\') || path.is_dir() {
+            fs::create_dir_all(&path)
+                .map_err(|e| format!("Cannot create mock directory '{}': {}", output_file, e))?;
+            continue;
+        }
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("Cannot create mock output '{}': {}", output_file, e))?;
+        file.set_modified(std::time::SystemTime::now())
+            .map_err(|e| format!("Cannot touch mock output '{}': {}", output_file, e))?;
+        debug!("Mocked output: {}", path.display());
+    }
+    Ok(())
+}
+
+/// Directory holding this process's temporary step scripts.
+pub fn script_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("rustrunner_scripts_{}", std::process::id()))
+}
+
+/// Removes this process's temporary step scripts (best effort).
+pub fn cleanup_scripts() {
+    let _ = fs::remove_dir_all(script_dir());
+}
+
 /// Creates a temporary bash script for step execution.
 fn create_execution_script(
     step_id: &str,
@@ -185,8 +465,7 @@ fn create_execution_script(
     // Scope the script directory to this process so two concurrent runs (e.g.
     // two app windows) can't collide on a fixed path and delete or overwrite
     // each other's scripts mid-execution.
-    let script_dir =
-        std::env::temp_dir().join(format!("rustrunner_scripts_{}", std::process::id()));
+    let script_dir = script_dir();
     fs::create_dir_all(&script_dir)?;
 
     // Sanitize the step id so it can't escape the script directory via `/` or
@@ -218,16 +497,12 @@ fn create_execution_script(
     Ok(script_path)
 }
 
-/// Checks if a tool is a system tool (doesn't require conda).
-fn is_system_tool(tool: &str) -> bool {
-    SYSTEM_TOOLS.contains(&tool)
-}
-
 /// Executes a script directly with bash.
 fn execute_with_bash(
     script_path: &PathBuf,
     working_dir: &Option<PathBuf>,
-) -> Result<std::process::Output, Box<dyn Error + Send + Sync>> {
+    timeout: Option<Duration>,
+) -> Result<TrackedOutput, Box<dyn Error + Send + Sync>> {
     let mut cmd = Command::new("bash");
     cmd.arg(script_path);
 
@@ -236,7 +511,7 @@ fn execute_with_bash(
         debug!("Executing in directory: {}", dir.display());
     }
 
-    Ok(cmd.output()?)
+    Ok(run_tracked_with_timeout(cmd, timeout)?)
 }
 
 /// Executes a script within a conda environment.
@@ -245,7 +520,8 @@ fn execute_with_conda(
     tool: &str,
     tool_env_map: &HashMap<String, String>,
     working_dir: &Option<PathBuf>,
-) -> Result<std::process::Output, Box<dyn Error + Send + Sync>> {
+    timeout: Option<Duration>,
+) -> Result<TrackedOutput, Box<dyn Error + Send + Sync>> {
     let env_name = tool_env_map.get(tool).ok_or_else(|| {
         format!(
             "No conda environment configured for tool '{}'. \
@@ -271,7 +547,7 @@ fn execute_with_conda(
         );
     }
 
-    Ok(cmd.output()?)
+    Ok(run_tracked_with_timeout(cmd, timeout)?)
 }
 
 #[cfg(test)]
@@ -430,7 +706,7 @@ mod tests {
         let nested_file = "subdir1/subdir2/output.txt";
 
         let result = ensure_output_directories(
-            &vec![nested_file.to_string()],
+            &[nested_file.to_string()],
             &Some(temp_dir.path().to_path_buf()),
         );
 
@@ -440,7 +716,7 @@ mod tests {
 
     #[test]
     fn test_ensure_output_directories_empty() {
-        let result = ensure_output_directories(&vec!["".to_string()], &None);
+        let result = ensure_output_directories(&["".to_string()], &None);
 
         assert!(result.is_ok());
     }
@@ -452,7 +728,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let output = temp_dir.path().join("newdir/output.txt");
 
-        let result = ensure_output_directories(&vec![output.to_str().unwrap().to_string()], &None);
+        let result = ensure_output_directories(&[output.to_str().unwrap().to_string()], &None);
 
         assert!(result.is_ok());
         assert!(temp_dir.path().join("newdir").exists());
@@ -468,7 +744,7 @@ mod tests {
         let step = Step::new(
             "test_exec",
             "bash",
-            &format!("echo hello > {}", output_file.display()),
+            format!("echo hello > {}", output_file.display()),
         )
         .with_output(output_file.to_str().unwrap());
 
@@ -477,5 +753,125 @@ mod tests {
 
         assert!(result.is_ok());
         assert!(output_file.exists());
+    }
+
+    use crate::workflow::RetryBackoff;
+    use tempfile::tempdir;
+
+    fn retry_step(id: &str, command: &str, retries: u32) -> Step {
+        Step::new(id, "bash", command)
+            .with_retries(retries)
+            .with_retry_backoff(RetryBackoff::Fixed, 0)
+    }
+
+    #[test]
+    fn test_retry_succeeds_on_second_attempt() {
+        let dir = tempdir().unwrap();
+        // Fails the first time (creating the marker), succeeds afterwards.
+        let step = retry_step(
+            "retry_second_attempt",
+            "if [ -f marker ]; then echo ok > result.txt; else touch marker; exit 1; fi",
+            2,
+        );
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            None,
+        );
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert_eq!(run.attempts, 2);
+        assert!(dir.path().join("result.txt").exists());
+    }
+
+    #[test]
+    fn test_retries_exhausted_reports_attempts() {
+        let dir = tempdir().unwrap();
+        let step = retry_step("retry_exhausted", "echo x >> count.txt; exit 1", 2);
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            None,
+        );
+        assert_eq!(run.attempts, 3);
+        let err = run.result.unwrap_err().to_string();
+        assert!(err.contains("Gave up after 3 attempts"), "{err}");
+        let runs = std::fs::read_to_string(dir.path().join("count.txt")).unwrap();
+        assert_eq!(runs.lines().count(), 3);
+    }
+
+    #[test]
+    fn test_no_retries_means_single_attempt_and_plain_error() {
+        let step = retry_step("retry_none", "exit 1", 0);
+        let run = execute_step_with_retries(&step, &HashMap::new(), &None, None);
+        assert_eq!(run.attempts, 1);
+        let err = run.result.unwrap_err().to_string();
+        assert!(!err.contains("Gave up"), "{err}");
+    }
+
+    #[test]
+    fn test_setup_errors_are_not_retried() {
+        // No conda environment is configured for this tool: retrying is futile.
+        let mut step = retry_step("retry_fatal", "true", 3);
+        step.tool = "definitely_not_a_configured_tool".to_string();
+        let run = execute_step_with_retries(&step, &HashMap::new(), &None, None);
+        assert_eq!(run.attempts, 1);
+        assert!(run.result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_timeout_kills_sleep_and_counts_as_failed_attempt() {
+        let step = retry_step("retry_timeout", "sleep 60", 1).with_timeout_secs(1);
+        let started = Instant::now();
+        let run = execute_step_with_retries(&step, &HashMap::new(), &None, None);
+        assert_eq!(run.attempts, 2);
+        let err = run.result.unwrap_err().to_string();
+        assert!(err.contains("timed out after 1s"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "sleep was not killed: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_timeout_does_not_affect_fast_step() {
+        let step = Step::new("timeout_fast", "bash", "true").with_timeout_secs(30);
+        let run = execute_step_with_retries(&step, &HashMap::new(), &None, None);
+        assert!(run.result.is_ok());
+        assert_eq!(run.attempts, 1);
+    }
+
+    #[test]
+    fn test_retry_waits_for_pause_flag_to_clear() {
+        let dir = tempdir().unwrap();
+        let pause = dir.path().join("pause.flag");
+        std::fs::write(&pause, "paused").unwrap();
+        let remover = {
+            let pause = pause.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(600));
+                std::fs::remove_file(pause).unwrap();
+            })
+        };
+        let step = retry_step(
+            "retry_paused",
+            "if [ -f marker ]; then exit 0; else touch marker; exit 1; fi",
+            1,
+        );
+        let started = Instant::now();
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            Some(&pause),
+        );
+        remover.join().unwrap();
+        assert_eq!(run.attempts, 2);
+        assert!(run.result.is_ok());
+        assert!(started.elapsed() >= Duration::from_millis(500));
     }
 }

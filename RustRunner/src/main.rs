@@ -17,6 +17,15 @@
 //! # Specify working directory
 //! rustrunner workflow.yaml --working-dir /path/to/data
 //!
+//! # Ignore saved state and run every step again
+//! rustrunner workflow.yaml --fresh
+//!
+//! # After a failure, still run the steps that do not depend on it
+//! rustrunner workflow.yaml --keep-going
+//!
+//! # Machine-readable events on stderr, one JSON object per line
+//! rustrunner workflow.yaml --json-events
+//!
 //! # Set maximum parallel jobs
 //! rustrunner workflow.yaml --parallel 8
 //! ```
@@ -24,9 +33,14 @@
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use log::{error, info, warn};
+use log::{error, info};
 
+use rustrunner::execution::events::{EventSink, RunStatus};
+use rustrunner::execution::process::{install_signal_handlers, is_shutting_down};
+use rustrunner::execution::step::cleanup_scripts;
 use rustrunner::execution::Engine;
 use rustrunner::workflow::parser::load_workflow;
 use rustrunner::{APP_NAME, VERSION};
@@ -37,6 +51,10 @@ const DEFAULT_WORKFLOW: &str = "workflow.yaml";
 /// Default maximum parallel jobs.
 const DEFAULT_MAX_PARALLEL: usize = 4;
 
+/// How long `main` leaves the signal handler to finish a stop: it waits up to
+/// 3 s for the steps' process groups, then kills them and exits on its own.
+const SIGNAL_EXIT_WAIT: Duration = Duration::from_secs(10);
+
 /// Command-line configuration parsed from arguments.
 #[derive(Debug)]
 struct Config {
@@ -46,6 +64,9 @@ struct Config {
     working_dir: Option<PathBuf>,
     max_parallel: usize,
     verbose: bool,
+    fresh: bool,
+    keep_going: bool,
+    json_events: bool,
 }
 
 impl Default for Config {
@@ -57,6 +78,9 @@ impl Default for Config {
             working_dir: None,
             max_parallel: DEFAULT_MAX_PARALLEL,
             verbose: false,
+            fresh: false,
+            keep_going: false,
+            json_events: false,
         }
     }
 }
@@ -102,6 +126,11 @@ fn print_usage() {
         "  --parallel N        Maximum parallel jobs (default: {})",
         DEFAULT_MAX_PARALLEL
     );
+    println!("  --fresh             Discard saved state and run every step again");
+    println!("  --keep-going        After a step fails, still run the steps that do not depend");
+    println!("                      on it (the run ends as failed)");
+    println!("  --json-events       Also write machine-readable run events to stderr,");
+    println!("                      one JSON object per line prefixed with RUSTRUNNER_EVENT");
     println!("  --verbose           Enable debug logging");
     println!("  --help              Show this help message");
     println!("  --version           Show version information");
@@ -132,6 +161,15 @@ fn parse_arguments(args: &[String]) -> Result<Config, String> {
             }
             "--dry-run" => {
                 config.dry_run = true;
+            }
+            "--fresh" => {
+                config.fresh = true;
+            }
+            "--keep-going" => {
+                config.keep_going = true;
+            }
+            "--json-events" => {
+                config.json_events = true;
             }
             "--verbose" | "-v" => {
                 config.verbose = true;
@@ -189,11 +227,24 @@ fn setup_working_directory(
         return Err(format!("Path is not a directory: {}", dir.display()).into());
     }
 
+    // Make the path absolute before changing into it: a relative path would
+    // otherwise be resolved a second time against itself by everything that
+    // joins it later (outputs, checks, the saved run state).
+    let dir = std::path::absolute(&dir)?;
+
     // Change to working directory for relative path resolution
     env::set_current_dir(&dir)?;
-    info!("Working directory: {}", env::current_dir()?.display());
+    info!("Working directory: {}", dir.display());
 
     Ok(Some(dir))
+}
+
+/// Resolves `path` against the launch directory, so it keeps pointing at the
+/// same file after the working directory changes.
+fn absolute_from_launch_dir(path: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let resolved =
+        std::path::absolute(path).map_err(|e| format!("Cannot resolve path '{}': {}", path, e))?;
+    Ok(resolved.to_string_lossy().into_owned())
 }
 
 /// Main application entry point.
@@ -224,6 +275,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!();
     }
 
+    // Paths given on the command line are relative to where rustrunner was
+    // started; pin them down before changing into the working directory.
+    let mut config = config;
+    config.workflow_path = absolute_from_launch_dir(&config.workflow_path)?;
+    if let Some(pause) = config.pause_flag_path.take() {
+        config.pause_flag_path = Some(absolute_from_launch_dir(&pause)?);
+    }
+
     // Setup working directory
     let work_dir = setup_working_directory(config.working_dir)?;
 
@@ -243,11 +302,33 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         workflow.tools.len()
     );
 
+    // Make SIGINT/SIGTERM (e.g. the GUI's Stop button) terminate the running
+    // steps' process groups instead of leaving them orphaned.
+    let events = if config.json_events {
+        EventSink::stderr()
+    } else {
+        EventSink::disabled()
+    };
+    let signal_events = events.clone();
+    install_signal_handlers(move || {
+        // The handler exits the process, so the run's own `run_finished` would
+        // never be written: report the stop here (written once at most).
+        signal_events.finish(
+            RunStatus::Stopped,
+            Some("terminated by a signal".to_string()),
+        );
+        cleanup_scripts();
+    })
+    .map_err(|e| format!("Failed to install signal handlers: {}", e))?;
+
     // Create and configure engine
     let mut engine = Engine::new(workflow);
     engine.set_workflow_path(&config.workflow_path);
     engine.set_max_parallel(config.max_parallel);
     engine.set_dry_run(config.dry_run);
+    engine.set_fresh(config.fresh);
+    engine.set_keep_going(config.keep_going);
+    engine.set_event_sink(events);
 
     if let Some(pause_path) = config.pause_flag_path {
         engine.set_pause_flag_path(pause_path);
@@ -267,6 +348,17 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
+            // A Stop kills the running steps, so the engine sees them fail and
+            // returns, often before the signal handler has seen their process
+            // groups disappear. The handler owns the exit of a stopped run
+            // (`128 + signal`, after `run_finished` and the cleanup): wait for
+            // it instead of racing it with a plain failure.
+            if is_shutting_down() {
+                let deadline = Instant::now() + SIGNAL_EXIT_WAIT;
+                while Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
             eprintln!();
             eprintln!("Error: {}", e);
             ExitCode::FAILURE

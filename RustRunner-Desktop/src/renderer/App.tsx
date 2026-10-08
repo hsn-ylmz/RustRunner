@@ -1,44 +1,58 @@
 /**
  * RustRunner Workflow Editor
- * 
- * Visual workflow design interface using React Flow.
- * Now with wildcards support for batch file processing.
+ *
+ * Owns editor state and wires the canvas, properties panel, execution logs
+ * and update banner together. Pure logic lives in ./workflowConversion and
+ * the presentational pieces in ./components.
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
-  ReactFlow,
-  Background,
-  BackgroundVariant,
-  Controls,
-  Handle,
-  Position,
-  NodeToolbar,
   useReactFlow,
   applyEdgeChanges,
   applyNodeChanges,
   addEdge,
-  MiniMap,
   ReactFlowProvider,
 } from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
 import './App.css';
 import {
-  applyStepEvent,
-  parseStepEvent,
-  type NodeStatus,
+  applyRunEvent,
+  buildStatusRows,
+  toStepEvent,
+  resolveBaseStepId,
+  rollupNodeStatuses,
+  type RunPhase,
+  type StepRuns,
 } from './stepEvents';
-
-// =============================================================================
-// Constants
-// =============================================================================
-
-const COLOR_OPTIONS = [
-  '#a8e6cf', '#88c5f7', '#d4a5f7', '#f5efe9',
-  '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6',
-];
-
-const DEFAULT_COLOR = '#88c5f7';
+import {
+  convertNodesToWorkflow,
+  countMockedNodes,
+  findInvalidNodeIds,
+  generateWorkflowId,
+  isValidWorkflowId,
+  labelToId,
+  validateWorkflow,
+} from './workflowConversion';
+import { occupiedRects } from './nodePlacement';
+import { describeResume, type ResumeInfo } from './resume';
+import { UpdateBanner, type UpdateStatus } from './components/UpdateBanner';
+import { PropertiesPanel } from './components/PropertiesPanel';
+import { ExecutionLogs, type ExecutionTab } from './components/ExecutionLogs';
+import { StepStatusPanel } from './components/StepStatusPanel';
+import { RunHistoryPanel } from './components/RunHistoryPanel';
+import type { RunHistoryEntry } from '../main/runHistory';
+import { ToolPalette } from './components/ToolPalette';
+import {
+  buildCatalogNodeData,
+  checkEdge,
+  validateCatalogNodes,
+  type CatalogTool,
+} from './tools/catalog';
+import {
+  WorkflowCanvas,
+  DEFAULT_COLOR,
+  nextNodePosition,
+} from './components/WorkflowCanvas';
 
 /**
  * Cap on retained log lines. A chatty run (or `seq 1 200000`) used to grow
@@ -50,691 +64,6 @@ const MAX_LOG_LINES = 5000;
 /** Cap on undo history depth. */
 const MAX_HISTORY = 50;
 
-// =============================================================================
-// Auto-update Types
-// =============================================================================
-
-/**
- * Status payloads emitted by the main process over the 'update-status'
- * IPC channel. Kept inline (rather than imported from preload.d.ts) so the
- * renderer stays free of cross-process type imports — the shape is also
- * declared in src/main/updater.ts and src/renderer/preload.d.ts; keep all
- * three in sync.
- */
-type UpdateStatus =
-  | { status: 'checking'; manual: boolean }
-  | {
-      status: 'available';
-      manual: boolean;
-      version: string;
-      canAutoInstall: boolean;
-      downloadUrl?: string;
-      releaseDate?: string;
-      releaseNotes?: string | null;
-    }
-  | { status: 'up-to-date'; manual: boolean; version: string }
-  | { status: 'downloading'; percent: number; bytesPerSecond: number; transferred: number; total: number }
-  | { status: 'downloaded'; version: string; canAutoInstall: boolean }
-  | { status: 'error'; manual: boolean; message: string };
-
-/** Human-readable bytes-per-second for the download progress line. */
-function formatBytesPerSec(bytes: number): string {
-  if (!isFinite(bytes) || bytes <= 0) return '';
-  if (bytes < 1024) return `${bytes.toFixed(0)} B/s`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB/s`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB/s`;
-}
-
-// =============================================================================
-// Utility Functions
-// =============================================================================
-
-function labelToId(label: string): string {
-  return label
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .replace(/_+/g, '_');
-}
-
-/** The wildcard name the file picker generates patterns for. */
-const WILDCARD_NAME = 'sample';
-
-/**
- * Builds the engine-facing workflow from the canvas.
- *
- * Wildcard files are attached **per step** as `wildcard_files`, matching the
- * Rust `Step` struct. `load_workflow` merges those and expands the workflow
- * before validation, so no CLI flag is involved — the engine has no
- * `--wildcards` option and rejects unknown ones outright.
- *
- * Files are looked up from the live `nodes` list rather than iterated out of
- * `nodeWildcardFiles`, so entries left behind by deleted nodes can never reach
- * a run, and each step gets only its own files instead of the union of all.
- */
-function convertNodesToWorkflow(
-  nodes: any[],
-  edges: any[],
-  nodeWildcardFiles: Record<string, string[]> = {}
-) {
-  const nodeIdToStepId = new Map<string, string>();
-  nodes.forEach((node: any) => {
-    nodeIdToStepId.set(node.id, labelToId(node.data.label));
-  });
-
-  const steps = nodes.map((node: any) => {
-    const stepId = nodeIdToStepId.get(node.id)!;
-    const incoming = edges.filter((e: any) => e.target === node.id);
-    const outgoing = edges.filter((e: any) => e.source === node.id);
-    const files = nodeWildcardFiles[node.id] || [];
-
-    const step: any = {
-      id: stepId,
-      tool: node.data.tool || '',
-      command: node.data.command || '',
-      input: node.data.input ? [node.data.input] : [],
-      output: node.data.output ? [node.data.output] : [],
-      previous: incoming.map((e: any) => nodeIdToStepId.get(e.source)!),
-      next: outgoing.map((e: any) => nodeIdToStepId.get(e.target)!),
-      threads: normalizeThreads(node.data.threads),
-    };
-
-    // Omit the key entirely when empty — Rust skips serializing empty maps and
-    // an empty mapping would just be noise in the YAML.
-    if (files.length > 0) {
-      step.wildcard_files = { [WILDCARD_NAME]: files };
-    }
-
-    return step;
-  });
-
-  return { steps };
-}
-
-/**
- * Picks a severity class for one log line.
- *
- * Ordered most- to least-specific: the engine's own `[ERROR]`/`[WARN]` prefixes
- * win over keyword sniffing, so a command that merely mentions "error" isn't
- * painted red. Applied per line rather than per stdout chunk.
- */
-function classifyLogLine(line: string): string {
-  if (/^\s*\[ERROR\]/.test(line)) return 'error';
-  if (/^\s*\[WARN\]/.test(line)) return 'warning';
-  if (/^\s*\[(PAUSED|STOPPED)\]/.test(line)) return 'warning';
-  if (/completed successfully|Workflow completed/i.test(line)) return 'success';
-  if (/\bfailed\b|Execution error/i.test(line)) return 'error';
-  if (/stopped by user|paused/i.test(line)) return 'warning';
-  if (/\[DRY RUN\]|Wildcards|Starting step:/i.test(line)) return 'info';
-  return '';
-}
-
-/**
- * Chooses where a newly added node should appear.
- *
- * Measured against the canvas element, NOT the window: the toolbars and the
- * properties panel make the canvas considerably smaller than the window, so
- * window-relative placement lands nodes near the canvas's bottom-right corner.
- *
- * Placement also has to dodge the floating overlays, which sit above the nodes
- * and swallow clicks on anything underneath them — the execution controls
- * (top-left), the MiniMap (bottom-right) and the zoom Controls (bottom-left).
- * Nodes are laid out on a 3x2 grid inside the remaining box and cycle through
- * its cells, so consecutive nodes never stack on each other either.
- *
- * Positions are computed in screen space and converted, so panning and zoom
- * are handled by React Flow rather than guessed at.
- */
-function nextNodePosition(
-  wrapper: HTMLElement | null,
-  nodeCount: number,
-  toFlow: (p: { x: number; y: number }) => { x: number; y: number }
-): { x: number; y: number } {
-  if (!wrapper) {
-    return toFlow({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-  }
-
-  const rect = wrapper.getBoundingClientRect();
-
-  // Insets clearing the floating overlays. Generous rather than exact — the
-  // cost of being wrong is an unclickable node.
-  const box = {
-    left: rect.x + 170,
-    top: rect.y + 90,
-    right: rect.right - 230,
-    bottom: rect.bottom - 60,
-  };
-
-  // Two columns, not three: a node renders around 300px wide, so three columns
-  // in this box would be narrower than the nodes themselves and they'd overlap.
-  const COLS = 2;
-  const ROWS = 2;
-  const cells = COLS * ROWS;
-  const cell = nodeCount % cells;
-  const col = cell % COLS;
-  const row = Math.floor(cell / COLS);
-
-  // Once the grid wraps, nudge each new lap so nodes don't land exactly on top
-  // of the ones from the previous lap.
-  const lap = Math.floor(nodeCount / cells) * 26;
-
-  const width = Math.max(box.right - box.left, 1);
-  const height = Math.max(box.bottom - box.top, 1);
-
-  return toFlow({
-    x: box.left + (width * (col + 0.5)) / COLS + lap,
-    y: box.top + (height * (row + 0.5)) / ROWS + lap,
-  });
-}
-
-/** Coerces a threads value from the UI into a positive integer. */
-function normalizeThreads(value: unknown): number {
-  const n = Math.floor(Number(value));
-  return Number.isFinite(n) && n >= 1 ? n : 1;
-}
-
-/**
- * Finds step ids that would collide or be empty once labels are slugified.
- * Surfaced live on the canvas rather than only when Run is pressed, since
- * `labelToId` silently maps "Process" and "process" onto the same id.
- */
-function findInvalidNodeIds(nodes: any[]): Record<string, string> {
-  const counts = new Map<string, number>();
-  nodes.forEach((node: any) => {
-    const id = labelToId(node.data?.label || '');
-    counts.set(id, (counts.get(id) || 0) + 1);
-  });
-
-  const problems: Record<string, string> = {};
-  nodes.forEach((node: any) => {
-    const id = labelToId(node.data?.label || '');
-    if (!id) {
-      problems[node.id] = 'Name must contain at least one letter or number';
-    } else if ((counts.get(id) || 0) > 1) {
-      problems[node.id] = `Duplicate step ID "${id}"`;
-    }
-  });
-
-  return problems;
-}
-
-function validateWorkflow(workflow: any): string[] {
-  const errors: string[] = [];
-
-  if (!workflow.steps || workflow.steps.length === 0) {
-    errors.push('Workflow has no steps');
-    return errors;
-  }
-
-  const stepIds = new Set<string>();
-  workflow.steps.forEach((step: any) => {
-    if (stepIds.has(step.id)) {
-      errors.push(`Duplicate step ID: ${step.id}`);
-    }
-    stepIds.add(step.id);
-
-    if (!step.id || step.id.trim() === '') {
-      errors.push('Step has empty ID');
-    }
-    if (!step.tool || step.tool.trim() === '') {
-      errors.push(`Step ${step.id}: missing tool`);
-    }
-    if (!step.command || step.command.trim() === '') {
-      errors.push(`Step ${step.id}: missing command`);
-    }
-  });
-
-  return errors;
-}
-
-// =============================================================================
-// Wildcard Helper Functions
-// =============================================================================
-
-/**
- * Generates a wildcard pattern from a list of files.
- * Example: ["sample1.fastq", "sample2.fastq"] -> "{sample}.fastq"
- */
-function generatePattern(files: string[]): string {
-  if (files.length === 0) return '';
-  
-  const firstFile = files[0];
-  const fileName = firstFile.split('/').pop() || firstFile;
-  const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
-  const dir = firstFile.substring(0, firstFile.lastIndexOf('/') + 1);
-  
-  return `${dir}{sample}${ext}`;
-}
-
-/**
- * Checks if a string contains wildcard syntax.
- */
-function hasWildcards(text: string): boolean {
-  return text.includes('{') && text.includes('}');
-}
-
-// =============================================================================
-// Custom Node Component
-// =============================================================================
-
-/** Badge glyph shown in the corner of a node for each execution state. */
-const STATUS_GLYPH: Record<string, string> = {
-  running: '●',
-  done: '✓',
-  failed: '✕',
-};
-
-function CustomNode({ id, data, selected }: any) {
-  const { updateNodeData } = useReactFlow();
-
-  const handleColorChange = (newColor: string) => {
-    updateNodeData(id, { color: newColor });
-  };
-
-  const nodeColor = data.color || DEFAULT_COLOR;
-
-  // Injected by the editor rather than stored on the node, so execution state
-  // never ends up in a saved workflow file.
-  const status: NodeStatus | undefined = data.__status;
-  const invalidReason: string | undefined = data.__invalidReason;
-
-  const state = status?.state ?? 'idle';
-  const showCount = status && status.total > 1;
-
-  return (
-    <>
-      <NodeToolbar isVisible={selected} className="nopan">
-        <div className="color-picker-toolbar">
-          {COLOR_OPTIONS.map((colorOption) => (
-            <button
-              key={colorOption}
-              onClick={() => handleColorChange(colorOption)}
-              className={`color-button ${colorOption === nodeColor ? 'selected' : ''}`}
-              style={{ backgroundColor: colorOption }}
-              title={`Change color to ${colorOption}`}
-            />
-          ))}
-        </div>
-      </NodeToolbar>
-
-      <div
-        className={[
-          'custom-node',
-          selected ? 'selected' : '',
-          `node-state-${state}`,
-          invalidReason ? 'node-invalid' : '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        style={{ background: nodeColor }}
-        title={status?.message || invalidReason || undefined}
-      >
-        <Handle type="target" position={Position.Top} />
-
-        {state !== 'idle' && state !== 'pending' && (
-          <div className={`node-status-badge node-status-${state}`}>
-            {STATUS_GLYPH[state]}
-          </div>
-        )}
-
-        <div className="node-label">{data.label || 'New Node'}</div>
-        <div className="node-tool">{data.tool || 'No tool'}</div>
-
-        {showCount && (
-          <div className="node-progress">
-            {status!.finished}/{status!.total}
-          </div>
-        )}
-
-        {invalidReason && (
-          <div className="node-invalid-badge" title={invalidReason}>
-            !
-          </div>
-        )}
-
-        <Handle type="source" position={Position.Bottom} />
-      </div>
-    </>
-  );
-}
-
-// =============================================================================
-// Properties Panel Component
-// =============================================================================
-
-function PropertiesPanel({
-  selectedNode,
-  onNodeUpdate,
-  nodeFiles,
-  onNodeFilesUpdate,
-  addLog,
-  invalidReason,
-}: any) {
-  if (!selectedNode) {
-    return (
-      <div className="properties-panel">
-        <h3>Properties</h3>
-        <p className="no-selection">Select a node to edit its properties</p>
-      </div>
-    );
-  }
-
-  const handleInputChange = (field: string, value: string) => {
-    onNodeUpdate(selectedNode.id, field, value);
-  };
-
-  const handleFileSelection = async () => {
-    try {
-      const files = await window.electron.ipcRenderer.selectFiles();
-      if (files && files.length > 0) {
-        // Generate pattern automatically
-        const pattern = generatePattern(files);
-        handleInputChange('input', pattern);
-        
-        // Store files for this node
-        onNodeFilesUpdate(selectedNode.id, files);
-        
-        // Log success
-        addLog(`Selected ${files.length} file(s) for ${selectedNode.data.label}`);
-        
-        // Auto-suggest output pattern if not set
-        if (!selectedNode.data.output || selectedNode.data.output === '') {
-          const outputPattern = pattern.replace('{sample}', 'output/{sample}');
-          handleInputChange('output', outputPattern);
-        }
-      }
-    } catch (error) {
-      console.error('File selection error:', error);
-      addLog('Failed to select files');
-    }
-  };
-
-  const handleClearFiles = () => {
-    onNodeFilesUpdate(selectedNode.id, []);
-    handleInputChange('input', '');
-    addLog(`Cleared files for ${selectedNode.data.label}`);
-  };
-
-  return (
-    <div className="properties-panel">
-      <h3>Node Properties</h3>
-
-      <div className="property-group">
-        <label className="property-label">Node Name:</label>
-        <input
-          type="text"
-          className="property-input"
-          value={selectedNode.data.label || ''}
-          onChange={(e) => handleInputChange('label', e.target.value)}
-        />
-        {selectedNode.data.label && !invalidReason && (
-          <div className="property-hint">
-            Step ID: {labelToId(selectedNode.data.label)}
-          </div>
-        )}
-        {invalidReason && (
-          <div className="property-error">⚠ {invalidReason}</div>
-        )}
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Tool:</label>
-        <input
-          type="text"
-          className="property-input"
-          value={selectedNode.data.tool || ''}
-          onChange={(e) => handleInputChange('tool', e.target.value)}
-          placeholder="e.g., bash, fastqc, bowtie2"
-        />
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Command:</label>
-        <textarea
-          className="property-textarea"
-          value={selectedNode.data.command || ''}
-          onChange={(e) => handleInputChange('command', e.target.value)}
-          placeholder="Enter command to execute"
-          rows={4}
-        />
-        <div className="property-hint">
-          Use {'{input}'} and {'{output}'} as placeholders
-        </div>
-      </div>
-
-      {/* WILDCARDS FEATURE: File Selection */}
-      <div className="property-group">
-        <label className="property-label">Input Files:</label>
-        <button 
-          className="property-button" 
-          onClick={handleFileSelection}
-        >
-          📁 Select Files for Batch Processing...
-        </button>
-        
-        {nodeFiles && nodeFiles.length > 0 && (
-          <>
-            <div className="file-list">
-              <div className="file-list-header">
-                ✓ Selected {nodeFiles.length} file(s):
-              </div>
-              {nodeFiles.slice(0, 5).map((file: string, i: number) => (
-                <div key={i} className="file-item">
-                  {file.split('/').pop()}
-                </div>
-              ))}
-              {nodeFiles.length > 5 && (
-                <div className="file-item file-item-more">
-                  ... and {nodeFiles.length - 5} more
-                </div>
-              )}
-            </div>
-            
-            <div className="wildcard-info">
-              <div className="property-hint">
-                🔄 Pattern: <code>{generatePattern(nodeFiles)}</code>
-              </div>
-              <div className="property-hint">
-                ⚡ Will create {nodeFiles.length} step instance(s)
-              </div>
-            </div>
-            
-            <button 
-              className="property-button property-button-secondary" 
-              onClick={handleClearFiles}
-            >
-              Clear Selected Files
-            </button>
-          </>
-        )}
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Input Pattern:</label>
-        <input
-          type="text"
-          className="property-input"
-          value={selectedNode.data.input || ''}
-          onChange={(e) => handleInputChange('input', e.target.value)}
-          placeholder="e.g., {sample}.fastq or data/{sample}.txt"
-        />
-        {hasWildcards(selectedNode.data.input || '') && (
-          <div className="property-hint">
-            🎯 Wildcard detected - this will process multiple files
-          </div>
-        )}
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Output Pattern:</label>
-        <input
-          type="text"
-          className="property-input"
-          value={selectedNode.data.output || ''}
-          onChange={(e) => handleInputChange('output', e.target.value)}
-          placeholder="e.g., output/{sample}.txt"
-        />
-        {hasWildcards(selectedNode.data.output || '') && (
-          <div className="property-hint">
-            💾 Output will be generated for each input file
-          </div>
-        )}
-      </div>
-
-      <div className="property-group">
-        <label className="property-label">Threads:</label>
-        <input
-          type="number"
-          min={1}
-          step={1}
-          className="property-input"
-          value={selectedNode.data.threads ?? 1}
-          onChange={(e) => handleInputChange('threads', e.target.value)}
-          onBlur={(e) =>
-            handleInputChange('threads', String(normalizeThreads(e.target.value)))
-          }
-        />
-        <div className="property-hint">
-          CPU threads this step requests from the scheduler.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// =============================================================================
-// Node Types
-// =============================================================================
-
-const nodeTypes = { custom: CustomNode };
-const defaultEdgeOptions = { animated: true };
-
-// =============================================================================
-// Update Banner Component
-// =============================================================================
-
-/**
- * Renders a slim banner at the top of the app when there's something
- * worth saying about updates.
- *
- * Status × manual matrix:
- *
- *   checking      manual → "Checking for updates…"   silent → hidden
- *   up-to-date    manual → "You're up to date"       silent → hidden
- *   available     always shown
- *                   canAutoInstall=true  → "Downloading in the background…"
- *                   canAutoInstall=false → "Download from GitHub" action
- *   downloading   always shown, with a progress strip
- *   downloaded    always shown — "Restart & Install" (only fires on auto-install platforms)
- *   error         always shown
- *
- * Dismissal is per-status-transition; the parent un-dismisses when the
- * status field changes, so dismissing during download still surfaces the
- * "ready to install" prompt when the download finishes.
- */
-function UpdateBanner({
-  status,
-  onInstall,
-  onDismiss,
-}: {
-  status: UpdateStatus | null;
-  onInstall: () => void;
-  onDismiss: () => void;
-}) {
-  if (!status) return null;
-
-  // Silent-flow suppression: hide the "Checking…" tick and the
-  // "Up to date" reassurance unless the user explicitly asked.
-  if (status.status === 'checking' && !status.manual) return null;
-  if (status.status === 'up-to-date' && !status.manual) return null;
-
-  let title = '';
-  let detail = '';
-  let progressPct: number | null = null;
-  let action: { label: string; onClick: () => void } | null = null;
-  let variant: 'info' | 'success' | 'error' = 'info';
-
-  switch (status.status) {
-    case 'checking':
-      title = 'Checking for updates…';
-      break;
-    case 'available':
-      title = `Update available — v${status.version}`;
-      if (status.canAutoInstall) {
-        detail = 'Downloading in the background…';
-      } else {
-        // Detection-only platform (e.g. unsigned macOS): point the user
-        // to GitHub for a manual install.
-        detail = 'Open the GitHub release page to download.';
-        action = { label: 'Download from GitHub', onClick: onInstall };
-      }
-      break;
-    case 'downloading': {
-      title = 'Downloading update';
-      progressPct = Math.max(0, Math.min(100, status.percent));
-      const speed = formatBytesPerSec(status.bytesPerSecond);
-      detail = speed
-        ? `${progressPct.toFixed(0)}% — ${speed}`
-        : `${progressPct.toFixed(0)}%`;
-      break;
-    }
-    case 'downloaded':
-      title = `Update ready — v${status.version}`;
-      detail = status.canAutoInstall
-        ? 'Restart RustRunner to install.'
-        : 'Open the GitHub release page to install.';
-      action = {
-        label: status.canAutoInstall ? 'Restart & Install' : 'Download from GitHub',
-        onClick: onInstall,
-      };
-      variant = 'success';
-      break;
-    case 'up-to-date':
-      title = `You're up to date — v${status.version}`;
-      variant = 'success';
-      break;
-    case 'error':
-      title = 'Update check failed';
-      detail = status.message;
-      variant = 'error';
-      break;
-  }
-
-  return (
-    <div className={`update-banner update-banner-${variant}`} role="status">
-      <div className="update-banner-text">
-        <span className="update-banner-title">{title}</span>
-        {detail && <span className="update-banner-detail">{detail}</span>}
-      </div>
-
-      {progressPct !== null && (
-        <div className="update-banner-progress" aria-hidden="true">
-          <div
-            className="update-banner-progress-bar"
-            style={{ width: `${progressPct}%` }}
-          />
-        </div>
-      )}
-
-      <div className="update-banner-actions">
-        {action && (
-          <button className="update-banner-button" onClick={action.onClick}>
-            {action.label}
-          </button>
-        )}
-        <button
-          className="update-banner-dismiss"
-          onClick={onDismiss}
-          aria-label="Dismiss update notification"
-          title="Dismiss"
-        >
-          ×
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // =============================================================================
 // Main Editor Component
@@ -751,21 +80,34 @@ function WorkflowEditorInner() {
   const [currentFilePath, setCurrentFilePath] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [executionState, setExecutionState] = useState<'idle' | 'running' | 'paused'>('idle');
-  const [showNameDialog, setShowNameDialog] = useState(false);
+  const [workflowVersion, setWorkflowVersion] = useState('');
+  // Stable id: keys the engine's saved run, so renaming keeps its up-to-date steps.
+  const [workflowId, setWorkflowId] = useState(() => generateWorkflowId());
+  /** Keep running independent steps after one fails. */
+  const [keepGoing, setKeepGoing] = useState(false);
+  const [tempKeepGoing, setTempKeepGoing] = useState(false);
+  /** 'new' starts a fresh canvas; 'details' only edits the name and version. */
+  const [nameDialog, setNameDialog] = useState<'new' | 'details' | null>(null);
   const [tempWorkflowName, setTempWorkflowName] = useState('');
+  const [tempWorkflowVersion, setTempWorkflowVersion] = useState('');
   const [executionLogs, setExecutionLogs] = useState<string[]>([]);
   const [showExecutionPanel, setShowExecutionPanel] = useState(true);
   const [workingDirectory, setWorkingDirectory] = useState('');
   const [nodeWildcardFiles, setNodeWildcardFiles] = useState<Record<string, string[]>>({});
-  const [stepStatus, setStepStatus] = useState<Record<string, NodeStatus>>({});
+  /** What the engine has reported per engine step during the current/last run. */
+  const [stepRuns, setStepRuns] = useState<StepRuns>({});
+  const [runPhase, setRunPhase] = useState<RunPhase>('none');
+  const [executionTab, setExecutionTab] = useState<ExecutionTab>('logs');
+  const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
+  /** Runs of this workflow in the working directory, newest first. */
+  const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
+  /** HTML report of the last real run (absolute path from the engine). */
+  const [latestReport, setLatestReport] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
-  const logsEndRef = useRef<HTMLDivElement>(null);
-  const logContentRef = useRef<HTMLDivElement>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   /** The canvas viewport, for placing new nodes where they're actually visible. */
   const flowWrapperRef = useRef<HTMLDivElement>(null);
-  /** False while the user has scrolled up, so new output doesn't yank them back. */
-  const stickToBottomRef = useRef(true);
   const { screenToFlowPosition } = useReactFlow();
 
   const selectedNode =
@@ -834,29 +176,31 @@ function WorkflowEditorInner() {
   useEffect(() => {
     const unsubscribeOutput = window.electron.ipcRenderer.onWorkflowOutput(
       (output: string) => {
+        // Raw engine log only; step progress arrives as typed events below.
         const lines = output.split('\n').filter((line) => line.trim() !== '');
-
-        // Drive canvas status off the same lines. Anything unrecognized just
-        // falls through to the log pane, so wording drift degrades the badges
-        // rather than breaking output.
-        setStepStatus((prev) => {
-          let next = prev;
-          for (const line of lines) {
-            const event = parseStepEvent(line);
-            if (event) {
-              next = applyStepEvent(next, event, baseStepIdsRef.current);
-            }
-          }
-          return next;
-        });
-
         appendLogLines(lines);
+      }
+    );
+
+    // Typed run events drive the canvas badges and the status panel.
+    const unsubscribeEvent = window.electron.ipcRenderer.onWorkflowEvent(
+      (runEvent) => {
+        if (runEvent.event === 'run_started') setLatestReport(null);
+        if (runEvent.event === 'run_finished' && runEvent.report) {
+          setLatestReport(runEvent.report);
+        }
+        const event = toStepEvent(runEvent);
+        if (!event || !resolveBaseStepId(event.stepId, baseStepIdsRef.current)) {
+          return;
+        }
+        setStepRuns((prev) => applyRunEvent(prev, event));
       }
     );
 
     const unsubscribeComplete = window.electron.ipcRenderer.onWorkflowComplete(
       (success: boolean, message: string, outcome?: string) => {
         setExecutionState('idle');
+        setRunPhase('ended');
         if (outcome === 'stopped') {
           addLog('Workflow stopped by user');
         } else {
@@ -868,6 +212,7 @@ function WorkflowEditorInner() {
     const unsubscribeError = window.electron.ipcRenderer.onWorkflowError(
       (error: string) => {
         setExecutionState('idle');
+        setRunPhase('ended');
         addLog(`Execution error: ${error}`);
       }
     );
@@ -891,6 +236,7 @@ function WorkflowEditorInner() {
 
     return () => {
       unsubscribeOutput();
+      unsubscribeEvent();
       unsubscribeComplete();
       unsubscribeError();
       unsubscribeUpdate();
@@ -907,20 +253,6 @@ function WorkflowEditorInner() {
       return () => clearTimeout(id);
     }
   }, [updateStatus]);
-
-  // Auto-scroll logs, but only while the user is already at the bottom.
-  useEffect(() => {
-    if (stickToBottomRef.current) {
-      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [executionLogs]);
-
-  const handleLogScroll = useCallback(() => {
-    const el = logContentRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceFromBottom < 40;
-  }, []);
 
   // Keep the main process's view of unsaved state current for the close guard.
   useEffect(() => {
@@ -976,12 +308,25 @@ function WorkflowEditorInner() {
   );
 
   const onNodeUpdate = useCallback(
-    (nodeId: string, field: string, value: string) => {
+    (nodeId: string, field: string, value: string | boolean) => {
       setNodes((nds) =>
         nds.map((node: any) =>
           node.id === nodeId
             ? { ...node, data: { ...node.data, [field]: value } }
             : node
+        )
+      );
+      markDirty();
+    },
+    [markDirty]
+  );
+
+  /** Changes several fields of a node at once, so no render sees a half-applied edit. */
+  const onNodePatch = useCallback(
+    (nodeId: string, patch: Record<string, unknown>) => {
+      setNodes((nds) =>
+        nds.map((node: any) =>
+          node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
         )
       );
       markDirty();
@@ -1069,7 +414,8 @@ function WorkflowEditorInner() {
     const position = nextNodePosition(
       flowWrapperRef.current,
       nodes.length,
-      screenToFlowPosition
+      screenToFlowPosition,
+      occupiedRects(nodes)
     );
 
     const newNode = {
@@ -1088,7 +434,37 @@ function WorkflowEditorInner() {
     };
     setNodes((nds) => [...nds, newNode]);
     markDirty();
-  }, [nodes.length, screenToFlowPosition, pushHistory, markDirty]);
+  }, [nodes, screenToFlowPosition, pushHistory, markDirty]);
+
+  /** Adds a node prefilled from a catalog tool and selects it, so its options show. */
+  const addCatalogNode = useCallback(
+    (tool: CatalogTool) => {
+      pushHistory();
+
+      const position = nextNodePosition(
+        flowWrapperRef.current,
+        nodes.length,
+        screenToFlowPosition,
+        occupiedRects(nodes)
+      );
+
+      const newNode = {
+        id: `node_${Date.now()}`,
+        position,
+        selected: true,
+        data: buildCatalogNodeData(
+          tool,
+          nodes.map((n: any) => n.data?.label || '')
+        ),
+        type: 'custom',
+      };
+      setNodes((nds) => [...nds.map((n: any) => ({ ...n, selected: false })), newNode]);
+      setSelectedNodeId(newNode.id);
+      setPaletteOpen(false);
+      markDirty();
+    },
+    [nodes, screenToFlowPosition, pushHistory, markDirty]
+  );
 
   const deleteSelectedNodes = useCallback(() => {
     const selectedIds = nodes.filter((n: any) => n.selected).map((n: any) => n.id);
@@ -1129,13 +505,35 @@ function WorkflowEditorInner() {
   const handleNew = useCallback(async () => {
     if (!(await confirmDiscardIfDirty('Start a new workflow without saving?'))) return;
     setTempWorkflowName('My Workflow');
-    setShowNameDialog(true);
+    setTempWorkflowVersion('');
+    setTempKeepGoing(false);
+    setNameDialog('new');
   }, [confirmDiscardIfDirty]);
+
+  const handleEditDetails = useCallback(() => {
+    setTempWorkflowName(workflowName);
+    setTempWorkflowVersion(workflowVersion);
+    setTempKeepGoing(keepGoing);
+    setNameDialog('details');
+  }, [workflowName, workflowVersion, keepGoing]);
+
+  const handleConfirmDetails = useCallback(() => {
+    if (!tempWorkflowName.trim()) return;
+    setWorkflowName(tempWorkflowName);
+    setWorkflowVersion(tempWorkflowVersion);
+    setKeepGoing(tempKeepGoing);
+    setNameDialog(null);
+    markDirty();
+  }, [tempWorkflowName, tempWorkflowVersion, tempKeepGoing, markDirty]);
 
   const handleConfirmNew = useCallback(() => {
     if (!tempWorkflowName.trim()) return;
     setWorkflowName(tempWorkflowName);
-    setShowNameDialog(false);
+    setWorkflowVersion(tempWorkflowVersion);
+    setKeepGoing(tempKeepGoing);
+    // A new workflow is a new identity: it never inherits another's saved run.
+    setWorkflowId(generateWorkflowId());
+    setNameDialog(null);
     addLog(`New workflow created: ${tempWorkflowName}`);
 
     const templateNodes = [
@@ -1158,12 +556,13 @@ function WorkflowEditorInner() {
     setSelectedNodeId(null);
     setExecutionState('idle');
     setNodeWildcardFiles({});
-    setStepStatus({});
+    setStepRuns({});
+    setRunPhase('none');
     setCurrentFilePath(null);
     setIsDirty(false);
     undoStack.current = [];
     redoStack.current = [];
-  }, [tempWorkflowName, addLog]);
+  }, [tempWorkflowName, tempWorkflowVersion, tempKeepGoing, addLog]);
 
   const handleOpen = useCallback(async () => {
     if (!(await confirmDiscardIfDirty('Open another workflow without saving?'))) return;
@@ -1188,11 +587,22 @@ function WorkflowEditorInner() {
       setNodes(data.nodes);
       setEdges(data.edges);
       setSelectedNodeId(null);
-      setStepStatus({});
+      setStepRuns({});
+      setRunPhase('none');
       setNodeWildcardFiles(data.wildcardFiles || {});
       if (data.metadata?.name) setWorkflowName(data.metadata.name);
+      setWorkflowVersion(
+        typeof data.metadata?.workflowVersion === 'string' ? data.metadata.workflowVersion : ''
+      );
+      setKeepGoing(data.metadata?.keepGoing === true);
+      // Keep the id the file carries. A file from before ids existed gets one
+      // now and is marked unsaved, so saving it makes the id permanent (until
+      // then each open would pick a new one and lose the saved run).
+      const fileId = data.metadata?.workflowId;
+      const hasId = isValidWorkflowId(fileId);
+      setWorkflowId(hasId ? fileId : generateWorkflowId());
       setCurrentFilePath(result.path);
-      setIsDirty(false);
+      setIsDirty(!hasId);
       undoStack.current = [];
       redoStack.current = [];
 
@@ -1219,6 +629,10 @@ function WorkflowEditorInner() {
           wildcardFiles: nodeWildcardFiles,
           metadata: {
             name: workflowName,
+            // Version of the workflow itself; `version` below is the file format's.
+            workflowVersion,
+            workflowId,
+            keepGoing,
             version: '1.1.0',
             createdAt: new Date().toISOString(),
           },
@@ -1240,7 +654,17 @@ function WorkflowEditorInner() {
         addLog(`Failed to save workflow: ${error}`);
       }
     },
-    [nodes, edges, nodeWildcardFiles, workflowName, currentFilePath, addLog]
+    [
+      nodes,
+      edges,
+      nodeWildcardFiles,
+      workflowName,
+      workflowVersion,
+      workflowId,
+      keepGoing,
+      currentFilePath,
+      addLog,
+    ]
   );
 
   const handleSave = useCallback(() => saveWorkflowTo(false), [saveWorkflowTo]);
@@ -1256,7 +680,8 @@ function WorkflowEditorInner() {
     setSelectedNodeId(null);
     setExecutionState('idle');
     setNodeWildcardFiles({});
-    setStepStatus({});
+    setStepRuns({});
+    setRunPhase('none');
     addLog('Canvas cleared');
   }, [nodes.length, edges.length, confirmDiscardIfDirty, pushHistory, addLog]);
 
@@ -1287,9 +712,14 @@ function WorkflowEditorInner() {
         addLog(`Working directory set: ${dir}`);
       }
 
-      const workflow = convertNodesToWorkflow(nodes, edges, nodeWildcardFiles);
+      const workflow = convertNodesToWorkflow(nodes, edges, nodeWildcardFiles, {
+        id: workflowId,
+        name: workflowName,
+        version: workflowVersion,
+        keepGoing,
+      });
 
-      const errors = validateWorkflow(workflow);
+      const errors = [...validateWorkflow(workflow), ...validateCatalogNodes(nodes)];
       if (errors.length > 0) {
         addLog('Workflow validation failed:');
         errors.forEach((err) => addLog(`  - ${err}`));
@@ -1299,7 +729,12 @@ function WorkflowEditorInner() {
       const wildcardSteps = workflow.steps.filter((s: any) => s.wildcard_files);
       if (wildcardSteps.length > 0) {
         const total = wildcardSteps.reduce(
-          (sum: number, s: any) => sum + s.wildcard_files[WILDCARD_NAME].length,
+          (sum: number, s: any) =>
+            sum +
+            Object.values(s.wildcard_files as Record<string, string[]>).reduce(
+              (n, files) => n + files.length,
+              0
+            ),
           0
         );
         addLog(
@@ -1307,33 +742,128 @@ function WorkflowEditorInner() {
         );
       }
 
-      setStepStatus({});
+      setStepRuns({});
+      setRunPhase('active');
       return { workflow, dir };
     },
-    [nodes, edges, nodeWildcardFiles, workingDirectory, addLog]
+    [
+      nodes,
+      edges,
+      nodeWildcardFiles,
+      workflowName,
+      workflowVersion,
+      workflowId,
+      keepGoing,
+      workingDirectory,
+      addLog,
+    ]
   );
 
-  // Execution
+  // Which saved run (if any) a normal Run builds on. Looked up in
+  // the working directory, where the engine keeps its state, and refreshed
+  // whenever a run ends since the engine writes it after every step.
+  useEffect(() => {
+    if (!workingDirectory || executionState !== 'idle') {
+      if (!workingDirectory) setResumeInfo(null);
+      return;
+    }
+    let cancelled = false;
+    window.electron.ipcRenderer
+      .getResumeInfo(workflowName, workingDirectory, workflowId)
+      .then((info) => {
+        if (!cancelled) setResumeInfo(info);
+      })
+      .catch(() => {
+        if (!cancelled) setResumeInfo(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowName, workflowId, workingDirectory, executionState]);
+
+  // The runs of this workflow, from the index the engine keeps in the working
+  // directory; refreshed whenever a run ends.
+  useEffect(() => {
+    if (!workingDirectory) {
+      setRunHistory([]);
+      return;
+    }
+    if (executionState !== 'idle') return;
+    let cancelled = false;
+    window.electron.ipcRenderer
+      .listRunHistory(workingDirectory, workflowName, workflowId)
+      .then((runs) => {
+        if (!cancelled) setRunHistory(runs);
+      })
+      .catch(() => {
+        if (!cancelled) setRunHistory([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowName, workflowId, workingDirectory, executionState]);
+
+  const openReport = useCallback(
+    async (reportRef: string) => {
+      try {
+        const result = await window.electron.ipcRenderer.openRunReport(
+          workingDirectory,
+          reportRef
+        );
+        if (result.ok === false) addLog(`Could not open the report: ${result.error}`);
+      } catch (err) {
+        addLog(`Could not open the report: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+    [workingDirectory, addLog]
+  );
+
+  // Execution. A normal run lets the engine skip every step whose outputs are
+  // up to date (they exist, are newer than the inputs, and the step's command
+  // is unchanged since it last succeeded); steps that are out of date run
+  // together with everything downstream. "Run from scratch" asks the engine to
+  // ignore its saved state so that every step runs.
+  const startRun = useCallback(
+    async (fresh: boolean) => {
+      const prepared = await prepareRun(fresh ? 'run from scratch' : 'run');
+      if (!prepared) return;
+
+      if (fresh) {
+        addLog('Running from scratch: any saved progress is discarded');
+      } else if (resumeInfo?.canResume) {
+        addLog(
+          `Running: steps whose outputs are up to date are skipped (${resumeInfo.completedCount} finished earlier)` +
+            (resumeInfo.failedStep ? `, the last run stopped at "${resumeInfo.failedStep}"` : '')
+        );
+      } else {
+        addLog('Running: no saved progress for this workflow yet, every step runs');
+      }
+
+      setExecutionState('running');
+      window.electron.ipcRenderer.runWorkflow(prepared.workflow, false, prepared.dir, fresh);
+    },
+    [prepareRun, resumeInfo, addLog]
+  );
+
   const handleRun = useCallback(async () => {
     if (executionState === 'paused') {
       setExecutionState('running');
       window.electron.ipcRenderer.resumeWorkflow();
       return;
     }
+    await startRun(false);
+  }, [executionState, startRun]);
 
-    const prepared = await prepareRun('workflow files');
-    if (!prepared) return;
-
-    setExecutionState('running');
-    window.electron.ipcRenderer.runWorkflow(prepared.workflow, false, prepared.dir);
-  }, [executionState, prepareRun]);
+  const handleRunFromScratch = useCallback(() => startRun(true), [startRun]);
 
   const handleDryRun = useCallback(async () => {
     const prepared = await prepareRun('dry run');
     if (!prepared) return;
 
     addLog('Starting dry run (commands will not execute)...');
-    window.electron.ipcRenderer.runWorkflow(prepared.workflow, true, prepared.dir);
+    // Not fresh: the preview shows which steps would be skipped as up to date
+    // and why the others would run. A dry run never touches saved state.
+    window.electron.ipcRenderer.runWorkflow(prepared.workflow, true, prepared.dir, false);
   }, [prepareRun, addLog]);
 
   const handlePause = useCallback(() => {
@@ -1392,6 +922,37 @@ function WorkflowEditorInner() {
   // Nodes handed to React Flow carry live status and validation state under
   // reserved `__` keys. Kept out of `nodes` itself so neither ends up in a
   // saved workflow file or in the undo history.
+  const stepStatus = useMemo(
+    () => rollupNodeStatuses(stepRuns, baseStepIdsRef.current),
+    [stepRuns, nodes]
+  );
+
+  const statusRows = useMemo(
+    () =>
+      buildStatusRows(
+        stepRuns,
+        nodes.map((n: any) => ({
+          stepId: labelToId(n.data?.label || ''),
+          label: n.data?.label || 'Node',
+        })),
+        runPhase
+      ),
+    [stepRuns, nodes, runPhase]
+  );
+
+  // Edges carry their file-type check under a reserved `__` key for the same
+  // reason: it is derived from the nodes and must not be saved.
+  const decoratedEdges = useMemo(
+    () =>
+      edges.map((edge: any) => ({
+        ...edge,
+        data: { ...edge.data, __typeCheck: checkEdge(edge, nodes) },
+      })),
+    [edges, nodes]
+  );
+
+  const mockedCount = countMockedNodes(nodes);
+
   const decoratedNodes = nodes.map((node: any) => {
     const status = stepStatus[nodeIdToStepId(node.id)];
     const invalidReason = invalidNodeIds[node.id];
@@ -1403,7 +964,7 @@ function WorkflowEditorInner() {
     const entries = Object.values(stepStatus);
     if (entries.length === 0) return null;
     const finished = entries.filter(
-      (s) => s.state === 'done' || s.state === 'failed'
+      (s) => s.state === 'succeeded' || s.state === 'failed' || s.state === 'skipped'
     ).length;
     return `${finished} / ${nodes.length} steps`;
   })();
@@ -1424,7 +985,7 @@ function WorkflowEditorInner() {
           {/* Top Toolbar */}
           <div className="top-toolbar">
             <div className="workflow-info">
-              <div className="workflow-title">
+              <div className="workflow-title" data-testid="workflow-title">
                 {workflowName}
                 {isDirty && <span className="dirty-marker" title="Unsaved changes">•</span>}
               </div>
@@ -1441,14 +1002,29 @@ function WorkflowEditorInner() {
               <button className="toolbar-button" onClick={handleSave}>Save</button>
               <button className="toolbar-button" onClick={handleSaveAs}>Save As</button>
               <button className="toolbar-button" onClick={handleClear}>Clear</button>
-              <button className="toolbar-button" onClick={handleSelectDirectory}>
+              <button className="toolbar-button" data-testid="details" onClick={handleEditDetails}>
+                Details
+              </button>
+              <button className="toolbar-button" onClick={handleSelectDirectory}
+              data-testid="set-directory">
                 Set Directory
               </button>
             </div>
 
             <div className="edit-buttons">
-              <button className="toolbar-button add-button" onClick={addNode}>+ Add Node</button>
-              <button className="toolbar-button delete-button" onClick={deleteSelectedNodes}>Delete</button>
+              <button
+                className="toolbar-button"
+                onClick={() => setPaletteOpen((open) => !open)}
+                data-testid="open-palette"
+                aria-expanded={paletteOpen}
+                title="Search the bundled catalog of common bioinformatics tools"
+              >
+                Tool Catalog
+              </button>
+              <button className="toolbar-button add-button" onClick={addNode}
+              data-testid="add-node">+ Add Node</button>
+              <button className="toolbar-button delete-button" onClick={deleteSelectedNodes}
+              data-testid="delete-node">Delete</button>
             </div>
           </div>
 
@@ -1457,14 +1033,34 @@ function WorkflowEditorInner() {
             <button
               className={`execution-button run-button ${executionState === 'running' ? 'active' : ''}`}
               onClick={handleRun}
+              data-testid="run"
               disabled={nodes.length === 0 || executionState === 'running'}
+              title={
+                executionState === 'paused'
+                  ? 'Continue the paused run.'
+                  : `Run the workflow, skipping steps whose outputs are already up to date. ${describeResume(
+                      resumeInfo,
+                      Boolean(workingDirectory)
+                    )}`
+              }
             >
-              {executionState === 'paused' ? 'Resume' : 'Run'}
+              {executionState === 'paused' ? 'Continue' : 'Run'}
+            </button>
+
+            <button
+              className="execution-button resume-button"
+              onClick={handleRunFromScratch}
+              data-testid="run-from-scratch"
+              disabled={nodes.length === 0 || executionState !== 'idle'}
+              title="Discard saved progress and run every step again."
+            >
+              Run from scratch
             </button>
 
             <button
               className="execution-button dry-run-button"
               onClick={handleDryRun}
+              data-testid="dry-run"
               disabled={nodes.length === 0 || executionState !== 'idle'}
             >
               Dry Run
@@ -1473,6 +1069,7 @@ function WorkflowEditorInner() {
             <button
               className={`execution-button pause-button ${executionState === 'paused' ? 'active' : ''}`}
               onClick={handlePause}
+              data-testid="pause"
               disabled={executionState !== 'running'}
             >
               Pause
@@ -1481,42 +1078,45 @@ function WorkflowEditorInner() {
             <button
               className="execution-button stop-button"
               onClick={handleStop}
+              data-testid="stop"
               disabled={executionState === 'idle'}
             >
               Stop
             </button>
 
-            {progress && <div className="execution-progress">{progress}</div>}
+            {mockedCount > 0 && (
+              <div
+                className="mock-warning"
+                data-testid="mock-warning"
+                title="Mocked steps do not run their tool; they only create placeholder outputs. Results downstream are not real."
+              >
+                ⚠ {mockedCount} mocked step{mockedCount === 1 ? '' : 's'}
+              </div>
+            )}
+
+            {progress && <div className="execution-progress" data-testid="progress">{progress}</div>}
           </div>
 
-          <ReactFlow
+
+          {paletteOpen && (
+            <ToolPalette onAdd={addCatalogNode} onClose={() => setPaletteOpen(false)} />
+          )}
+
+          <WorkflowCanvas
             nodes={decoratedNodes}
-            edges={edges}
-            defaultEdgeOptions={defaultEdgeOptions}
+            edges={decoratedEdges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onSelectionChange={onSelectionChange}
-            nodeTypes={nodeTypes}
-            fitView
-          >
-            <Background
-              variant={BackgroundVariant.Dots}
-              gap={30}
-              color="var(--canvas-grid)"
-            />
-            <Controls />
-            <MiniMap
-              nodeStrokeWidth={1}
-              nodeColor={(node: any) => node.data?.color || '#aaa'}
-            />
-          </ReactFlow>
+          />
         </div>
 
         {selectedNode && (
           <PropertiesPanel
             selectedNode={selectedNode}
             onNodeUpdate={onNodeUpdate}
+            onNodePatch={onNodePatch}
             nodeFiles={nodeWildcardFiles[selectedNode.id] || []}
             onNodeFilesUpdate={handleNodeFilesUpdate}
             addLog={addLog}
@@ -1526,57 +1126,89 @@ function WorkflowEditorInner() {
       </div>
 
       {/* Execution Logs Panel */}
-      <div className={`execution-panel ${showExecutionPanel ? 'visible' : 'hidden'}`}>
-        <div className="execution-panel-header">
-          <h3>Execution Logs</h3>
-          <div className="execution-panel-controls">
-            <button className="panel-button" onClick={handleClearLogs}>Clear</button>
-            <button className="panel-button" onClick={handleTogglePanel}>
-              {showExecutionPanel ? 'Hide' : 'Show'}
-            </button>
-          </div>
-        </div>
-        {showExecutionPanel && (
-          <div
-            className="execution-panel-content"
-            ref={logContentRef}
-            onScroll={handleLogScroll}
-          >
-            {executionLogs.map((log, index) => (
-              <div key={index} className={`log-entry ${classifyLogLine(log)}`}>
-                {log}
-              </div>
-            ))}
-            <div ref={logsEndRef} />
-          </div>
-        )}
-      </div>
+      <ExecutionLogs
+        logs={executionLogs}
+        visible={showExecutionPanel}
+        onClear={handleClearLogs}
+        onToggle={handleTogglePanel}
+        tab={executionTab}
+        onTabChange={setExecutionTab}
+        stepCount={statusRows.length}
+        stepsView={<StepStatusPanel rows={statusRows} phase={runPhase} />}
+        historyView={
+          <RunHistoryPanel
+            runs={runHistory}
+            hasWorkingDirectory={Boolean(workingDirectory)}
+            onOpenReport={openReport}
+          />
+        }
+        historyCount={runHistory.length}
+        latestReport={latestReport !== null}
+        onOpenLatestReport={() => latestReport && openReport(latestReport)}
+      />
 
-      {/* Name Dialog */}
-      {showNameDialog && (
-        <div className="dialog-overlay" onClick={() => setShowNameDialog(false)}>
+      {/* Name / details dialog */}
+      {nameDialog && (
+        <div className="dialog-overlay" onClick={() => setNameDialog(null)}>
           <div className="dialog-box" onClick={(e) => e.stopPropagation()}>
-            <h3>New Workflow</h3>
+            <h3>{nameDialog === 'new' ? 'New Workflow' : 'Workflow Details'}</h3>
             <label>
               Workflow Name:
               <input
                 type="text"
                 className="dialog-input"
+                data-testid="dialog-name"
                 value={tempWorkflowName}
                 onChange={(e) => setTempWorkflowName(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleConfirmNew()}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' &&
+                  (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
+                }
                 autoFocus
               />
             </label>
+            <label>
+              Version (optional):
+              <input
+                type="text"
+                className="dialog-input"
+                value={tempWorkflowVersion}
+                placeholder="e.g. 1.0"
+                onChange={(e) => setTempWorkflowVersion(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === 'Enter' &&
+                  (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
+                }
+              />
+            </label>
+            <label className="dialog-checkbox">
+              <input
+                type="checkbox"
+                data-testid="keep-going"
+                checked={tempKeepGoing}
+                onChange={(e) => setTempKeepGoing(e.target.checked)}
+              />{' '}
+              Keep going after a failure
+            </label>
             <p className="dialog-hint">
-              You will choose a working directory when you click Run.
+              When a step fails, steps that do not depend on it still run. The run still ends as
+              failed, with a summary of what failed and what was not run.
+            </p>
+            <p className="dialog-hint">
+              {nameDialog === 'new'
+                ? 'You will choose a working directory when you click Run.'
+                : 'Shown in the run log and saved with each run. Renaming the workflow keeps its saved run, so its saved progress is still found.'}
             </p>
             <div className="dialog-buttons">
-              <button className="dialog-button cancel" onClick={() => setShowNameDialog(false)}>
+              <button className="dialog-button cancel" onClick={() => setNameDialog(null)}>
                 Cancel
               </button>
-              <button className="dialog-button confirm" onClick={handleConfirmNew}>
-                Create
+              <button
+                className="dialog-button confirm"
+                data-testid="dialog-confirm"
+                onClick={nameDialog === 'new' ? handleConfirmNew : handleConfirmDetails}
+              >
+                {nameDialog === 'new' ? 'Create' : 'Save'}
               </button>
             </div>
           </div>

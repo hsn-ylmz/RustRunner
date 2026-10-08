@@ -6,11 +6,16 @@
  */
 
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { ResumeInfo } from './resumeState';
+import type { EngineEvent } from './engineEvents';
+import type { RunHistoryEntry } from './runHistory';
 
 // Type definitions
 export type Channels = 'ipc-example';
 
 interface WorkflowData {
+  metadata?: { id?: string; name?: string; version?: string };
+  keep_going?: boolean;
   steps: Array<{
     id: string;
     tool: string;
@@ -20,6 +25,19 @@ interface WorkflowData {
     previous: string[];
     next: string[];
     threads?: number;
+    /** Re-runs after a failure or timeout (0 = single attempt). */
+    retries?: number;
+    retry_backoff?: 'fixed' | 'exponential';
+    retry_delay_secs?: number;
+    /** Per-attempt wall-clock limit; the step is killed when exceeded. */
+    timeout_secs?: number;
+    /** Output checks run after the step succeeds (see the Rust `OutputCheck`). */
+    checks?: Array<{
+      kind: 'exists' | 'non_empty' | 'min_lines';
+      lines?: number;
+      target?: string;
+      blocking?: boolean;
+    }>;
     /** Per-step wildcard mappings; serialized straight into the workflow YAML. */
     wildcard_files?: Record<string, string[]>;
   }>;
@@ -65,8 +83,39 @@ const electronHandler = {
     },
 
     // Workflow execution
-    runWorkflow(workflowData: WorkflowData, dryRun: boolean = false, workingDir: string = '') {
-      ipcRenderer.send('run-workflow', workflowData, dryRun, workingDir);
+    runWorkflow(
+      workflowData: WorkflowData,
+      dryRun: boolean = false,
+      workingDir: string = '',
+      fresh: boolean = false
+    ) {
+      ipcRenderer.send('run-workflow', workflowData, dryRun, workingDir, fresh);
+    },
+
+    // Saved-run info for the Run button tooltip.
+    getResumeInfo(
+      workflowName: string,
+      workingDir: string,
+      workflowId?: string
+    ): Promise<ResumeInfo> {
+      return ipcRenderer.invoke('get-resume-info', workflowName, workingDir, workflowId);
+    },
+
+    // Run history: the runs of a workflow, and opening one's HTML report. The
+    // main process only opens reports inside the working directory's run folder.
+    listRunHistory(
+      workingDir: string,
+      workflowName: string,
+      workflowId?: string
+    ): Promise<RunHistoryEntry[]> {
+      return ipcRenderer.invoke('list-run-history', workingDir, workflowName, workflowId);
+    },
+
+    openRunReport(
+      workingDir: string,
+      reportRef: string
+    ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('open-run-report', workingDir, reportRef);
     },
 
     pauseWorkflow() {
@@ -116,6 +165,11 @@ const electronHandler = {
     // Event listeners. All return an unsubscribe function.
     onWorkflowOutput(callback: (output: string) => void) {
       return subscribe('workflow-output', callback);
+    },
+
+    /** Typed run events from the engine (`--json-events`). */
+    onWorkflowEvent(callback: (event: EngineEvent) => void) {
+      return subscribe('workflow-event', callback);
     },
 
     onWorkflowComplete(

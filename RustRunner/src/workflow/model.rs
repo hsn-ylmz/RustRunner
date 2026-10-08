@@ -29,6 +29,167 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// How the delay between retry attempts grows.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RetryBackoff {
+    /// Wait `retry_delay_secs` before every retry.
+    #[default]
+    Fixed,
+    /// Wait `retry_delay_secs`, then twice that, then four times, and so on.
+    Exponential,
+}
+
+impl RetryBackoff {
+    /// The YAML spelling of this mode.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Fixed => "fixed",
+            Self::Exponential => "exponential",
+        }
+    }
+}
+
+/// What an output check verifies.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckKind {
+    /// The output path exists.
+    Exists,
+    /// The output exists and is not empty: a file with at least one byte, or a
+    /// directory with at least one entry.
+    NonEmpty,
+    /// The output is a file with at least `lines` lines.
+    MinLines,
+}
+
+impl CheckKind {
+    /// The YAML spelling of this kind.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Exists => "exists",
+            Self::NonEmpty => "non_empty",
+            Self::MinLines => "min_lines",
+        }
+    }
+}
+
+/// A sanity check run on a step's outputs after the step itself succeeded
+/// (in the spirit of Dagster asset checks).
+///
+/// ```yaml
+/// checks:
+///   - kind: non_empty
+///   - kind: min_lines
+///     lines: 100
+///     target: counts.tsv
+///     blocking: false
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct OutputCheck {
+    /// What to verify.
+    pub kind: CheckKind,
+
+    /// Required line count for `min_lines` (at least 1); must be absent for
+    /// the other kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<u64>,
+
+    /// Which output to check, spelled exactly as in the step's `output`.
+    /// `None` checks every output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+
+    /// A failing blocking check fails the step (and so the workflow); a
+    /// failing non-blocking check only logs a warning.
+    #[serde(default = "default_blocking", skip_serializing_if = "is_true")]
+    pub blocking: bool,
+}
+
+fn default_blocking() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
+impl OutputCheck {
+    /// A blocking check of `kind` over all outputs.
+    pub fn new(kind: CheckKind) -> Self {
+        Self {
+            kind,
+            lines: None,
+            target: None,
+            blocking: true,
+        }
+    }
+
+    /// A blocking "at least `lines` lines" check over all outputs.
+    pub fn min_lines(lines: u64) -> Self {
+        Self {
+            lines: Some(lines),
+            ..Self::new(CheckKind::MinLines)
+        }
+    }
+
+    /// Restricts the check to one output.
+    pub fn with_target(mut self, target: impl Into<String>) -> Self {
+        self.target = Some(target.into());
+        self
+    }
+
+    /// Makes a failure only a warning.
+    pub fn non_blocking(mut self) -> Self {
+        self.blocking = false;
+        self
+    }
+
+    /// Human-readable description, e.g. `min_lines 10 on counts.tsv`.
+    pub fn describe(&self) -> String {
+        let mut text = self.kind.as_str().to_string();
+        if let Some(n) = self.lines {
+            text.push_str(&format!(" {}", n));
+        }
+        text.push_str(&format!(
+            " on {}",
+            self.target.as_deref().unwrap_or("all outputs")
+        ));
+        if !self.blocking {
+            text.push_str(" (non-blocking)");
+        }
+        text
+    }
+
+    /// Returns why this check is nonsensical for `step`, if it is.
+    pub fn config_problem(&self, step: &Step) -> Option<String> {
+        match (self.kind, self.lines) {
+            (CheckKind::MinLines, None) => {
+                return Some("min_lines needs a `lines` value".to_string())
+            }
+            (CheckKind::MinLines, Some(0)) => {
+                return Some("min_lines with 0 lines can never fail; use at least 1".to_string())
+            }
+            (CheckKind::Exists | CheckKind::NonEmpty, Some(_)) => {
+                return Some(format!(
+                    "`lines` only applies to min_lines, not {}",
+                    self.kind.as_str()
+                ))
+            }
+            _ => {}
+        }
+        let outputs = step.output_paths();
+        match &self.target {
+            Some(target) if !outputs.iter().any(|o| o == target.trim()) => Some(format!(
+                "target '{}' is not one of the step's outputs",
+                target
+            )),
+            None if outputs.is_empty() => Some("the step has no outputs to check".to_string()),
+            _ => None,
+        }
+    }
+}
+
 /// Represents a single step in a workflow.
 ///
 /// Each step defines a command to execute, along with its inputs, outputs,
@@ -72,6 +233,59 @@ pub struct Step {
     /// Wildcard file mappings (wildcard_name -> list of concrete files)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub wildcard_files: HashMap<String, Vec<String>>,
+
+    /// How many times a failed (or timed-out) step is re-run before the
+    /// workflow gives up. `0` means a single attempt.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retries: u32,
+
+    /// Whether the delay between retries stays fixed or doubles each time.
+    #[serde(default, skip_serializing_if = "is_default_backoff")]
+    pub retry_backoff: RetryBackoff,
+
+    /// Base delay in seconds before a retry.
+    #[serde(default = "default_retry_delay_secs")]
+    pub retry_delay_secs: u64,
+
+    /// Wall-clock limit per attempt in seconds; the step's process group is
+    /// killed when it is exceeded. `None` means no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+
+    /// Checks run on the outputs after the step succeeds. Blocking failures
+    /// fail the step without re-running the tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<OutputCheck>,
+
+    /// Do not run the tool: create (or touch) the declared outputs instead, so
+    /// the rest of the workflow can be tried out without the real tool or its
+    /// data. Files are created empty, outputs ending in `/` become
+    /// directories. A mocked step never counts as up to date, and neither
+    /// does a step after it (its result came from placeholders).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mock: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+fn is_default_backoff(b: &RetryBackoff) -> bool {
+    *b == RetryBackoff::Fixed
+}
+
+/// Upper bound for any single wait between retries (one hour).
+pub const MAX_RETRY_DELAY_SECS: u64 = 3600;
+
+/// Default base delay between retries.
+pub const DEFAULT_RETRY_DELAY_SECS: u64 = 5;
+
+fn default_retry_delay_secs() -> u64 {
+    DEFAULT_RETRY_DELAY_SECS
 }
 
 /// Default thread count for steps that don't specify
@@ -131,7 +345,69 @@ impl Step {
             threads: 1,
             color: None,
             wildcard_files: HashMap::new(),
+            retries: 0,
+            retry_backoff: RetryBackoff::Fixed,
+            retry_delay_secs: DEFAULT_RETRY_DELAY_SECS,
+            timeout_secs: None,
+            checks: Vec::new(),
+            mock: false,
         }
+    }
+
+    /// Adds an output check.
+    pub fn with_check(mut self, check: OutputCheck) -> Self {
+        self.checks.push(check);
+        self
+    }
+
+    /// Individual output paths, with comma-separated entries split and trimmed.
+    pub fn output_paths(&self) -> Vec<String> {
+        self.output
+            .iter()
+            .flat_map(|s| s.split(','))
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty())
+            .collect()
+    }
+
+    /// Marks the step as mocked: its outputs are created instead of running
+    /// the tool.
+    pub fn with_mock(mut self, mock: bool) -> Self {
+        self.mock = mock;
+        self
+    }
+
+    /// Sets how many times a failed step is retried.
+    pub fn with_retries(mut self, retries: u32) -> Self {
+        self.retries = retries;
+        self
+    }
+
+    /// Sets the retry back-off mode and base delay in seconds.
+    pub fn with_retry_backoff(mut self, backoff: RetryBackoff, delay_secs: u64) -> Self {
+        self.retry_backoff = backoff;
+        self.retry_delay_secs = delay_secs;
+        self
+    }
+
+    /// Sets the per-attempt timeout in seconds.
+    pub fn with_timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
+        self
+    }
+
+    /// Delay before retry number `retry` (1 = first retry), capped at
+    /// [`MAX_RETRY_DELAY_SECS`].
+    pub fn retry_delay(&self, retry: u32) -> std::time::Duration {
+        let factor = match self.retry_backoff {
+            RetryBackoff::Fixed => 1,
+            // 2^(retry-1), saturating so absurd retry counts can't overflow.
+            RetryBackoff::Exponential => 1u64
+                .checked_shl(retry.saturating_sub(1))
+                .unwrap_or(u64::MAX),
+        };
+        let secs = self.retry_delay_secs.saturating_mul(factor);
+        std::time::Duration::from_secs(secs.min(MAX_RETRY_DELAY_SECS))
     }
 
     /// Sets the input file(s) for this step.
@@ -280,11 +556,138 @@ impl Step {
     }
 }
 
+/// Longest accepted metadata name or version, in characters.
+pub const MAX_METADATA_LEN: usize = 200;
+
+/// Longest accepted workflow id, in characters.
+pub const MAX_ID_LEN: usize = 64;
+
+/// Optional descriptive information about a workflow, shown in the run log
+/// and recorded in the run summary and the saved run state.
+///
+/// ```yaml
+/// metadata:
+///   id: 3f2b8c1e-5a47-4c0e-9d3a-7b1f6e2a9c10
+///   name: RNA-seq QC
+///   version: "1.2"
+/// ```
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorkflowMetadata {
+    /// Stable identifier, generated once by the GUI. The saved run state is
+    /// keyed on it, so renaming the workflow or its file keeps the resume
+    /// history. Limited to letters, digits, `-` and `_` because it becomes a
+    /// file name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+
+    /// Human-readable workflow name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Free-form version label (for example `1.2` or `2024-05-draft`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+impl WorkflowMetadata {
+    /// Creates metadata with the given name and version.
+    pub fn new(name: Option<&str>, version: Option<&str>) -> Self {
+        Self {
+            id: None,
+            name: name.map(String::from),
+            version: version.map(String::from),
+        }
+    }
+
+    /// Sets the stable workflow id.
+    pub fn with_id(mut self, id: &str) -> Self {
+        self.id = Some(id.to_string());
+        self
+    }
+
+    /// Trims all fields and turns blank ones into `None`.
+    pub fn normalize(&mut self) {
+        for field in [&mut self.id, &mut self.name, &mut self.version] {
+            if let Some(value) = field.take() {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    *field = Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    /// Checks the fields are short and free of control characters. Metadata is
+    /// echoed into the log, which front ends parse line by line, so a newline
+    /// must never get through.
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(id) = &self.id {
+            if id.chars().count() > MAX_ID_LEN {
+                return Err(format!(
+                    "Workflow metadata id is longer than {} characters",
+                    MAX_ID_LEN
+                ));
+            }
+            if !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(
+                    "Workflow metadata id may only contain letters, digits, '-' and '_'"
+                        .to_string(),
+                );
+            }
+        }
+        for (label, value) in [("name", &self.name), ("version", &self.version)] {
+            let Some(value) = value else { continue };
+            if value.chars().count() > MAX_METADATA_LEN {
+                return Err(format!(
+                    "Workflow metadata {} is longer than {} characters",
+                    label, MAX_METADATA_LEN
+                ));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(format!(
+                    "Workflow metadata {} contains control characters",
+                    label
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// True when no id, name or version is set.
+    pub fn is_empty(&self) -> bool {
+        self.id.is_none() && self.name.is_none() && self.version.is_none()
+    }
+
+    /// One-line description such as `RNA-seq QC (version 1.2)`, or `None` when
+    /// the metadata is empty.
+    pub fn label(&self) -> Option<String> {
+        match (&self.name, &self.version) {
+            (Some(n), Some(v)) => Some(format!("{} (version {})", n, v)),
+            (Some(n), None) => Some(n.clone()),
+            (None, Some(v)) => Some(format!("version {}", v)),
+            (None, None) => None,
+        }
+    }
+}
+
 /// Represents a complete workflow with multiple steps.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Workflow {
     /// Ordered list of steps in the workflow
     pub steps: Vec<Step>,
+
+    /// Optional name and version of the workflow
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<WorkflowMetadata>,
+
+    /// Keep going after a failure: a failed step blocks only the steps that
+    /// depend on it, and independent branches still run to completion. The
+    /// run still ends as failed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_going: bool,
 
     /// List of unique tools used (auto-populated)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -296,6 +699,8 @@ impl Workflow {
     pub fn new() -> Self {
         Self {
             steps: Vec::new(),
+            metadata: None,
+            keep_going: false,
             tools: Vec::new(),
         }
     }
@@ -304,10 +709,24 @@ impl Workflow {
     pub fn from_steps(steps: Vec<Step>) -> Self {
         let mut workflow = Self {
             steps,
+            metadata: None,
+            keep_going: false,
             tools: Vec::new(),
         };
         workflow.refresh_tools();
         workflow
+    }
+
+    /// Sets the workflow's name and version.
+    pub fn with_metadata(mut self, metadata: WorkflowMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Turns keep-going mode on or off.
+    pub fn with_keep_going(mut self, keep_going: bool) -> Self {
+        self.keep_going = keep_going;
+        self
     }
 
     /// Adds a step to the workflow.
@@ -389,6 +808,195 @@ impl Default for Workflow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_old_yaml_without_metadata_has_none() {
+        let wf: Workflow =
+            serde_yaml::from_str("steps:\n  - id: a\n    tool: bash\n    command: x\n").unwrap();
+        assert!(wf.metadata.is_none());
+        assert!(!serde_yaml::to_string(&wf).unwrap().contains("metadata"));
+    }
+
+    #[test]
+    fn test_metadata_parses_and_round_trips() {
+        let yaml = "metadata:\n  name: RNA-seq QC\n  version: '1.2'\nsteps:\n  - id: a\n    tool: bash\n    command: x\n";
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        let meta = wf.metadata.clone().unwrap();
+        assert_eq!(meta.name.as_deref(), Some("RNA-seq QC"));
+        assert_eq!(meta.version.as_deref(), Some("1.2"));
+        assert_eq!(meta.label().unwrap(), "RNA-seq QC (version 1.2)");
+        let again: Workflow = serde_yaml::from_str(&serde_yaml::to_string(&wf).unwrap()).unwrap();
+        assert_eq!(again.metadata, Some(meta));
+    }
+
+    #[test]
+    fn test_metadata_id_round_trips_and_old_yaml_has_none() {
+        let yaml =
+            "metadata:\n  id: 3f2b8c1e-5a47\nsteps:\n  - id: a\n    tool: bash\n    command: x\n";
+        let wf: Workflow = serde_yaml::from_str(yaml).unwrap();
+        let meta = wf.metadata.clone().unwrap();
+        assert_eq!(meta.id.as_deref(), Some("3f2b8c1e-5a47"));
+        assert!(!meta.is_empty());
+        assert_eq!(meta.label(), None);
+        let again: Workflow = serde_yaml::from_str(&serde_yaml::to_string(&wf).unwrap()).unwrap();
+        assert_eq!(again.metadata, Some(meta));
+
+        let old: WorkflowMetadata = serde_yaml::from_str("name: qc\n").unwrap();
+        assert_eq!(old.id, None);
+    }
+
+    #[test]
+    fn test_metadata_id_must_be_path_safe() {
+        for ok in ["abc", "3f2b8c1e-5a47_x", &"a".repeat(MAX_ID_LEN)] {
+            assert!(WorkflowMetadata::default().with_id(ok).validate().is_ok());
+        }
+        for bad in [
+            "../evil",
+            "a/b",
+            "a b",
+            "ä",
+            "x.state",
+            &"a".repeat(MAX_ID_LEN + 1),
+        ] {
+            assert!(
+                WorkflowMetadata::default().with_id(bad).validate().is_err(),
+                "{bad}"
+            );
+        }
+        let mut blank = WorkflowMetadata::default().with_id("  ");
+        blank.normalize();
+        assert!(blank.is_empty());
+    }
+
+    #[test]
+    fn test_keep_going_defaults_to_false_and_round_trips() {
+        let wf: Workflow =
+            serde_yaml::from_str("steps:\n  - id: a\n    tool: bash\n    command: x\n").unwrap();
+        assert!(!wf.keep_going);
+        assert!(!serde_yaml::to_string(&wf).unwrap().contains("keep_going"));
+
+        let on: Workflow = serde_yaml::from_str(
+            "keep_going: true\nsteps:\n  - id: a\n    tool: bash\n    command: x\n",
+        )
+        .unwrap();
+        assert!(on.keep_going);
+        let again: Workflow = serde_yaml::from_str(&serde_yaml::to_string(&on).unwrap()).unwrap();
+        assert!(again.keep_going);
+    }
+
+    #[test]
+    fn test_metadata_normalize_and_label() {
+        let mut meta = WorkflowMetadata::new(Some("  qc  "), Some("   "));
+        meta.normalize();
+        assert_eq!(meta.name.as_deref(), Some("qc"));
+        assert_eq!(meta.version, None);
+        assert_eq!(meta.label().as_deref(), Some("qc"));
+        let mut blank = WorkflowMetadata::new(Some(" "), None);
+        blank.normalize();
+        assert!(blank.is_empty());
+        assert_eq!(blank.label(), None);
+        assert_eq!(
+            WorkflowMetadata::new(None, Some("2")).label().as_deref(),
+            Some("version 2")
+        );
+    }
+
+    #[test]
+    fn test_metadata_validate_rejects_newlines_and_overlong() {
+        assert!(WorkflowMetadata::new(Some("ok"), Some("1"))
+            .validate()
+            .is_ok());
+        assert!(WorkflowMetadata::new(Some("a\nStarting step: x"), None)
+            .validate()
+            .is_err());
+        let long = "x".repeat(MAX_METADATA_LEN + 1);
+        assert!(WorkflowMetadata::new(None, Some(&long)).validate().is_err());
+    }
+
+    #[test]
+    fn test_old_yaml_without_checks_has_none() {
+        let step: Step = serde_yaml::from_str("id: a\ntool: bash\ncommand: x\n").unwrap();
+        assert!(step.checks.is_empty());
+        // And an unchecked step does not serialize the field.
+        assert!(!serde_yaml::to_string(&step).unwrap().contains("checks"));
+    }
+
+    #[test]
+    fn test_checks_parse_with_defaults_and_round_trip() {
+        let yaml = "id: a\ntool: bash\ncommand: x\noutput: o.tsv\nchecks:\n\
+                    \x20 - kind: exists\n\
+                    \x20 - kind: min_lines\n\x20   lines: 10\n\x20   target: o.tsv\n\x20   blocking: false\n";
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.checks[0], OutputCheck::new(CheckKind::Exists));
+        assert_eq!(
+            step.checks[1],
+            OutputCheck::min_lines(10)
+                .with_target("o.tsv")
+                .non_blocking()
+        );
+        let again: Step = serde_yaml::from_str(&serde_yaml::to_string(&step).unwrap()).unwrap();
+        assert_eq!(again.checks, step.checks);
+    }
+
+    #[test]
+    fn test_unknown_check_kind_is_rejected() {
+        let yaml = "id: a\ntool: bash\ncommand: x\nchecks:\n  - kind: sorted\n";
+        assert!(serde_yaml::from_str::<Step>(yaml).is_err());
+    }
+
+    #[test]
+    fn test_old_yaml_without_retry_fields_gets_defaults() {
+        let step: Step = serde_yaml::from_str("id: a\ntool: bash\ncommand: echo hi\n").unwrap();
+        assert_eq!(step.retries, 0);
+        assert_eq!(step.retry_backoff, RetryBackoff::Fixed);
+        assert_eq!(step.retry_delay_secs, DEFAULT_RETRY_DELAY_SECS);
+        assert_eq!(step.timeout_secs, None);
+    }
+
+    #[test]
+    fn test_retry_fields_parse_from_yaml() {
+        let yaml = "id: a\ntool: bash\ncommand: x\nretries: 3\n\
+                    retry_backoff: exponential\nretry_delay_secs: 2\ntimeout_secs: 90\n";
+        let step: Step = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(step.retries, 3);
+        assert_eq!(step.retry_backoff, RetryBackoff::Exponential);
+        assert_eq!(step.retry_delay_secs, 2);
+        assert_eq!(step.timeout_secs, Some(90));
+    }
+
+    #[test]
+    fn test_unknown_backoff_is_rejected() {
+        let yaml = "id: a\ntool: bash\ncommand: x\nretry_backoff: linear\n";
+        assert!(serde_yaml::from_str::<Step>(yaml).is_err());
+    }
+
+    #[test]
+    fn test_default_retry_fields_are_not_serialized_noise() {
+        let yaml = serde_yaml::to_string(&Step::new("a", "bash", "echo")).unwrap();
+        assert!(!yaml.contains("retries"));
+        assert!(!yaml.contains("timeout_secs"));
+        let yaml = serde_yaml::to_string(&Step::new("a", "bash", "echo").with_retries(2)).unwrap();
+        assert!(yaml.contains("retries: 2"));
+    }
+
+    #[test]
+    fn test_retry_delay_fixed_and_exponential() {
+        let fixed = Step::new("a", "bash", "x").with_retry_backoff(RetryBackoff::Fixed, 5);
+        assert_eq!(fixed.retry_delay(1).as_secs(), 5);
+        assert_eq!(fixed.retry_delay(4).as_secs(), 5);
+
+        let exp = Step::new("a", "bash", "x").with_retry_backoff(RetryBackoff::Exponential, 5);
+        assert_eq!(exp.retry_delay(1).as_secs(), 5);
+        assert_eq!(exp.retry_delay(2).as_secs(), 10);
+        assert_eq!(exp.retry_delay(4).as_secs(), 40);
+    }
+
+    #[test]
+    fn test_retry_delay_is_capped_and_never_overflows() {
+        let exp = Step::new("a", "bash", "x").with_retry_backoff(RetryBackoff::Exponential, 5);
+        assert_eq!(exp.retry_delay(200).as_secs(), MAX_RETRY_DELAY_SECS);
+        assert_eq!(exp.retry_delay(u32::MAX).as_secs(), MAX_RETRY_DELAY_SECS);
+    }
 
     #[test]
     fn test_step_creation() {

@@ -7,7 +7,7 @@
 
 import path from 'path';
 import fs from 'fs';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, spawnSync, ChildProcess } from 'child_process';
 import {
   app,
   BrowserWindow,
@@ -23,12 +23,19 @@ import yaml from 'js-yaml';
 import MenuBuilder from './menu';
 import { setupAutoUpdater } from './updater';
 import { resolveHtmlPath } from './util';
+import { readResumeInfoFor, workflowFileStem } from './resumeState';
+import { readRunHistory, resolveReportPath, type RunHistoryEntry } from './runHistory';
+import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
 
 // =============================================================================
 // Types
 // =============================================================================
 
 interface WorkflowData {
+  /** Optional id/name/version, echoed by the engine in its log and run state. */
+  metadata?: { id?: string; name?: string; version?: string };
+  /** Keep running independent steps after one fails. */
+  keep_going?: boolean;
   steps: Array<{
     id: string;
     tool: string;
@@ -38,6 +45,19 @@ interface WorkflowData {
     previous: string[];
     next: string[];
     threads?: number;
+    /** Re-runs after a failure or timeout (0 = single attempt). */
+    retries?: number;
+    retry_backoff?: 'fixed' | 'exponential';
+    retry_delay_secs?: number;
+    /** Per-attempt wall-clock limit; the step is killed when exceeded. */
+    timeout_secs?: number;
+    /** Output checks run after the step succeeds (see the Rust `OutputCheck`). */
+    checks?: Array<{
+      kind: 'exists' | 'non_empty' | 'min_lines';
+      lines?: number;
+      target?: string;
+      blocking?: boolean;
+    }>;
     /**
      * Wildcard file mappings for this step (wildcard name -> concrete files).
      * Matches the `wildcard_files` field on the Rust `Step` struct, which
@@ -61,6 +81,47 @@ let pauseFlagPath: string = '';
  * handler can report "stopped" rather than surfacing the kill as a failure.
  */
 let stoppedByUser = false;
+
+/**
+ * How long the engine gets to stop its steps after SIGTERM before we force it.
+ * The engine itself escalates to SIGKILL for stubborn steps after ~3s.
+ */
+const STOP_GRACE_MS = 8_000;
+
+/**
+ * Stops the engine and, through it, every step process it started.
+ *
+ * On unix the engine traps SIGTERM and terminates each step's process group
+ * before exiting, so a plain SIGTERM is enough and avoids orphaned
+ * bash/micromamba children. If it has not exited after STOP_GRACE_MS (hung or
+ * wedged) we SIGKILL it. Windows has no signals: `taskkill /T` kills the whole
+ * process tree instead.
+ */
+function stopRustProcess(proc: ChildProcess): void {
+  if (proc.exitCode !== null || proc.signalCode !== null || proc.pid === undefined) {
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    const result = spawnSync('taskkill', ['/PID', String(proc.pid), '/T', '/F']);
+    if (result.error || result.status !== 0) {
+      log.warn('taskkill failed, falling back to kill()', result.error ?? result.status);
+      proc.kill();
+    }
+    return;
+  }
+
+  proc.kill('SIGTERM');
+  const forceTimer = setTimeout(() => {
+    if (proc.exitCode === null && proc.signalCode === null) {
+      log.warn('Engine ignored SIGTERM; sending SIGKILL');
+      proc.kill('SIGKILL');
+    }
+  }, STOP_GRACE_MS);
+  // Don't keep the app alive just for this timer.
+  forceTimer.unref();
+  proc.once('close', () => clearTimeout(forceTimer));
+}
 
 /** Renderer-reported unsaved-changes state, consulted by the close guard. */
 let rendererIsDirty = false;
@@ -227,7 +288,8 @@ ipcMain.on(
     event: IpcMainEvent,
     workflowData: WorkflowData,
     dryRun: boolean = false,
-    workingDir: string = ''
+    workingDir: string = '',
+    fresh: boolean = false
   ) => {
     try {
       // Refuse to start a second run while one is active. Overwriting
@@ -241,7 +303,7 @@ ipcMain.on(
         return;
       }
 
-      log.info('Starting workflow execution', { dryRun, workingDir });
+      log.info('Starting workflow execution', { dryRun, workingDir, fresh });
       stoppedByUser = false;
 
       // Serialize workflow to YAML
@@ -253,7 +315,12 @@ ipcMain.on(
         fs.mkdirSync(tempDir, { recursive: true });
       }
 
-      const workflowPath = path.join(tempDir, 'workflow.yaml');
+      // The engine keys its saved run state on `metadata.id` when the workflow
+      // has one. The file stem still follows the workflow's name: a workflow
+      // without an id (or one that has just been given an id) is keyed on the
+      // stem, and the engine moves that old state to the id the first time.
+      const stem = workflowFileStem(workflowData.metadata?.name);
+      const workflowPath = path.join(tempDir, `${stem}.yaml`);
       fs.writeFileSync(workflowPath, yamlContent, 'utf-8');
 
       // Setup pause control
@@ -279,8 +346,13 @@ ipcMain.on(
       // Rust CLI has no --wildcards flag and rejects unknown options. They
       // travel inside the YAML as per-step `wildcard_files`, which
       // load_workflow() merges and expands before validation.
-      const args = [workflowPath, pauseFlagPath];
+      // --json-events makes the engine also write typed run events to stderr
+      // (engineEvents.ts); the human log keeps flowing next to them.
+      const args = [workflowPath, pauseFlagPath, '--json-events'];
       if (dryRun) args.push('--dry-run');
+      // Without --fresh the engine skips every step whose outputs are up to
+      // date according to the saved state of an earlier run.
+      if (fresh) args.push('--fresh');
       if (workingDir) args.push('--working-dir', workingDir);
 
       log.info('Spawning Rust process', { rustExecutable, args });
@@ -289,23 +361,38 @@ ipcMain.on(
       const rustProcess = spawn(rustExecutable, args);
       currentRustProcess = rustProcess;
 
-      // Stream output
-      rustProcess.stdout.on('data', (data: Buffer) => {
-        const output = data.toString();
+      // Stream output. setEncoding decodes UTF-8 across chunk boundaries.
+      rustProcess.stdout.setEncoding('utf8');
+      rustProcess.stdout.on('data', (output: string) => {
         log.info('Rust stdout:', output);
         event.reply('workflow-output', output);
       });
 
+      // stderr carries the engine's log *and* its event lines. Events are
+      // forwarded typed on 'workflow-event'; everything else is log text.
+      const stderrSplitter = new EngineOutputSplitter();
+      const forwardStderr = ({ events, text }: SplitOutput) => {
+        for (const runEvent of events) {
+          event.reply('workflow-event', runEvent);
+        }
+        if (text) {
+          log.error('Rust stderr:', text);
+          event.reply('workflow-output', text);
+        }
+      };
+      // Raw bytes: the splitter decodes them as one UTF-8 stream, so a
+      // character split across two chunks stays intact.
       rustProcess.stderr.on('data', (data: Buffer) => {
-        const error = data.toString();
-        log.error('Rust stderr:', error);
-        event.reply('workflow-output', error);
+        forwardStderr(stderrSplitter.push(data));
       });
 
       // Handle completion
       rustProcess.on('close', (code: number | null) => {
         log.info(`Rust process exited with code ${code}`);
         currentRustProcess = null;
+
+        // A last line without a newline is still waiting in the splitter.
+        forwardStderr(stderrSplitter.flush());
 
         // Cleanup
         try {
@@ -345,6 +432,50 @@ ipcMain.on(
 );
 
 // Pause workflow
+/**
+ * Reports whether the engine has a saved run for this workflow in the working
+ * directory, so the renderer can describe what a normal Run will build on.
+ */
+ipcMain.handle(
+  'get-resume-info',
+  (_event, workflowName: string, workingDir: string, workflowId?: string) =>
+    readResumeInfoFor(workingDir, workflowName, workflowId)
+);
+
+/** The runs of this workflow in the working directory, newest first. */
+ipcMain.handle(
+  'list-run-history',
+  (_event, workingDir: string, workflowName: string, workflowId?: string): RunHistoryEntry[] =>
+    readRunHistory(workingDir, workflowName, workflowId)
+);
+
+/**
+ * Opens a run's HTML report in the system's default application. Only a
+ * `<run id>/report.html` inside `<working dir>/.rustrunner/runs` is opened:
+ * the renderer's path is resolved (symlinks included) and refused otherwise,
+ * so this cannot be used to open an arbitrary file or program.
+ */
+ipcMain.handle(
+  'open-run-report',
+  async (
+    _event,
+    workingDir: string,
+    reportRef: string
+  ): Promise<{ ok: true; path: string } | { ok: false; error: string }> => {
+    const target = resolveReportPath(workingDir, reportRef);
+    if (!target) {
+      log.warn('Refused to open a report outside the run directory', { workingDir, reportRef });
+      return { ok: false, error: 'That report is not inside this workflow\'s run history.' };
+    }
+    const failure = await shell.openPath(target);
+    if (failure) {
+      log.error('Could not open report', failure);
+      return { ok: false, error: failure };
+    }
+    return { ok: true, path: target };
+  }
+);
+
 ipcMain.on('pause-workflow', (event: IpcMainEvent) => {
   if (!currentRustProcess || !pauseFlagPath) return;
 
@@ -383,7 +514,7 @@ ipcMain.on('stop-workflow', (event: IpcMainEvent) => {
       fs.unlinkSync(pauseFlagPath);
     }
     stoppedByUser = true;
-    currentRustProcess.kill();
+    stopRustProcess(currentRustProcess);
     log.info('Sent stop signal to workflow process');
     event.reply('workflow-output', '\n[STOPPED] Workflow stopped by user\n');
   } catch (error) {
@@ -516,6 +647,14 @@ const createWindow = async (): Promise<void> => {
 // =============================================================================
 // App Lifecycle
 // =============================================================================
+
+// Quitting while a workflow runs must not leave its steps running unattended.
+app.on('before-quit', () => {
+  if (currentRustProcess) {
+    stoppedByUser = true;
+    stopRustProcess(currentRustProcess);
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {

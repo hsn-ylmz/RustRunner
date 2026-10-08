@@ -2,7 +2,16 @@
  * Type definitions for the Electron preload API
  */
 
+import type { EngineEvent } from '../main/engineEvents';
+import type { RunHistoryEntry } from '../main/runHistory';
+
+export type { RunHistoryEntry };
+
 interface WorkflowData {
+  /** Optional id/name/version; read by the engine's `metadata` field. */
+  metadata?: { id?: string; name?: string; version?: string };
+  /** Keep running independent steps after one fails. */
+  keep_going?: boolean;
   steps: Array<{
     id: string;
     tool: string;
@@ -12,6 +21,19 @@ interface WorkflowData {
     previous: string[];
     next: string[];
     threads?: number;
+    /** Re-runs after a failure or timeout (0 = single attempt). */
+    retries?: number;
+    retry_backoff?: 'fixed' | 'exponential';
+    retry_delay_secs?: number;
+    /** Per-attempt wall-clock limit; the step is killed when exceeded. */
+    timeout_secs?: number;
+    /** Output checks run after the step succeeds (see the Rust `OutputCheck`). */
+    checks?: Array<{
+      kind: 'exists' | 'non_empty' | 'min_lines';
+      lines?: number;
+      target?: string;
+      blocking?: boolean;
+    }>;
     /**
      * Per-step wildcard mappings (wildcard name -> concrete files). snake_case
      * on purpose: this is serialized straight to YAML and read by the Rust
@@ -19,6 +41,16 @@ interface WorkflowData {
      */
     wildcard_files?: Record<string, string[]>;
   }>;
+}
+
+/** Saved-run summary; mirrors ResumeInfo in src/main/resumeState.ts. */
+export interface ResumeInfo {
+  canResume: boolean;
+  completedCount: number;
+  failedStep: string | null;
+  savedAt: number | null;
+  workflowName: string | null;
+  workflowVersion: string | null;
 }
 
 /** Menu selections forwarded from the main process over 'menu-action'. */
@@ -61,7 +93,29 @@ interface ElectronAPI {
     sendMessage(channel: string, ...args: unknown[]): void;
     on(channel: string, func: (...args: unknown[]) => void): () => void;
     once(channel: string, func: (...args: unknown[]) => void): void;
-    runWorkflow(workflowData: WorkflowData, dryRun?: boolean, workingDir?: string): void;
+    /** `fresh` runs every step again; otherwise the engine skips steps whose outputs are up to date. */
+    runWorkflow(
+      workflowData: WorkflowData,
+      dryRun?: boolean,
+      workingDir?: string,
+      fresh?: boolean
+    ): void;
+    getResumeInfo(workflowName: string, workingDir: string, workflowId?: string): Promise<ResumeInfo>;
+    /** The runs of this workflow in the working directory, newest first. */
+    listRunHistory(
+      workingDir: string,
+      workflowName: string,
+      workflowId?: string
+    ): Promise<RunHistoryEntry[]>;
+    /**
+     * Opens a run's HTML report. `reportRef` is `<run id>/report.html` or the
+     * absolute path from `run_finished`; the main process refuses anything
+     * outside `<working dir>/.rustrunner/runs`.
+     */
+    openRunReport(
+      workingDir: string,
+      reportRef: string
+    ): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
     pauseWorkflow(): void;
     resumeWorkflow(): void;
     stopWorkflow(): void;
@@ -82,6 +136,8 @@ interface ElectronAPI {
     // Event listeners. All return an unsubscribe function so React effects
     // can clean up on unmount.
     onWorkflowOutput(callback: (output: string) => void): () => void;
+    /** Typed run events from the engine, in the order it emitted them. */
+    onWorkflowEvent(callback: (event: EngineEvent) => void): () => void;
     onWorkflowComplete(
       callback: (
         success: boolean,

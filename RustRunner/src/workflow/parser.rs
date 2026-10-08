@@ -41,7 +41,7 @@ fn expand_wildcards_in_workflow(workflow: &mut Workflow) -> Result<(), String> {
         for (name, files) in &step.wildcard_files {
             wildcard_files
                 .entry(name.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .extend(files.clone());
         }
     }
@@ -419,6 +419,46 @@ steps:
         let workflow = result.unwrap();
         assert_eq!(workflow.steps.len(), 1);
         assert_eq!(workflow.steps[0].id, "step1");
+    }
+
+    #[test]
+    fn test_load_workflow_with_distinct_wildcard_names_per_step() {
+        use tempfile::tempdir;
+
+        let temp_dir = tempdir().unwrap();
+        let workflow_path = temp_dir.path().join("wild.yaml");
+        let yaml_content = r#"
+metadata:
+  name: Two wildcards
+steps:
+  - id: reads
+    tool: bash
+    command: cat {input} > {output}
+    input: ["raw/{sample}.txt"]
+    output: ["out/{sample}.txt"]
+    wildcard_files:
+      sample: [raw/a.txt, raw/b.txt]
+  - id: lanes
+    tool: bash
+    command: cat {input} > {output}
+    input: ["lane/{lane}.txt"]
+    output: ["lane_out/{lane}.txt"]
+    wildcard_files:
+      lane: [lane/x.txt, lane/y.txt, lane/z.txt]
+"#;
+        std::fs::write(&workflow_path, yaml_content).unwrap();
+
+        let workflow = load_workflow(workflow_path.to_str().unwrap()).unwrap();
+        let mut ids: Vec<&str> = workflow.steps.iter().map(|s| s.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["lanes_x", "lanes_y", "lanes_z", "reads_a", "reads_b"]
+        );
+        assert_eq!(
+            workflow.metadata.unwrap().name.as_deref(),
+            Some("Two wildcards")
+        );
     }
 
     #[test]

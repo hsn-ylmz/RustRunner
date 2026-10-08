@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # release.yml calls this workflow and only publishes if it passes.
+  workflow_call:
 
 # A new push to the same branch makes the in-flight run obsolete.
 concurrency:
@@ -58,6 +60,9 @@ jobs:
       - name: Typecheck renderer
         run: npx tsc -p tsconfig.json --noEmit
 
+      - name: Unit tests
+        run: npm test
+
       - name: Build
         run: npm run build
 
@@ -81,8 +86,54 @@ jobs:
       - name: Format check
         run: cargo fmt --check
 
-      # Not `-D warnings` yet: the tree still carries a handful of clippy
-      # warnings (unused imports, a dead field, some idiom nits). Clearing
-      # those and then denying warnings is a worthwhile follow-up.
       - name: Clippy
-        run: cargo clippy --all-targets
+        run: cargo clippy --all-targets -- -D warnings
+
+  e2e:
+    name: Desktop e2e (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: RustRunner
+
+      # Shared libraries the Electron binary links against, plus Xvfb for a
+      # virtual display. (24.04 package names carry the t64 suffix.)
+      - name: Install Electron system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth procps \
+            libgtk-3-0t64 libnss3 libasound2t64 libgbm1 libxss1 libxtst6 \
+            libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libdrm2 \
+            libxkbcommon0 libxdamage1 libxrandr2 libxcomposite1 libxfixes3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: RustRunner-Desktop/package-lock.json
+
+      - name: Install dependencies
+        working-directory: RustRunner-Desktop
+        run: npm ci
+
+      # `test:e2e` builds the engine (debug) and the app, then runs Playwright.
+      # Fixtures sandbox HOME/TMPDIR, so no conda env is ever created.
+      - name: Run e2e tests
+        working-directory: RustRunner-Desktop
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" npm run test:e2e
+
+      - name: Upload traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures
+          path: RustRunner-Desktop/e2e/.tmp/results
+          if-no-files-found: ignore
+          retention-days: 14

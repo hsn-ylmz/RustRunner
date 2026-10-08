@@ -6,8 +6,6 @@
 //! - Thread/resource allocation
 //! - Step status tracking
 
-use super::wildcards::expand_workflow_wildcards;
-
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -43,6 +41,8 @@ pub struct StepMetrics {
     pub duration_ms: Option<u128>,
     /// Current status
     pub status: StepStatus,
+    /// Attempts used by the step (1 unless it was retried; 0 if never run)
+    pub attempts: u32,
 }
 
 impl StepMetrics {
@@ -52,6 +52,7 @@ impl StepMetrics {
             end_time: None,
             duration_ms: None,
             status: StepStatus::Pending,
+            attempts: 0,
         }
     }
 }
@@ -80,8 +81,6 @@ pub struct ExecutionPlanner {
     current_threads_used: usize,
     /// Maximum system threads available
     max_system_threads: usize,
-    /// Wildcard files to expand before planning
-    wildcard_files: Option<HashMap<String, Vec<String>>>,
 }
 
 impl ExecutionPlanner {
@@ -96,15 +95,8 @@ impl ExecutionPlanner {
         workflow: Workflow,
         dry_run: bool,
         max_parallel_jobs: usize,
-        wildcard_files: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Self, String> {
         let max_system_threads = num_cpus::get();
-
-        // Expand wildcards before planning
-        let mut workflow = workflow;
-        if let Some(files) = &wildcard_files {
-            expand_workflow_wildcards(&mut workflow, &files)?;
-        }
 
         info!(
             "Creating planner: {} max jobs, {} system threads",
@@ -125,7 +117,6 @@ impl ExecutionPlanner {
             step_metrics,
             current_threads_used: 0,
             max_system_threads,
-            wildcard_files,
         })
     }
 
@@ -135,9 +126,8 @@ impl ExecutionPlanner {
         state: WorkflowState,
         dry_run: bool,
         max_parallel_jobs: usize,
-        wildcard_files: Option<HashMap<String, Vec<String>>>,
     ) -> Result<Self, String> {
-        let mut planner = Self::new(workflow, dry_run, max_parallel_jobs, wildcard_files)?;
+        let mut planner = Self::new(workflow, dry_run, max_parallel_jobs)?;
 
         // Mark previously completed steps
         for step_id in &state.completed_steps {
@@ -164,8 +154,12 @@ impl ExecutionPlanner {
         let mut threads_to_allocate = 0;
 
         for step in &self.workflow.steps {
-            // Skip completed or running steps
-            if self.completed_steps.contains(&step.id) || self.running_steps.contains(&step.id) {
+            // Skip completed, running and failed steps (a failed step is not
+            // retried here: its attempts are used up inside the step runner).
+            if self.completed_steps.contains(&step.id)
+                || self.running_steps.contains(&step.id)
+                || self.is_failed(&step.id)
+            {
                 continue;
             }
 
@@ -238,6 +232,26 @@ impl ExecutionPlanner {
         }
     }
 
+    /// Records how many attempts a step used (retries included).
+    pub fn record_attempts(&mut self, step_id: &str, attempts: u32) {
+        if let Some(metrics) = self.step_metrics.get_mut(step_id) {
+            metrics.attempts = attempts;
+        }
+    }
+
+    /// Steps that needed more than one attempt, in workflow order, as
+    /// `(step_id, attempts)`.
+    pub fn retried_steps(&self) -> Vec<(String, u32)> {
+        self.workflow
+            .steps
+            .iter()
+            .filter_map(|s| {
+                let attempts = self.step_metrics.get(&s.id)?.attempts;
+                (attempts > 1).then(|| (s.id.clone(), attempts))
+            })
+            .collect()
+    }
+
     /// Marks a step as completed.
     pub fn mark_step_completed(&mut self, step_id: &str) {
         self.running_steps.remove(step_id);
@@ -282,8 +296,78 @@ impl ExecutionPlanner {
     }
 
     /// Returns true if there are more steps to execute.
+    ///
+    /// Steps that failed, and steps that can never run because something they
+    /// depend on failed, are not work: a keep-going run is over once the
+    /// independent branches are done.
     pub fn has_work_remaining(&self) -> bool {
-        self.completed_steps.len() < self.workflow.steps.len()
+        let blocked = self.blocked_steps();
+        self.workflow.steps.iter().any(|s| {
+            !self.completed_steps.contains(&s.id)
+                && !self.is_failed(&s.id)
+                && !blocked.contains_key(&s.id)
+        })
+    }
+
+    fn is_failed(&self, step_id: &str) -> bool {
+        matches!(
+            self.step_metrics.get(step_id).map(|m| &m.status),
+            Some(StepStatus::Failed(_))
+        )
+    }
+
+    /// Ids of the steps that failed, in workflow order.
+    pub fn failed_steps(&self) -> Vec<String> {
+        self.workflow
+            .steps
+            .iter()
+            .filter(|s| self.is_failed(&s.id))
+            .map(|s| s.id.clone())
+            .collect()
+    }
+
+    /// Steps that can no longer run because a step they depend on (directly
+    /// or through other steps) failed, as `step -> the failed step to blame`.
+    /// Steps that already completed or started are never reported.
+    pub fn blocked_steps(&self) -> HashMap<String, String> {
+        let by_id: HashMap<&str, &Step> = self
+            .workflow
+            .steps
+            .iter()
+            .map(|s| (s.id.as_str(), s))
+            .collect();
+        let mut blocked: HashMap<String, String> = HashMap::new();
+        // Dependencies can be listed in any order, so repeat until nothing
+        // new is blocked (at most one pass per step).
+        loop {
+            let mut changed = false;
+            for step in &self.workflow.steps {
+                if blocked.contains_key(&step.id)
+                    || self.completed_steps.contains(&step.id)
+                    || self.running_steps.contains(&step.id)
+                    || self.is_failed(&step.id)
+                {
+                    continue;
+                }
+                let culprit = step.previous.iter().find_map(|dep| {
+                    if !by_id.contains_key(dep.as_str()) {
+                        None
+                    } else if self.is_failed(dep) {
+                        Some(dep.clone())
+                    } else {
+                        blocked.get(dep).cloned()
+                    }
+                });
+                if let Some(culprit) = culprit {
+                    blocked.insert(step.id.clone(), culprit);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        blocked
     }
 
     /// Returns the current progress as (completed, total).
@@ -333,9 +417,20 @@ mod tests {
     }
 
     #[test]
+    fn test_record_attempts_and_retried_steps() {
+        let mut planner = ExecutionPlanner::new(create_test_workflow(), false, 4).unwrap();
+        planner.record_attempts("step1", 1);
+        planner.record_attempts("step2", 3);
+        assert_eq!(planner.get_metrics()["step2"].attempts, 3);
+        assert_eq!(planner.retried_steps(), vec![("step2".to_string(), 3)]);
+        // Unknown ids are ignored.
+        planner.record_attempts("nope", 5);
+    }
+
+    #[test]
     fn test_planner_creation() {
         let workflow = create_test_workflow();
-        let planner = ExecutionPlanner::new(workflow, false, 4, None);
+        let planner = ExecutionPlanner::new(workflow, false, 4);
         assert!(planner.is_ok());
 
         let planner = planner.unwrap();
@@ -346,14 +441,14 @@ mod tests {
     #[test]
     fn test_planner_dry_run() {
         let workflow = create_test_workflow();
-        let planner = ExecutionPlanner::new(workflow, true, 4, None).unwrap();
+        let planner = ExecutionPlanner::new(workflow, true, 4).unwrap();
         assert!(planner.is_dry_run());
     }
 
     #[test]
     fn test_planner_get_ready_steps() {
         let workflow = create_test_workflow();
-        let planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         let ready = planner.get_ready_steps();
         // Only step1 should be ready (step2 depends on step1)
@@ -371,7 +466,7 @@ mod tests {
         big.threads = 999;
         workflow.add_step(big).unwrap();
 
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
         planner.set_max_system_threads(4);
 
         let ready = planner.get_ready_steps();
@@ -391,7 +486,7 @@ mod tests {
         big.threads = 999;
         workflow.add_step(big).unwrap();
 
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
         planner.set_max_system_threads(4);
 
         planner.mark_step_running("small");
@@ -405,7 +500,7 @@ mod tests {
     #[test]
     fn test_planner_mark_running_and_completed() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         planner.mark_step_running("step1");
 
@@ -422,7 +517,7 @@ mod tests {
     #[test]
     fn test_planner_step2_ready_after_step1_complete() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         // step2 should NOT be ready yet
         let ready = planner.get_ready_steps();
@@ -441,7 +536,7 @@ mod tests {
     #[test]
     fn test_planner_failed_step() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         planner.mark_step_running("step1");
         planner.mark_step_failed("step1", "Test error".to_string());
@@ -454,9 +549,44 @@ mod tests {
     }
 
     #[test]
+    fn test_failed_step_blocks_only_its_downstream() {
+        // a -> b -> c, and an independent d.
+        let mut wf = Workflow::new();
+        wf.add_step(Step::new("a", "bash", "x")).unwrap();
+        wf.add_step(Step::new("b", "bash", "x").depends_on("a"))
+            .unwrap();
+        wf.add_step(Step::new("c", "bash", "x").depends_on("b"))
+            .unwrap();
+        wf.add_step(Step::new("d", "bash", "x")).unwrap();
+        let mut planner = ExecutionPlanner::new(wf, false, 4).unwrap();
+
+        planner.mark_step_running("a");
+        planner.mark_step_failed("a", "boom".into());
+
+        let blocked = planner.blocked_steps();
+        assert_eq!(blocked.get("b").map(String::as_str), Some("a"));
+        // c is blamed on the step that actually failed, not on b.
+        assert_eq!(blocked.get("c").map(String::as_str), Some("a"));
+        assert!(!blocked.contains_key("d"));
+        assert_eq!(planner.failed_steps(), vec!["a".to_string()]);
+
+        // d can still run; once it is done nothing is left to do.
+        let ready: Vec<String> = planner
+            .get_ready_steps()
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(ready, vec!["d".to_string()]);
+        assert!(planner.has_work_remaining());
+        planner.mark_step_running("d");
+        planner.mark_step_completed("d");
+        assert!(!planner.has_work_remaining());
+    }
+
+    #[test]
     fn test_planner_has_work_remaining() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         assert!(planner.has_work_remaining());
 
@@ -472,7 +602,7 @@ mod tests {
     #[test]
     fn test_planner_progress() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         assert_eq!(planner.progress(), (0, 2));
 
@@ -488,7 +618,7 @@ mod tests {
     #[test]
     fn test_planner_metrics_duration() {
         let workflow = create_test_workflow();
-        let mut planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let mut planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         planner.mark_step_running("step1");
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -508,7 +638,7 @@ mod tests {
         let mut state = WorkflowState::new("test.yaml");
         state.mark_completed("step1");
 
-        let planner = ExecutionPlanner::from_state(workflow, state, false, 4, None).unwrap();
+        let planner = ExecutionPlanner::from_state(workflow, state, false, 4).unwrap();
 
         assert_eq!(planner.progress(), (1, 2));
 
@@ -525,7 +655,7 @@ mod tests {
         workflow.add_step(Step::new("b", "bash", "echo b")).unwrap();
         workflow.add_step(Step::new("c", "bash", "echo c")).unwrap();
 
-        let planner = ExecutionPlanner::new(workflow, false, 4, None).unwrap();
+        let planner = ExecutionPlanner::new(workflow, false, 4).unwrap();
 
         // All steps are independent, so all should be ready
         let ready = planner.get_ready_steps();
@@ -540,7 +670,7 @@ mod tests {
         workflow.add_step(Step::new("c", "bash", "echo c")).unwrap();
 
         // max_parallel=2, so only 2 should be ready at once
-        let planner = ExecutionPlanner::new(workflow, false, 2, None).unwrap();
+        let planner = ExecutionPlanner::new(workflow, false, 2).unwrap();
 
         let ready = planner.get_ready_steps();
         assert_eq!(ready.len(), 2);

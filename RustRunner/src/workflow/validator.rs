@@ -10,7 +10,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use log::{debug, info, warn};
 
-use super::model::{Step, Workflow};
+use super::model::{Step, Workflow, MAX_RETRY_DELAY_SECS};
+
+/// Largest `retries` value accepted for a single step.
+pub const MAX_RETRIES: u32 = 100;
 
 /// Validation error types for user-friendly error messages.
 #[derive(Debug, Clone)]
@@ -22,13 +25,20 @@ pub enum ValidationError {
     EmptyCommand(String),
     InvalidReference { step: String, reference: String },
     CyclicDependency,
+    ContradictoryDependency { first: String, second: String },
     UnusedPlaceholder { step: String, placeholder: String },
+    TooManyRetries { step: String, retries: u32 },
+    RetryDelayTooLong { step: String, secs: u64 },
+    ZeroTimeout(String),
+    InvalidCheck { step: String, reason: String },
+    InvalidMetadata(String),
 }
 
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::EmptyWorkflow => write!(f, "Workflow has no steps"),
+            Self::InvalidMetadata(reason) => write!(f, "{}", reason),
             Self::DuplicateStepId(id) => write!(f, "Duplicate step ID: '{}'", id),
             Self::EmptyStepId => write!(f, "Step has empty or whitespace-only ID"),
             Self::EmptyTool(step) => write!(f, "Step '{}' has no tool specified", step),
@@ -42,6 +52,12 @@ impl std::fmt::Display for ValidationError {
                     "Workflow contains cyclic dependencies (steps depend on each other in a loop)"
                 )
             }
+            Self::ContradictoryDependency { first, second } => write!(
+                f,
+                "Steps '{}' and '{}' contradict each other: one says '{}' runs before '{}' \
+                 (via previous/next) and the other says '{}' runs before '{}'",
+                first, second, first, second, second, first
+            ),
             Self::UnusedPlaceholder { step, placeholder } => {
                 write!(
                     f,
@@ -49,8 +65,63 @@ impl std::fmt::Display for ValidationError {
                     step, placeholder
                 )
             }
+            Self::TooManyRetries { step, retries } => write!(
+                f,
+                "Step '{}': retries is {} but at most {} are allowed",
+                step, retries, MAX_RETRIES
+            ),
+            Self::RetryDelayTooLong { step, secs } => write!(
+                f,
+                "Step '{}': retry_delay_secs is {} but at most {} are allowed",
+                step, secs, MAX_RETRY_DELAY_SECS
+            ),
+            Self::ZeroTimeout(step) => write!(
+                f,
+                "Step '{}': timeout_secs must be greater than 0 (leave it empty for no timeout)",
+                step
+            ),
+            Self::InvalidCheck { step, reason } => {
+                write!(f, "Step '{}': invalid output check: {}", step, reason)
+            }
         }
     }
+}
+
+/// Validates a step's output checks.
+fn validate_check_settings(step: &Step) -> Vec<ValidationError> {
+    step.checks
+        .iter()
+        .filter_map(|check| {
+            check
+                .config_problem(step)
+                .map(|reason| ValidationError::InvalidCheck {
+                    step: step.id.clone(),
+                    reason: format!("{} ({})", reason, check.describe()),
+                })
+        })
+        .collect()
+}
+
+/// Validates a step's retry and timeout settings.
+fn validate_retry_settings(step: &Step) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    if step.retries > MAX_RETRIES {
+        errors.push(ValidationError::TooManyRetries {
+            step: step.id.clone(),
+            retries: step.retries,
+        });
+    }
+    if step.retry_delay_secs > MAX_RETRY_DELAY_SECS {
+        errors.push(ValidationError::RetryDelayTooLong {
+            step: step.id.clone(),
+            secs: step.retry_delay_secs,
+        });
+    }
+    if step.timeout_secs == Some(0) {
+        errors.push(ValidationError::ZeroTimeout(step.id.clone()));
+    }
+
+    errors
 }
 
 /// Validates a single step's fields.
@@ -81,6 +152,16 @@ fn validate_step(step: &Step) -> Vec<ValidationError> {
     // Check command
     if step.command.trim().is_empty() {
         errors.push(ValidationError::EmptyCommand(step.id.clone()));
+    }
+
+    errors.extend(validate_retry_settings(step));
+    errors.extend(validate_check_settings(step));
+
+    if step.mock && step.output.is_empty() {
+        warn!(
+            "Step '{}' is mocked but declares no outputs, so mocking creates nothing",
+            step.id
+        );
     }
 
     // Warn about placeholder mismatches
@@ -127,6 +208,17 @@ pub fn validate_workflow(workflow: &mut Workflow) -> Result<(), String> {
     // Check for empty workflow
     if workflow.steps.is_empty() {
         return Err(ValidationError::EmptyWorkflow.to_string());
+    }
+
+    // Normalize and check the optional metadata
+    if let Some(metadata) = workflow.metadata.as_mut() {
+        metadata.normalize();
+        metadata
+            .validate()
+            .map_err(|e| ValidationError::InvalidMetadata(e).to_string())?;
+        if metadata.is_empty() {
+            workflow.metadata = None;
+        }
     }
 
     // Refresh tools list
@@ -182,11 +274,85 @@ pub fn validate_workflow(workflow: &mut Workflow) -> Result<(), String> {
     Ok(())
 }
 
+/// Makes `previous` and `next` agree: both become the deduplicated union of
+/// what either side declares.
+///
+/// Hand-written YAML may spell a dependency from either end (`previous` on the
+/// later step, `next` on the earlier one, or both); the planner only reads
+/// `previous`, so after this call every edge is present in both lists. Order
+/// is stable: the declared entries keep their position and edges contributed
+/// by the other side are appended in step order.
+///
+/// Errors when two steps each claim to run before the other. That is a
+/// contradiction in what was written, which is more useful to report than a
+/// generic cycle. References to unknown steps are ignored here (they are
+/// reported by the reference check).
+fn normalize_dependencies(workflow: &mut Workflow) -> Result<(), String> {
+    let ids: HashSet<String> = workflow.steps.iter().map(|s| s.id.clone()).collect();
+
+    // Every declared edge as (before, after), in a stable order.
+    let mut edges: Vec<(String, String)> = Vec::new();
+    for step in &workflow.steps {
+        for prev in &step.previous {
+            edges.push((prev.clone(), step.id.clone()));
+        }
+        for next in &step.next {
+            edges.push((step.id.clone(), next.clone()));
+        }
+    }
+    edges.retain(|(a, b)| ids.contains(a) && ids.contains(b));
+
+    let edge_set: HashSet<(&str, &str)> = edges
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    for (a, b) in &edges {
+        if a != b && edge_set.contains(&(b.as_str(), a.as_str())) {
+            return Err(ValidationError::ContradictoryDependency {
+                first: a.clone(),
+                second: b.clone(),
+            }
+            .to_string());
+        }
+    }
+
+    for step in &mut workflow.steps {
+        let mut previous: Vec<String> = Vec::new();
+        let mut next: Vec<String> = Vec::new();
+        // Keep unknown references untouched so they are still reported.
+        for prev in &step.previous {
+            if !ids.contains(prev) && !previous.contains(prev) {
+                previous.push(prev.clone());
+            }
+        }
+        for next_id in &step.next {
+            if !ids.contains(next_id) && !next.contains(next_id) {
+                next.push(next_id.clone());
+            }
+        }
+        for (before, after) in &edges {
+            if *after == step.id && !previous.contains(before) {
+                previous.push(before.clone());
+            }
+            if *before == step.id && !next.contains(after) {
+                next.push(after.clone());
+            }
+        }
+        step.previous = previous;
+        step.next = next;
+    }
+    Ok(())
+}
+
 /// Performs topological sort on workflow steps using Kahn's algorithm.
 ///
 /// This ensures steps are ordered so that dependencies come before dependents.
 /// Also detects cyclic dependencies (which would make execution impossible).
+/// The graph is built from `previous` and `next` together (see
+/// [`normalize_dependencies`]), so either spelling works.
 fn topological_sort(workflow: &mut Workflow) -> Result<(), String> {
+    normalize_dependencies(workflow)?;
+
     // Build in-degree map
     let mut in_degree: HashMap<String, usize> = HashMap::new();
     for step in &workflow.steps {
@@ -289,11 +455,23 @@ pub fn quick_validate(workflow: &Workflow) -> Vec<String> {
             ));
         }
 
+        errors.extend(validate_retry_settings(step).iter().map(|e| e.to_string()));
+        errors.extend(validate_check_settings(step).iter().map(|e| e.to_string()));
+
         for prev_id in &step.previous {
             if !step_ids.contains(prev_id.as_str()) {
                 errors.push(format!(
                     "Step '{}': references unknown step '{}'",
                     step.id, prev_id
+                ));
+            }
+        }
+
+        for next_id in &step.next {
+            if !step_ids.contains(next_id.as_str()) {
+                errors.push(format!(
+                    "Step '{}': references unknown step '{}'",
+                    step.id, next_id
                 ));
             }
         }
@@ -305,6 +483,114 @@ pub fn quick_validate(workflow: &Workflow) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_metadata_is_normalized_and_blank_metadata_dropped() {
+        use crate::workflow::WorkflowMetadata;
+        let mut wf = Workflow::from_steps(vec![Step::new("a", "bash", "echo hi")])
+            .with_metadata(WorkflowMetadata::new(Some("  qc "), None));
+        validate_workflow(&mut wf).unwrap();
+        assert_eq!(wf.metadata.unwrap().name.as_deref(), Some("qc"));
+
+        let mut blank = Workflow::from_steps(vec![Step::new("a", "bash", "echo hi")])
+            .with_metadata(WorkflowMetadata::new(Some(" "), Some("")));
+        validate_workflow(&mut blank).unwrap();
+        assert!(blank.metadata.is_none());
+    }
+
+    #[test]
+    fn test_metadata_with_newline_is_rejected() {
+        use crate::workflow::WorkflowMetadata;
+        let mut wf = Workflow::from_steps(vec![Step::new("a", "bash", "echo hi")])
+            .with_metadata(WorkflowMetadata::new(Some("x\nStarting step: a"), None));
+        let err = validate_workflow(&mut wf).unwrap_err();
+        assert!(err.contains("control characters"), "{}", err);
+    }
+
+    #[test]
+    fn test_retry_settings_valid() {
+        let mut wf = Workflow::from_steps(vec![Step::new("a", "bash", "echo hi")
+            .with_retries(3)
+            .with_timeout_secs(60)]);
+        assert!(validate_workflow(&mut wf).is_ok());
+    }
+
+    #[test]
+    fn test_retry_settings_rejected() {
+        let cases = [
+            (
+                Step::new("a", "bash", "x").with_retries(MAX_RETRIES + 1),
+                "retries",
+            ),
+            (
+                Step::new("a", "bash", "x").with_retry_backoff(
+                    crate::workflow::RetryBackoff::Fixed,
+                    MAX_RETRY_DELAY_SECS + 1,
+                ),
+                "retry_delay_secs",
+            ),
+            (
+                Step::new("a", "bash", "x").with_timeout_secs(0),
+                "timeout_secs",
+            ),
+        ];
+        for (step, needle) in cases {
+            let mut wf = Workflow::from_steps(vec![step.clone()]);
+            let err = validate_workflow(&mut wf).unwrap_err();
+            assert!(err.contains(needle), "{err}");
+            let quick = quick_validate(&wf);
+            assert!(quick.iter().any(|m| m.contains(needle)), "{quick:?}");
+        }
+    }
+
+    #[test]
+    fn test_invalid_checks_rejected() {
+        use crate::workflow::{CheckKind, OutputCheck};
+        let base = || Step::new("a", "bash", "x").with_output("out.txt");
+        let mut lines_on_exists = OutputCheck::new(CheckKind::Exists);
+        lines_on_exists.lines = Some(3);
+        let cases = vec![
+            (base().with_check(OutputCheck::min_lines(0)), "0 lines"),
+            (
+                base().with_check(OutputCheck::new(CheckKind::MinLines)),
+                "needs a `lines`",
+            ),
+            (
+                base().with_check(lines_on_exists),
+                "only applies to min_lines",
+            ),
+            (
+                base().with_check(OutputCheck::new(CheckKind::Exists).with_target("other.txt")),
+                "not one of the step's outputs",
+            ),
+            (
+                Step::new("a", "bash", "x").with_check(OutputCheck::new(CheckKind::NonEmpty)),
+                "no outputs",
+            ),
+        ];
+        for (step, needle) in cases {
+            let mut wf = Workflow::from_steps(vec![step]);
+            let err = validate_workflow(&mut wf).unwrap_err();
+            assert!(err.contains(needle), "{err}");
+            let quick = quick_validate(&wf);
+            assert!(quick.iter().any(|m| m.contains(needle)), "{quick:?}");
+        }
+    }
+
+    #[test]
+    fn test_valid_checks_accepted() {
+        use crate::workflow::{CheckKind, OutputCheck};
+        let step = Step::new("a", "bash", "x")
+            .with_outputs(vec!["a.txt, b.txt".to_string()])
+            .with_check(OutputCheck::new(CheckKind::Exists))
+            .with_check(
+                OutputCheck::min_lines(5)
+                    .with_target("b.txt")
+                    .non_blocking(),
+            );
+        let mut wf = Workflow::from_steps(vec![step]);
+        assert!(validate_workflow(&mut wf).is_ok());
+    }
 
     #[test]
     fn test_valid_workflow() {
@@ -491,6 +777,97 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(workflow.steps[0].id, "step1");
         assert_eq!(workflow.steps[2].id, "step3");
+    }
+
+    fn chain_ids(workflow: &Workflow) -> Vec<&str> {
+        workflow.steps.iter().map(|s| s.id.as_str()).collect()
+    }
+
+    #[test]
+    fn test_dependencies_previous_only() {
+        let a = Step::new("a", "bash", "echo a");
+        let b = Step::new("b", "bash", "echo b").depends_on("a");
+        let c = Step::new("c", "bash", "echo c").depends_on("b");
+        let mut wf = Workflow::from_steps(vec![c, b, a]);
+        validate_workflow(&mut wf).unwrap();
+        assert_eq!(chain_ids(&wf), ["a", "b", "c"]);
+        // next is derived so every reader sees the same graph
+        assert_eq!(wf.steps[0].next, ["b"]);
+        assert_eq!(wf.steps[1].next, ["c"]);
+    }
+
+    #[test]
+    fn test_dependencies_next_only() {
+        let mut a = Step::new("a", "bash", "echo a");
+        a.next = vec!["b".into()];
+        let mut b = Step::new("b", "bash", "echo b");
+        b.next = vec!["c".into()];
+        let c = Step::new("c", "bash", "echo c");
+        let mut wf = Workflow::from_steps(vec![c, b, a]);
+        validate_workflow(&mut wf).unwrap();
+        assert_eq!(chain_ids(&wf), ["a", "b", "c"]);
+        // previous is derived, which is what the planner reads
+        assert_eq!(wf.steps[1].previous, ["a"]);
+        assert_eq!(wf.steps[2].previous, ["b"]);
+    }
+
+    #[test]
+    fn test_dependencies_both_are_deduplicated() {
+        let mut a = Step::new("a", "bash", "echo a");
+        a.next = vec!["b".into(), "b".into()];
+        let b = Step::new("b", "bash", "echo b").depends_on("a");
+        let mut wf = Workflow::from_steps(vec![b, a]);
+        validate_workflow(&mut wf).unwrap();
+        assert_eq!(chain_ids(&wf), ["a", "b"]);
+        assert_eq!(wf.steps[0].next, ["b"]);
+        assert_eq!(wf.steps[1].previous, ["a"]);
+    }
+
+    #[test]
+    fn test_dependencies_mixed_spellings_form_a_diamond() {
+        let mut a = Step::new("a", "bash", "echo a");
+        a.next = vec!["b".into()];
+        let b = Step::new("b", "bash", "echo b");
+        let c = Step::new("c", "bash", "echo c").depends_on("a");
+        let mut d = Step::new("d", "bash", "echo d").depends_on("b");
+        d.previous.push("c".into());
+        let mut wf = Workflow::from_steps(vec![d, c, b, a]);
+        validate_workflow(&mut wf).unwrap();
+        let order = chain_ids(&wf);
+        assert_eq!(order[0], "a");
+        assert_eq!(order[3], "d");
+    }
+
+    #[test]
+    fn test_dependencies_contradiction_is_reported_clearly() {
+        // a says it runs before b; b says it runs before a.
+        let mut a = Step::new("a", "bash", "echo a");
+        a.next = vec!["b".into()];
+        let mut b = Step::new("b", "bash", "echo b");
+        b.next = vec!["a".into()];
+        let mut wf = Workflow::from_steps(vec![a, b]);
+        let err = validate_workflow(&mut wf).unwrap_err();
+        assert!(err.contains("contradict"), "{}", err);
+        assert!(err.contains("'a'") && err.contains("'b'"), "{}", err);
+        assert!(!err.contains("cyclic"), "{}", err);
+
+        // previous on one side, next on the other, same pair reversed
+        let a = Step::new("a", "bash", "echo a").depends_on("b");
+        let mut b = Step::new("b", "bash", "echo b");
+        b.previous = vec!["a".into()];
+        let mut wf = Workflow::from_steps(vec![a, b]);
+        let err = validate_workflow(&mut wf).unwrap_err();
+        assert!(err.contains("contradict"), "{}", err);
+    }
+
+    #[test]
+    fn test_dependencies_real_cycle_is_still_cyclic() {
+        let a = Step::new("a", "bash", "echo a").depends_on("c");
+        let b = Step::new("b", "bash", "echo b").depends_on("a");
+        let c = Step::new("c", "bash", "echo c").depends_on("b");
+        let mut wf = Workflow::from_steps(vec![a, b, c]);
+        let err = validate_workflow(&mut wf).unwrap_err();
+        assert!(err.contains("cyclic"), "{}", err);
     }
 
     #[test]
