@@ -44,7 +44,15 @@ interface WorkflowData {
 }
 
 /** Menu selections forwarded from the main process. */
-type MenuAction = 'new' | 'open' | 'save' | 'save-as' | 'undo' | 'redo';
+type MenuAction =
+  | 'new'
+  | 'open'
+  | 'save'
+  | 'save-as'
+  | 'undo'
+  | 'redo'
+  | 'new-from-template'
+  | 'save-as-template';
 
 /**
  * Subscribes to `channel` and returns an unsubscribe function.
@@ -118,6 +126,27 @@ const electronHandler = {
       return ipcRenderer.invoke('open-run-report', workingDir, reportRef);
     },
 
+    /** Downloads, verifies and installs micromamba (the tool installer). */
+    installMicromamba(): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('install-micromamba');
+    },
+
+    openDocs(url: string): Promise<{ ok: true } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('open-docs', url);
+    },
+
+    /** Settings kept for this person: the palette's favourites and recent tools. */
+    getSettings(): Promise<{ palette: { favourites: string[]; recent: string[] } }> {
+      return ipcRenderer.invoke('get-settings');
+    },
+
+    setPalettePrefs(palette: {
+      favourites: string[];
+      recent: string[];
+    }): Promise<{ palette: { favourites: string[]; recent: string[] } }> {
+      return ipcRenderer.invoke('set-palette-prefs', palette);
+    },
+
     pauseWorkflow() {
       ipcRenderer.send('pause-workflow');
     },
@@ -136,8 +165,30 @@ const electronHandler = {
     },
 
     // File selection for wildcards
-    selectFiles(): Promise<string[] | null> {
-      return ipcRenderer.invoke('select-files');
+    selectFiles(options?: {
+      title?: string;
+      multiple?: boolean;
+      extensions?: string[];
+      typeName?: string;
+    }): Promise<string[] | null> {
+      return ipcRenderer.invoke('select-files', options);
+    },
+
+    // The person's own workflow templates (files in <home>/.rustrunner/templates).
+    listUserTemplates(): Promise<Array<{ id: string; raw?: unknown; error?: string }>> {
+      return ipcRenderer.invoke('list-user-templates');
+    },
+
+    saveUserTemplate(raw: unknown): Promise<{ ok: true } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('save-user-template', raw);
+    },
+
+    deleteUserTemplate(id: string): Promise<{ ok: true } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('delete-user-template', id);
+    },
+
+    renameUserTemplate(id: string, name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+      return ipcRenderer.invoke('rename-user-template', id, name);
     },
 
     // Workflow file persistence. Pass filePath = null to prompt for a
@@ -152,10 +203,6 @@ const electronHandler = {
 
     openWorkflow(): Promise<{ path: string; contents: string } | null> {
       return ipcRenderer.invoke('open-workflow');
-    },
-
-    confirmDiscard(message: string): Promise<boolean> {
-      return ipcRenderer.invoke('confirm-discard', message);
     },
 
     setDirty(dirty: boolean) {

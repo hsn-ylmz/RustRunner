@@ -1,19 +1,11 @@
+import { Badge, Icon } from '../ui';
+import { plainStepDetail, stateView } from '../runFeedback';
 import {
   summarizeRows,
   type RunPhase,
   type StatusRow,
   type StepState,
 } from '../stepEvents';
-
-/** Human wording and glyph for each state, shared with the canvas badges. */
-const STATE_TEXT: Record<StepState, { glyph: string; label: string }> = {
-  pending: { glyph: '○', label: 'Pending' },
-  running: { glyph: '●', label: 'Running' },
-  retrying: { glyph: '↻', label: 'Retrying' },
-  succeeded: { glyph: '✓', label: 'Succeeded' },
-  failed: { glyph: '✕', label: 'Failed' },
-  skipped: { glyph: '⏭', label: 'Skipped' },
-};
 
 const SUMMARY_ORDER: StepState[] = [
   'running',
@@ -37,21 +29,32 @@ export function StepStatusPanel({
 }) {
   if (phase === 'none' || rows.length === 0) {
     return (
-      <div className="step-status-empty">
-        Run or dry-run the workflow to see each step's status here.
+      <div className="panel-state" data-testid="steps-empty">
+        <Icon name="info" size={16} />
+        <span>Run or dry-run the workflow to see each step's status here.</span>
       </div>
     );
   }
 
   const counts = summarizeRows(rows);
+  /** The name the person gave the step an engine id belongs to. */
+  const labelOf = (engineId: string) => {
+    const row = rows.find((r) => r.id === engineId);
+    return row ? (row.instance ? `${row.label} ${row.instance}` : row.label) : undefined;
+  };
 
   return (
     <div className="step-status" data-testid="step-status">
       <div className="step-status-summary">
         {SUMMARY_ORDER.filter((state) => counts[state] > 0).map((state) => (
-          <span key={state} className={`step-chip step-state-${state}`}>
-            {STATE_TEXT[state].glyph} {counts[state]} {STATE_TEXT[state].label.toLowerCase()}
-          </span>
+          <Badge
+            key={state}
+            tone={stateView(state).tone}
+            icon={stateView(state).icon}
+            className={`step-chip step-state-${state}`}
+          >
+            {counts[state]} {stateView(state).label.toLowerCase()}
+          </Badge>
         ))}
       </div>
 
@@ -71,18 +74,32 @@ export function StepStatusPanel({
               data-testid="step-row"
               data-step-id={row.id}
               data-state={row.state}
+              data-up-to-date={row.upToDate ? 'true' : undefined}
             >
               <td className="step-row-state">
-                <span className="step-glyph">{STATE_TEXT[row.state].glyph}</span>{' '}
-                {STATE_TEXT[row.state].label}
+                <Icon
+                  name={stateView(row.state, { upToDate: row.upToDate }).icon}
+                  size={14}
+                  className="step-glyph"
+                />{' '}
+                {stateView(row.state, { upToDate: row.upToDate }).label}
                 {row.mocked && row.state === 'succeeded' && (
-                  <span className="mock-tag" data-testid="step-mocked">
+                  <Badge
+                    tone="warning"
+                    variant="dashed"
+                    className="mock-tag"
+                    data-testid="step-mocked"
+                  >
                     MOCKED
-                  </span>
+                  </Badge>
                 )}
               </td>
-              <td title={row.label}>{row.id}</td>
-              <td className="step-row-details">{rowDetails(row)}</td>
+              {/* The name the person gave the step; the engine id is in the log. */}
+              <td className="step-row-name" title={row.id}>
+                {row.label}
+                {row.instance && <span className="step-row-instance"> {row.instance}</span>}
+              </td>
+              <td className="step-row-details">{rowDetails(row, labelOf)}</td>
             </tr>
           ))}
         </tbody>
@@ -91,8 +108,8 @@ export function StepStatusPanel({
   );
 }
 
-function rowDetails(row: StatusRow): string {
-  if (row.state === 'failed') return row.message || 'Step failed';
+function rowDetails(row: StatusRow, labelOf: (engineId: string) => string | undefined): string {
+  if (row.state === 'failed') return plainStepDetail('failed', row.message || undefined, labelOf);
   const parts: string[] = [];
   if (row.state === 'retrying' && row.attempt && row.maxAttempts) {
     const wait =
@@ -107,7 +124,11 @@ function rowDetails(row: StatusRow): string {
     parts.push('tool not run, outputs are placeholders');
   }
   if (row.state === 'skipped') {
-    parts.push(row.message || 'up to date, or not reached');
+    parts.push(
+      row.upToDate
+        ? row.message || 'up to date'
+        : plainStepDetail('skipped', row.message, labelOf) || 'up to date, or not reached'
+    );
   }
   if (row.warnings && row.warnings.length > 0) {
     parts.push(`check warning: ${row.warnings.join('; ')}`);

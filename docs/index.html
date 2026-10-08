@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RustRunner: visual bioinformatics pipelines</title>
+<meta name="description" content="RustRunner 1.0.0-beta.1: a desktop app to build and run bioinformatics pipelines without a workflow language.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap bar">
+    <a class="brand" href="index.html">RustRunner <span class="badge">open beta</span></a>
+    <nav aria-label="Main">
+      <a href="index.html" aria-current="page">Home</a>
+      <a href="ribo-seq.html">Ribo-seq walkthrough</a>
+      <a href="library.html">Templates and tools</a>
+      <a href="https://github.com/hsn-ylmz/RustRunner">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main id="main" class="wrap">
+
+<section class="hero">
+  <h1>Build and run bioinformatics pipelines by drawing them.</h1>
+  <p class="lead">RustRunner is a desktop app for biologists. Pick a template or add tools from a catalog, connect them, press Run. No workflow language to learn, no command line needed. The tools install themselves into isolated environments.</p>
+  <p class="actions">
+    <a class="button primary" href="https://github.com/hsn-ylmz/RustRunner/releases">Download 1.0.0-beta.1</a>
+    <a class="button" href="ribo-seq.html">Follow the Ribo-seq example</a>
+  </p>
+  <p class="notice" role="note"><strong>Open beta.</strong> Version 1.0.0-beta.1 is the first public beta of RustRunner 1.0. It is tested most on macOS with Apple silicon; Windows and Linux builds are published but not yet tested end to end. Please <a href="https://github.com/hsn-ylmz/RustRunner/issues">report what breaks</a>. <a href="#limits">Known limitations</a>.</p>
+</section>
+
+<section>
+  <h2>From a template to a finished run</h2>
+  <p>This recording is the real app running the Ribo-seq with UMIs template on a public human dataset. Steps turn from waiting to running to done as the tools run; long waits are cut from the video, nothing is simulated.</p>
+  <figure>
+  <img src="media/template-to-run.gif" alt="Choosing the Ribo-seq template, picking the input files, creating the workflow and running it; the steps turn from waiting to running to done." width="1280" height="800" loading="lazy">
+  <figcaption>Template, input files, Create workflow, Run.</figcaption>
+</figure>
+</section>
+
+<section>
+  <h2>What you get</h2>
+  <div class="grid">
+    <div class="card"><h3>14 ready-made templates</h3><p>Genome assembly, Epigenomics, Read quality, Metagenomics, Long reads, RNA sequencing, DNA sequencing. Choose your files, check a few settings that depend on your library, and the whole pipeline appears on the canvas.</p></div>
+    <div class="card"><h3>85-tool catalog</h3><p>Every entry names its input and output files, installs the tool at a pinned version, and was run against the real program. <a href="library.html#tools">See the list</a>.</p></div>
+    <div class="card"><h3>Named file slots</h3><p>Connect two steps and the output goes to the input that accepts its file type. Green edges fit, orange edges say what is wrong.</p></div>
+    <div class="card"><h3>Safe to rerun</h3><p>Steps whose inputs did not change are skipped. Failed steps can retry, time out and be checked (file exists, not empty, enough lines). Keep going runs the independent branches after a failure.</p></div>
+    <div class="card"><h3>Live status</h3><p>Every step shows waiting, running, retrying, done, failed or skipped with words and icons, and the log can be searched and filtered.</p></div>
+    <div class="card"><h3>Reports and history</h3><p>Each run writes a self-contained HTML report and is listed in the run history. Templates that end in MultiQC give one combined quality report.</p></div>
+  </div>
+</section>
+
+<section>
+  <h2>A catalog that tells you what fits</h2>
+  <p>Search by name, job or file type. "Only tools that fit after the selected step" hides what cannot read the selected step's output. When you connect two steps, the file slot fills in by itself.</p>
+  <figure>
+  <img src="media/catalog-and-slots.gif" alt="Searching the tool catalog, filtering to tools that fit after the selected step, connecting two steps so the file slot fills in, and an orange edge where the file type does not fit." width="1280" height="800" loading="lazy">
+  <figcaption>Palette search, the fits-after filter, an automatic slot binding, a green and an orange edge.</figcaption>
+</figure>
+</section>
+
+<section>
+  <h2>When something fails, it says what and where</h2>
+  <p>A failed check shows a card that names the step, the file and the setting. Edit step opens exactly that setting. Every run is kept in the run history with an HTML report.</p>
+  <figure>
+  <img src="media/failure-and-report.gif" alt="A step fails an output check, the failure card names it, Edit step opens the setting, the run is repeated and the run report opens from the run history." width="1280" height="800" loading="lazy">
+  <figcaption>A blocking output check fails, the step is edited, the run repeated and the report opened.</figcaption>
+</figure>
+</section>
+
+<section id="download">
+  <h2>Download</h2>
+  <p>Builds for each release are on the <a href="https://github.com/hsn-ylmz/RustRunner/releases">GitHub releases page</a> (the open beta is marked as a pre-release).</p>
+  <div class="table-wrap"><table>
+    <thead><tr><th scope="col">System</th><th scope="col">File</th><th scope="col">Notes</th></tr></thead>
+    <tbody>
+      <tr><th scope="row">macOS, Apple silicon</th><td>.dmg or .zip (arm64)</td><td>The best tested system. Not signed: see below.</td></tr>
+      <tr><th scope="row">macOS, Intel</th><td>.dmg or .zip (x64)</td><td>Not signed.</td></tr>
+      <tr><th scope="row">Windows 64-bit</th><td>.exe installer</td><td>Not yet tested end to end.</td></tr>
+      <tr><th scope="row">Linux 64-bit</th><td>.AppImage</td><td>Not yet tested end to end.</td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>macOS says the app cannot be opened?</strong> The builds are not signed with an Apple developer certificate. Drag RustRunner to Applications, then Control-click (right-click) it and choose Open, then Open again. If macOS still refuses, run <code>xattr -dr com.apple.quarantine /Applications/RustRunner.app</code> once.</p>
+  <p>The app checks for updates on start. On Windows and Linux it downloads and installs them; on macOS it tells you and links to the download page, because the builds are unsigned. A beta build is offered the next beta and then the final 1.0; a stable build is never offered a beta.</p>
+  <p>On first run the app downloads the tool installer (micromamba) if it is missing, and each tool the first time a workflow needs it. Allow several GB of disk space and a network connection for that first run.</p>
+</section>
+
+<section id="limits">
+  <h2>Known limitations of the beta</h2>
+  <ul>
+    <li>macOS on Apple silicon is the primary tested system. Windows and Linux builds are published but have not been tested end to end.</li>
+    <li>STAR and a few other tools have no native Apple-silicon build and run as Intel builds, which needs Rosetta.</li>
+    <li>Tool versions are pinned, but their dependencies are not fully locked, so a future install may resolve a dependency differently.</li>
+    <li>Commands were validated on synthetic and small real data, not on every kind of project.</li>
+    <li>Builds are not code-signed, so macOS and Windows show a warning on first start.</li>
+  </ul>
+</section>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>RustRunner 1.0.0-beta.1 (open beta). MIT License. <a href="https://github.com/hsn-ylmz/RustRunner">Source code</a> | <a href="https://github.com/hsn-ylmz/RustRunner/releases">Releases</a> | <a href="https://github.com/hsn-ylmz/RustRunner/issues">Report a problem</a></p>
+  </div>
+</footer>
+</body>
+</html>

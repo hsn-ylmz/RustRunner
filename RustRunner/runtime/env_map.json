@@ -1,3 +1,5 @@
 {
-  "map": {}
+  "map": {
+    "bowtie2": "bowtie2"
+  }
 }

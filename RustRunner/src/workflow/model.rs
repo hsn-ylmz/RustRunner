@@ -22,7 +22,52 @@
 //!       - quality_control
 //!     threads: 8
 //! ```
+//!
+//! # Named file slots
+//!
+//! A step can name its files instead of using the single `{input}` and
+//! `{output}`. Each slot is a placeholder in the command; the engine fills it
+//! with the slot's files, shell-quoted one by one:
+//!
+//! ```yaml
+//! steps:
+//!   - id: align
+//!     tool: bwa
+//!     command: bwa mem {ref} {reads} > {sam}
+//!     named_inputs:
+//!       ref: [genome.fa]
+//!       reads: [trimmed.fastq]
+//!     named_outputs:
+//!       sam: [aligned.sam]
+//! ```
+//!
+//! Steps without `named_inputs` and `named_outputs` behave exactly as before.
+//!
+//! An input listed in `optional_slots` may have an empty file list: its
+//! placeholder then expands to nothing (the second read file of a pair).
+//!
+//! # Where the tool comes from
+//!
+//! A step can carry an `install` block (see
+//! [`crate::environment::install::Install`]) so the engine installs exactly
+//! the tool the step was made for:
+//!
+//! ```yaml
+//! steps:
+//!   - id: align
+//!     tool: star
+//!     command: STAR --version
+//!     install:
+//!       kind: conda        # or `external` (checked download) or `system`
+//!       package: star
+//!       version: 2.7.10b   # an exact pin: the environment is star-2.7.10b
+//!       channel: bioconda
+//!       osx64: true        # Intel build on Apple silicon
+//! ```
+//!
+//! Steps without `install` keep the original behaviour.
 
+use crate::environment::install::Install;
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -95,8 +140,9 @@ pub struct OutputCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lines: Option<u64>,
 
-    /// Which output to check, spelled exactly as in the step's `output`.
-    /// `None` checks every output.
+    /// Which output to check: a path spelled exactly as in the step's `output`
+    /// or `named_outputs`, or the name of a named output (which checks all of
+    /// that slot's files). `None` checks every output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
 
@@ -178,14 +224,39 @@ impl OutputCheck {
             }
             _ => {}
         }
-        let outputs = step.output_paths();
         match &self.target {
-            Some(target) if !outputs.iter().any(|o| o == target.trim()) => Some(format!(
+            Some(target) if self.target_files(step).is_empty() => Some(format!(
                 "target '{}' is not one of the step's outputs",
                 target
             )),
-            None if outputs.is_empty() => Some("the step has no outputs to check".to_string()),
+            None if step.output_paths().is_empty() => {
+                Some("the step has no outputs to check".to_string())
+            }
             _ => None,
+        }
+    }
+
+    /// The files this check looks at on `step`: every output without a
+    /// target, the named output's files when the target is a slot name, else
+    /// the output spelled exactly like the target.
+    pub fn target_files(&self, step: &Step) -> Vec<String> {
+        let outputs = step.output_paths();
+        match &self.target {
+            None => outputs,
+            Some(target) => {
+                let target = target.trim();
+                let mut files: Vec<String> = outputs
+                    .iter()
+                    .filter(|o| o.as_str() == target)
+                    .cloned()
+                    .collect();
+                if files.is_empty() {
+                    if let Some(slot) = step.named_outputs.get(target) {
+                        files = slot.clone();
+                    }
+                }
+                files
+            }
         }
     }
 }
@@ -202,8 +273,10 @@ pub struct Step {
     /// Tool or command to use (e.g., "bash", "bowtie2", "samtools")
     pub tool: String,
 
-    /// Command template with placeholders
-    /// Supported placeholders: {input}, {output}, {inputs}, {outputs}
+    /// Command template with placeholders.
+    /// Supported placeholders: `{input}`, `{output}`, `{inputs}`, `{outputs}`,
+    /// `{threads}` and the names of the step's `named_inputs` and
+    /// `named_outputs`.
     pub command: String,
 
     /// Input file(s) for this step
@@ -233,6 +306,18 @@ pub struct Step {
     /// Wildcard file mappings (wildcard_name -> list of concrete files)
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub wildcard_files: HashMap<String, Vec<String>>,
+
+    /// Named input slots: slot name -> files. The command refers to a slot as
+    /// `{name}`; every file is shell-quoted. An empty list is a declared slot
+    /// that has no file yet (using it in the command is a validation error).
+    /// Entries are exact paths: unlike `input`, they are not split at commas.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub named_inputs: HashMap<String, Vec<String>>,
+
+    /// Named outputs: slot name -> files the step writes. Used as `{name}` in
+    /// the command, for freshness, checks and as the source of connections.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub named_outputs: HashMap<String, Vec<String>>,
 
     /// How many times a failed (or timed-out) step is re-run before the
     /// workflow gives up. `0` means a single attempt.
@@ -264,10 +349,44 @@ pub struct Step {
     /// does a step after it (its result came from placeholders).
     #[serde(default, skip_serializing_if = "is_false")]
     pub mock: bool,
+
+    /// Where the tool comes from (see [`Install`]): a pinned conda package, a
+    /// checked download or a program already on the `PATH`. Without it the
+    /// step runs as a system tool, or in the environment `env_map.json` names
+    /// for its tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<Install>,
+
+    /// Named input slots that may stay empty: `{name}` then expands to
+    /// nothing instead of being an error. Used for optional files such as
+    /// the second read file of a pair.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub optional_slots: Vec<String>,
 }
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// Splits comma-separated entries, trims them and drops empty ones.
+pub(crate) fn split_list(entries: &[String]) -> Vec<String> {
+    entries
+        .iter()
+        .flat_map(|s| s.split(','))
+        .map(|f| f.trim().to_string())
+        .filter(|f| !f.is_empty())
+        .collect()
+}
+
+/// The files of every slot, ordered by slot name, entries kept exactly.
+fn slot_files(slots: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut names: Vec<&String> = slots.keys().collect();
+    names.sort();
+    names
+        .into_iter()
+        .flat_map(|name| slots[name].iter().cloned())
+        .filter(|f| !f.trim().is_empty())
+        .collect()
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -345,13 +464,29 @@ impl Step {
             threads: 1,
             color: None,
             wildcard_files: HashMap::new(),
+            named_inputs: HashMap::new(),
+            named_outputs: HashMap::new(),
             retries: 0,
             retry_backoff: RetryBackoff::Fixed,
             retry_delay_secs: DEFAULT_RETRY_DELAY_SECS,
             timeout_secs: None,
             checks: Vec::new(),
             mock: false,
+            install: None,
+            optional_slots: Vec::new(),
         }
+    }
+
+    /// Sets where the tool comes from.
+    pub fn with_install(mut self, install: Install) -> Self {
+        self.install = Some(install);
+        self
+    }
+
+    /// Marks named input slots as optional.
+    pub fn with_optional_slots(mut self, names: &[&str]) -> Self {
+        self.optional_slots = names.iter().map(|n| n.to_string()).collect();
+        self
     }
 
     /// Adds an output check.
@@ -360,14 +495,40 @@ impl Step {
         self
     }
 
-    /// Individual output paths, with comma-separated entries split and trimmed.
+    /// Whether the step uses named slots. Only such steps get the strict
+    /// placeholder rules (unknown or unbound `{name}` is an error, quote
+    /// aware filling); every other step keeps the original behaviour.
+    pub fn is_structured(&self) -> bool {
+        !self.named_inputs.is_empty() || !self.named_outputs.is_empty()
+    }
+
+    /// The files of `input`, with comma-separated entries split and trimmed.
+    /// This is what `{input}` stands for.
+    pub fn plain_inputs(&self) -> Vec<String> {
+        split_list(&self.input)
+    }
+
+    /// The files of `output`, with comma-separated entries split and trimmed.
+    /// This is what `{output}` stands for.
+    pub fn plain_outputs(&self) -> Vec<String> {
+        split_list(&self.output)
+    }
+
+    /// Every input path: `input` first, then the named inputs ordered by slot
+    /// name.
+    pub fn input_paths(&self) -> Vec<String> {
+        let mut paths = self.plain_inputs();
+        paths.extend(slot_files(&self.named_inputs));
+        paths
+    }
+
+    /// Every output path: `output` first, then the named outputs ordered by
+    /// slot name. Freshness, checks, mocking and directory creation all use
+    /// this list.
     pub fn output_paths(&self) -> Vec<String> {
-        self.output
-            .iter()
-            .flat_map(|s| s.split(','))
-            .map(|f| f.trim().to_string())
-            .filter(|f| !f.is_empty())
-            .collect()
+        let mut paths = self.plain_outputs();
+        paths.extend(slot_files(&self.named_outputs));
+        paths
     }
 
     /// Marks the step as mocked: its outputs are created instead of running
@@ -434,6 +595,24 @@ impl Step {
         self
     }
 
+    /// Binds `files` to the named input slot `name`.
+    pub fn with_named_input(mut self, name: &str, files: &[&str]) -> Self {
+        self.named_inputs.insert(
+            name.to_string(),
+            files.iter().map(|f| f.to_string()).collect(),
+        );
+        self
+    }
+
+    /// Declares the named output `name` with the files the step writes.
+    pub fn with_named_output(mut self, name: &str, files: &[&str]) -> Self {
+        self.named_outputs.insert(
+            name.to_string(),
+            files.iter().map(|f| f.to_string()).collect(),
+        );
+        self
+    }
+
     /// Sets the thread count for this step.
     pub fn with_threads(mut self, threads: usize) -> Self {
         self.threads = threads;
@@ -448,16 +627,8 @@ impl Step {
 
     /// Checks if all output files exist.
     pub fn outputs_exist(&self) -> bool {
-        if self.output.is_empty() {
-            return false;
-        }
-        self.output.iter().all(|file| {
-            // Handle comma-separated outputs
-            file.split(',')
-                .map(|f| f.trim())
-                .filter(|f| !f.is_empty())
-                .all(|f| Path::new(f).exists())
-        })
+        let outputs = self.output_paths();
+        !outputs.is_empty() && outputs.iter().all(|f| Path::new(f).exists())
     }
 
     /// Checks if outputs are outdated compared to inputs.
@@ -472,19 +643,17 @@ impl Step {
 
         // Get newest input modification time
         let newest_input = self
-            .input
+            .input_paths()
             .iter()
-            .flat_map(|s| s.split(',').map(|f| f.trim().to_string()))
-            .filter_map(|f| fs::metadata(&f).ok())
+            .filter_map(|f| fs::metadata(f).ok())
             .filter_map(|m| m.modified().ok())
             .max();
 
         // Get oldest output modification time
         let oldest_output = self
-            .output
+            .output_paths()
             .iter()
-            .flat_map(|s| s.split(',').map(|f| f.trim().to_string()))
-            .filter_map(|f| fs::metadata(&f).ok())
+            .filter_map(|f| fs::metadata(f).ok())
             .filter_map(|m| m.modified().ok())
             .min();
 
@@ -502,13 +671,24 @@ impl Step {
         !self.outputs_exist() || self.outputs_outdated()
     }
 
+    /// Every path pattern of the step: `input`, `output`, and the files of
+    /// the named inputs and outputs (slots ordered by name). Wildcards live
+    /// in these.
+    pub fn pattern_entries(&self) -> Vec<&String> {
+        let mut entries: Vec<&String> = self.input.iter().chain(self.output.iter()).collect();
+        for map in [&self.named_inputs, &self.named_outputs] {
+            let mut slots: Vec<_> = map.iter().collect();
+            slots.sort_by(|a, b| a.0.cmp(b.0));
+            entries.extend(slots.into_iter().flat_map(|(_, files)| files.iter()));
+        }
+        entries
+    }
+
     /// Checks if this step has wildcard patterns
     pub fn has_wildcards(&self) -> bool {
         use crate::workflow::wildcards::has_wildcards;
 
-        self.input.iter().any(|i| has_wildcards(i))
-            || self.output.iter().any(|o| has_wildcards(o))
-            || has_wildcards(&self.command)
+        self.pattern_entries().iter().any(|p| has_wildcards(p)) || has_wildcards(&self.command)
     }
 
     /// Gets all wildcard names used in this step
@@ -517,12 +697,8 @@ impl Step {
         use std::collections::HashSet;
 
         let mut names = HashSet::new();
-
-        for input in &self.input {
-            names.extend(extract_wildcard_names(input));
-        }
-        for output in &self.output {
-            names.extend(extract_wildcard_names(output));
+        for entry in self.pattern_entries() {
+            names.extend(extract_wildcard_names(entry));
         }
 
         names.into_iter().collect()
@@ -1283,5 +1459,93 @@ mod tests {
     fn test_step_validate_wildcards_none() {
         let step = Step::new("test", "bash", "echo hello");
         assert!(step.validate_wildcards().is_ok());
+    }
+
+    // ---- named slots ----
+
+    #[test]
+    fn test_named_slots_round_trip_through_yaml() {
+        let step = Step::new("align", "bwa", "bwa mem {ref} {reads} > {sam}")
+            .with_named_input("ref", &["genome.fa"])
+            .with_named_input("reads", &["a b.fq", "c.fq"])
+            .with_named_input("unbound", &[])
+            .with_named_output("sam", &["out.sam"]);
+        let yaml = serde_yaml::to_string(&step).unwrap();
+        assert!(yaml.contains("named_inputs"), "{yaml}");
+        assert!(yaml.contains("named_outputs"), "{yaml}");
+        let back: Step = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.named_inputs["reads"], vec!["a b.fq", "c.fq"]);
+        // A declared slot with no file survives, so the engine can name it.
+        assert!(back.named_inputs["unbound"].is_empty());
+        assert_eq!(back.named_outputs["sam"], vec!["out.sam"]);
+    }
+
+    #[test]
+    fn test_steps_without_slots_serialize_and_load_as_before() {
+        let step = Step::new("a", "bash", "echo {input}").with_input("x");
+        let yaml = serde_yaml::to_string(&step).unwrap();
+        assert!(!yaml.contains("named_"), "{yaml}");
+        // Old YAML has no slot keys at all.
+        let old = "id: a\ntool: bash\ncommand: echo hi\n";
+        let step: Step = serde_yaml::from_str(old).unwrap();
+        assert!(step.named_inputs.is_empty() && step.named_outputs.is_empty());
+        assert!(!step.is_structured());
+    }
+
+    #[test]
+    fn test_input_and_output_paths_include_named_slots_in_name_order() {
+        let step = Step::new("s", "bash", "true")
+            .with_inputs(vec!["a.txt, b.txt".to_string()])
+            .with_named_input("zeta", &["z,1.txt"])
+            .with_named_input("alpha", &["al.txt", " "])
+            .with_outputs(vec!["o1".to_string()])
+            .with_named_output("bam", &["x.bam"]);
+        // `input` is split at commas; slot entries are exact; blanks dropped.
+        assert_eq!(
+            step.input_paths(),
+            vec!["a.txt", "b.txt", "al.txt", "z,1.txt"]
+        );
+        assert_eq!(step.output_paths(), vec!["o1", "x.bam"]);
+        assert_eq!(step.plain_inputs(), vec!["a.txt", "b.txt"]);
+        assert_eq!(step.plain_outputs(), vec!["o1"]);
+    }
+
+    #[test]
+    fn test_outputs_exist_counts_named_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("a.bam");
+        std::fs::write(&present, "x").unwrap();
+        let missing = dir.path().join("a.bai");
+        let step = Step::new("s", "bash", "true")
+            .with_named_output("bam", &[present.to_str().unwrap()])
+            .with_named_output("bai", &[missing.to_str().unwrap()]);
+        assert!(!step.outputs_exist());
+        std::fs::write(&missing, "x").unwrap();
+        assert!(step.outputs_exist());
+    }
+
+    #[test]
+    fn test_wildcards_in_slots_are_found() {
+        let step = Step::new("s", "bash", "cat {f}").with_named_input("f", &["d/{sample}.txt"]);
+        assert!(step.has_wildcards());
+        assert_eq!(step.get_wildcard_names(), vec!["sample"]);
+        assert!(step.validate_wildcards().is_err());
+    }
+
+    #[test]
+    fn test_check_target_may_be_a_named_output() {
+        let step = Step::new("s", "bash", "true")
+            .with_named_output("bam", &["a.bam"])
+            .with_named_output("counts", &["c1.tsv", "c2.tsv"]);
+        let by_slot = OutputCheck::new(CheckKind::Exists).with_target("counts");
+        assert!(by_slot.config_problem(&step).is_none());
+        assert_eq!(by_slot.target_files(&step), vec!["c1.tsv", "c2.tsv"]);
+        let by_path = OutputCheck::new(CheckKind::Exists).with_target("a.bam");
+        assert!(by_path.config_problem(&step).is_none());
+        assert_eq!(by_path.target_files(&step), vec!["a.bam"]);
+        let none = OutputCheck::new(CheckKind::Exists);
+        assert_eq!(none.target_files(&step).len(), 3);
+        let bad = OutputCheck::new(CheckKind::Exists).with_target("nope");
+        assert!(bad.config_problem(&step).is_some());
     }
 }

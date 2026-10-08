@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ribo-seq walkthrough - RustRunner</title>
+<meta name="description" content="Run a Ribo-seq pipeline with UMIs and riboWaltz in RustRunner on public data, step by step.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap bar">
+    <a class="brand" href="index.html">RustRunner <span class="badge">open beta</span></a>
+    <nav aria-label="Main">
+      <a href="index.html">Home</a>
+      <a href="ribo-seq.html" aria-current="page">Ribo-seq walkthrough</a>
+      <a href="library.html">Templates and tools</a>
+      <a href="https://github.com/hsn-ylmz/RustRunner">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main id="main" class="wrap">
+
+<h1>Ribo-seq with UMIs: from reads to a riboWaltz report</h1>
+<p class="lead">A real run on public human HEK293T data (GEO GSE158374, run SRR12693498), start to finish in the app. 20 steps: FastQC, Cutadapt, UMI-tools extract, Bowtie2 build, Remove reads matching a database (bowtie2), STAR genome index, STAR (Ribo-seq, transcriptome BAM), samtools view, samtools sort, samtools index, UMI-tools dedup, riboWaltz report, MultiQC.</p>
+<figure>
+  <img src="media/template-to-run.gif" alt="Choosing the Ribo-seq template, picking the input files, creating the workflow and running it; the steps turn from waiting to running to done." width="1280" height="800" loading="lazy">
+  <figcaption>The same walkthrough, recorded.</figcaption>
+</figure>
+
+<h2>Before you start</h2>
+<ul>
+  <li>Install RustRunner (<a href="index.html#download">download</a>) or run it from source.</li>
+  <li>Get the data: <code>./riboseq-test/prepare_data.sh</code> in the repository builds the reads and references (about 610 MB of checksummed downloads). Details and provenance are in <a href="https://github.com/hsn-ylmz/RustRunner/blob/main/riboseq-test/DATA.md">DATA.md</a>.</li>
+  <li>On Apple silicon STAR runs as an Intel build, so Rosetta must be installed.</li>
+  <li>Allow network access and a few GB for the first run, which installs the tools.</li>
+</ul>
+
+<h2>1. Choose the template</h2>
+<p>Click <strong>Templates</strong>, type <code>ribo</code>, and pick <strong>Ribo-seq with UMIs (riboWaltz)</strong>. The right-hand column draws the pipeline and lists what you will get.</p>
+
+<h2>2. Choose your files</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">Field</th><th scope="col">Example file</th></tr></thead>
+  <tbody>
+<tr><th scope="row">Sequencing reads (FASTQ)</th><td><code>sample.fastq.gz</code></td></tr>
+<tr><th scope="row">rRNA sequences (FASTA)</th><td><code>rRNA.fa</code></td></tr>
+<tr><th scope="row">tRNA sequences (FASTA)</th><td><code>tRNA.fa</code></td></tr>
+<tr><th scope="row">Other small ncRNA sequences (FASTA)</th><td><code>ncRNA.fa</code></td></tr>
+<tr><th scope="row">Genome sequence (FASTA)</th><td><code>genome.fa</code></td></tr>
+<tr><th scope="row">Gene annotation (GTF)</th><td><code>annotation.gtf</code></td></tr>
+  </tbody>
+</table></div>
+
+<h2>3. Check the settings of your library</h2>
+<p>These depend on the kit, so the template asks before it builds the workflow. The defaults are those of the public test library (Diagenode D-Plex: a 12-base UMI and 4 template-switch bases at the 5' end, poly(A) tail and adapter at the 3' end).</p>
+<div class="table-wrap"><table>
+  <thead><tr><th scope="col">Setting</th><th scope="col">Default</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">3' adapter (after any poly(A) tail)</th><td>AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC</td></tr>
+    <tr><th scope="row">Shortest read kept by cutadapt (UMI and spacer included)</th><td>36</td></tr>
+    <tr><th scope="row">UMI position in the read</th><td>5' end (the start of the read)</td></tr>
+    <tr><th scope="row">UMI length (bases)</th><td>12</td></tr>
+    <tr><th scope="row">Bases to remove next to the UMI</th><td>4</td></tr>
+    <tr><th scope="row">Shortest footprint to analyse (nt)</th><td>28</td></tr>
+    <tr><th scope="row">Longest footprint to analyse (nt)</th><td>34</td></tr>
+    <tr><th scope="row">Adjust P-site offsets to the reading frame</th><td>Yes, where the CDS frame is clearly better</td></tr>
+    <tr><th scope="row">Mismatches allowed in STAR</th><td>2</td></tr>
+    <tr><th scope="row">Most places a read may align to</th><td>1</td></tr>
+  </tbody>
+</table></div>
+
+<h2>4. Create the workflow and run it</h2>
+<p>Click <strong>Create workflow</strong>. The 20 steps appear on the canvas, connected, with no problems listed. Choose an empty results folder outside the data folder, then click <strong>Run</strong>. The first run installs the tools into isolated environments (5 to 20 minutes on a normal connection); later runs reuse them. Independent steps, such as the three index builds, run side by side.</p>
+
+<h2>5. What you get</h2>
+<ul>
+  <li><strong>riboWaltz report.</strong> One self-contained HTML page: read lengths, P-site offsets, periodicity, region counts, codon usage. Open it in a browser.</li>
+  <li><strong>P-site offsets table.</strong> psite_offsets.tsv: where the P-site sits for each read length.</li>
+  <li><strong>Deduplicated transcript alignments.</strong> The BAM riboWaltz read, one read per UMI and position.</li>
+  <li><strong>Combined QC report.</strong> Open multiqc_report.html: FastQC at four points, cutadapt, the three depletion steps, STAR and the deduplication log.</li>
+  <li><strong>Trimming report.</strong> How many reads had the adapter and how many were dropped as too short.</li>
+  <li><strong>rRNA removal summary.</strong> How much of the library was rRNA.</li>
+  <li><strong>STAR mapping summary.</strong> Log.final.out: unique, multi-mapped and unmapped reads.</li>
+  <li><strong>Deduplication log.</strong> Reads in and out of UMI-tools dedup.</li>
+</ul>
+
+<h2>What the run looked like</h2>
+<p>On the 5-million-read file, measured on an Apple M5 Pro (tools already installed, STAR under Rosetta), the whole workflow took about two minutes. 95.9 % of reads carried the adapter, about 70 % of them matched rRNA and were removed, and riboWaltz found P-site offsets of 12 to 13 nt with 96 % of P-sites in the coding sequence. The 200,000-read file is too small for riboWaltz to estimate offsets; the report says so instead of inventing numbers. See the <a href="https://github.com/hsn-ylmz/RustRunner/blob/main/riboseq-test/README.md">test README</a> for every expected number and what to look at critically.</p>
+
+<h2>References</h2>
+<ul class="refs">
+  <li><a href="https://doi.org/10.14806/ej.17.1.200">Martin M. Cutadapt removes adapter sequences from high-throughput sequencing reads. EMBnet.journal 2011;17:10-12.</a></li>
+  <li><a href="https://doi.org/10.1101/gr.209601.116">Smith T, Heger A, Sudbery I. UMI-tools: modeling sequencing errors in Unique Molecular Identifiers to improve quantification accuracy. Genome Research 2017;27:491-499.</a></li>
+  <li><a href="https://doi.org/10.1038/nmeth.1923">Langmead B, Salzberg SL. Fast gapped-read alignment with Bowtie 2. Nature Methods 2012;9:357-359.</a></li>
+  <li><a href="https://doi.org/10.1093/bioinformatics/bts635">Dobin A, Davis CA, Schlesinger F, et al. STAR: ultrafast universal RNA-seq aligner. Bioinformatics 2013;29:15-21.</a></li>
+  <li><a href="https://doi.org/10.1093/gigascience/giab008">Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.</a></li>
+  <li><a href="https://doi.org/10.1371/journal.pcbi.1006169">Lauria F, Tebaldi T, Bernabo P, Groen EJN, Gillingwater TH, Viero G. riboWaltz: optimization of ribosome P-site positioning in ribosome profiling data. PLoS Computational Biology 2018;14:e1006169.</a></li>
+  <li><a href="https://doi.org/10.1093/bioinformatics/btw354">Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.</a></li>
+  <li><a href="https://www.bioinformatics.babraham.ac.uk/projects/fastqc/">Andrews S. FastQC: a quality control tool for high throughput sequence data.</a></li>
+  <li><a href="https://pubmed.ncbi.nlm.nih.gov/34127534/">Test library: Rao S, Hoskins I, Tonn T, et al. Genes with 5' terminal oligopyrimidine tracts preferentially escape global suppression of translation by the SARS-CoV-2 Nsp1 protein. RNA 2021;27:1025-1045 (GEO GSE158374, run SRR12693498).</a></li>
+  <li>Diagenode D-Plex Small RNA-seq Kit user guide v2 (2024), section Data analysis: the library layout (5' UMI, template-switch motif, poly(A) tail) this template starts from.</li>
+</ul>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>RustRunner 1.0.0-beta.1 (open beta). MIT License. <a href="https://github.com/hsn-ylmz/RustRunner">Source code</a> | <a href="https://github.com/hsn-ylmz/RustRunner/releases">Releases</a> | <a href="https://github.com/hsn-ylmz/RustRunner/issues">Report a problem</a></p>
+  </div>
+</footer>
+</body>
+</html>

@@ -36,6 +36,12 @@ describe('parseEngineLine', () => {
       { event: 'step_failed', step: 'b', reason: 'boom', attempts: 1 },
       { event: 'step_skipped', step: 'c', reason: 'completed in an earlier run' },
       { event: 'check_failed', step: 'b', kind: 'non_empty', blocking: true, message: 'is empty' },
+      {
+        event: 'setup_failed',
+        kind: 'micromamba_missing',
+        message: 'The tool installer (micromamba) was not found',
+        searched: ['/a/micromamba', '/b/micromamba'],
+      },
       { event: 'run_finished', status: 'failed', summary: { ...SUMMARY, error: 'x' } },
       {
         event: 'run_finished',
@@ -49,6 +55,14 @@ describe('parseEngineLine', () => {
       expect(parsed.type, String(body.event)).toBe('event');
       if (parsed.type === 'event') expect(parsed.event).toMatchObject(body);
     }
+  });
+
+  it('keeps a setup_failed event with the wrong field types visible as text', () => {
+    const ok = { event: 'setup_failed', kind: 'micromamba_missing', message: 'm', searched: ['/a'] };
+    expect(parseEngineLine(line(ok)).type).toBe('event');
+    expect(parseEngineLine(line({ ...ok, searched: 'a' }))).toEqual({ type: 'text' });
+    expect(parseEngineLine(line({ ...ok, searched: [1] }))).toEqual({ type: 'text' });
+    expect(parseEngineLine(line({ ...ok, kind: undefined }))).toEqual({ type: 'text' });
   });
 
   it('treats ordinary log lines as text', () => {

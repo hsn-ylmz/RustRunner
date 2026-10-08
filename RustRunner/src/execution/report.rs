@@ -308,6 +308,8 @@ impl RunLog {
                     .failed_checks
                     .push((kind.clone(), *blocking, message.clone()));
             }
+            // Recorded by `run_finished`'s error; no step to attach it to.
+            Event::SetupFailed { .. } => {}
             Event::RunFinished { .. } => {}
         }
     }

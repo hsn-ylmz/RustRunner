@@ -1,0 +1,889 @@
+{
+  "formatVersion": 1,
+  "id": "riboseq-umi-ribowaltz",
+  "name": "Ribo-seq with UMIs (riboWaltz)",
+  "description": "Ribosome profiling with UMIs: trim, extract UMIs, remove rRNA/tRNA/ncRNA, map to transcripts with STAR, deduplicate, riboWaltz report and MultiQC.",
+  "details": "Ribosome profiling (Ribo-seq) with UMIs, from raw reads to a riboWaltz report. The reads are checked (FastQC), trimmed (cutadapt), their UMI is moved into the read name (UMI-tools), cleaned of rRNA, tRNA and other small ncRNA (three bowtie2 steps), mapped to transcripts with STAR, filtered, sorted and indexed (samtools), deduplicated by UMI and position (UMI-tools dedup) and analysed with riboWaltz. MultiQC combines the four FastQC checks with the cutadapt, bowtie2, STAR and UMI-tools logs. The indexes are built inside the workflow, so you only bring FASTA and GTF files.\n\nCheck the settings below before you create the workflow: the adapter, the UMI position and length, the shortest read cutadapt keeps (it still counts the UMI) and the footprint lengths must match your kit. The defaults are those of the public HEK293T test library (Diagenode D-Plex: a 12 base UMI and 4 template-switch bases at the 5' end, poly(A) tail and adapter at the 3' end).\n\nGood to know: STAR is pinned to 2.7.10b because 2.7.11b fails with --quantMode (on Apple silicon it runs as an Intel build). Antisense reads and reads on two transcripts (MAPQ below 20) are dropped before deduplication, so every read is deduplicated once. riboWaltz's P-site offsets are checked against the reading frame, and by default moved by one nucleotide where the frame is clearly better. riboWaltz expects one transcript per gene. The first run installs the tools (a few GB). One sample at a time.",
+  "domain": "rna",
+  "difficulty": "advanced",
+  "minCatalogVersion": "2026.17.1",
+  "readLayout": "single",
+  "inputs": [
+    {
+      "id": "reads",
+      "label": "Sequencing reads (FASTQ)",
+      "hint": "One FASTQ file of raw single-end footprint reads, plain or compressed. The 3' adapter and the UMI are still on the reads.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample.fastq.gz",
+      "targets": [
+        {
+          "step": "fqc_raw",
+          "slot": "reads"
+        },
+        {
+          "step": "cut",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "rrna",
+      "label": "rRNA sequences (FASTA)",
+      "hint": "Ribosomal RNA to remove: 18S, 5.8S, 28S, 5S and the mitochondrial rRNAs. Use the sequences of your own species.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "rRNA.fa",
+      "targets": [
+        {
+          "step": "idx_rrna",
+          "slot": "ref"
+        }
+      ]
+    },
+    {
+      "id": "trna",
+      "label": "tRNA sequences (FASTA)",
+      "hint": "Mature tRNA sequences to remove (for human, for example GtRNAdb plus the mitochondrial tRNAs).",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "tRNA.fa",
+      "targets": [
+        {
+          "step": "idx_trna",
+          "slot": "ref"
+        }
+      ]
+    },
+    {
+      "id": "ncrna",
+      "label": "Other small ncRNA sequences (FASTA)",
+      "hint": "Small non-coding RNA to remove: snRNA, snoRNA, miRNA, Y RNA, vault RNA, 7SL. Leave lncRNA out: it can be translated.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "ncRNA.fa",
+      "targets": [
+        {
+          "step": "idx_ncrna",
+          "slot": "ref"
+        }
+      ]
+    },
+    {
+      "id": "genome",
+      "label": "Genome sequence (FASTA)",
+      "hint": "The genome of your organism. Use the same release as the annotation.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "genome.fa",
+      "targets": [
+        {
+          "step": "star_idx",
+          "slot": "genome"
+        },
+        {
+          "step": "ribo",
+          "slot": "genome"
+        }
+      ]
+    },
+    {
+      "id": "annotation",
+      "label": "Gene annotation (GTF)",
+      "hint": "The matching GTF. One transcript per gene (for example the canonical one) gives the cleanest riboWaltz result; the transcript names in the BAM are the ones in this file.",
+      "types": [
+        "gtf"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "annotation.gtf",
+      "targets": [
+        {
+          "step": "star_idx",
+          "slot": "annotation"
+        },
+        {
+          "step": "ribo",
+          "slot": "annotation"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "adapter",
+      "label": "3' adapter (after any poly(A) tail)",
+      "hint": "Cutadapt removes this and everything after it. The default is the Diagenode D-Plex layout: poly(A) tail A10-C-A10 followed by the Illumina adapter. For a plain Illumina TruSeq small RNA library use TGGAATTCTCGGGTGCCAAGG; for a 3' linker library type your own linker.",
+      "targets": [
+        {
+          "step": "cut",
+          "param": "adapter"
+        }
+      ]
+    },
+    {
+      "id": "trim_min_length",
+      "label": "Shortest read kept by cutadapt (UMI and spacer included)",
+      "hint": "Cutadapt runs before the UMI is taken out, so this length still counts the UMI and the spacer (12 + 4 for D-Plex). 36 keeps inserts of 20 nt and longer, so no read of a few bases reaches the aligners. Set it to UMI + spacer + the shortest insert you want.",
+      "targets": [
+        {
+          "step": "cut",
+          "param": "min_length"
+        }
+      ]
+    },
+    {
+      "id": "umi_end",
+      "label": "UMI position in the read",
+      "hint": "Choose the 5' end for a UMI at the start of the read (D-Plex), the 3' end for a UMI at the end of the read (linker-based protocols). It is taken out after the adapter is cut.",
+      "targets": [
+        {
+          "step": "umi",
+          "param": "umi_end"
+        }
+      ]
+    },
+    {
+      "id": "umi_length",
+      "label": "UMI length (bases)",
+      "hint": "12 for D-Plex Small RNA-seq. Use the length your kit documents; a wrong length cuts footprint bases.",
+      "targets": [
+        {
+          "step": "umi",
+          "param": "umi_length"
+        }
+      ]
+    },
+    {
+      "id": "spacer_length",
+      "label": "Bases to remove next to the UMI",
+      "hint": "4 for D-Plex (template-switch motif, removed with the UMI). 0 when there is no spacer.",
+      "targets": [
+        {
+          "step": "umi",
+          "param": "spacer_length"
+        }
+      ]
+    },
+    {
+      "id": "min_length",
+      "label": "Shortest footprint to analyse (nt)",
+      "hint": "riboWaltz keeps reads from this length up. 28 is the usual lower bound for mammalian footprints.",
+      "targets": [
+        {
+          "step": "ribo",
+          "param": "min_length"
+        }
+      ]
+    },
+    {
+      "id": "max_length",
+      "label": "Longest footprint to analyse (nt)",
+      "hint": "riboWaltz keeps reads up to this length. The test library peaks at 31 to 32 nt, so 34 and not 30.",
+      "targets": [
+        {
+          "step": "ribo",
+          "param": "max_length"
+        }
+      ]
+    },
+    {
+      "id": "offset_refine",
+      "label": "Adjust P-site offsets to the reading frame",
+      "hint": "riboWaltz takes each offset from the reads on start codons. Yes moves an offset by one nucleotide when that puts at least 5 points more of the CDS P-sites in frame 0; the report lists riboWaltz's offsets next to the ones used, so you can compare. On the test library riboWaltz picks 12 or 13 nt from about 350 start-codon reads, and the frame moves five of the seven lengths.",
+      "targets": [
+        {
+          "step": "ribo",
+          "param": "offset_refine"
+        }
+      ]
+    },
+    {
+      "id": "mismatches",
+      "label": "Mismatches allowed in STAR",
+      "hint": "Footprints are short, so 2 is strict enough to avoid wrong placements and loose enough for sequencing errors.",
+      "targets": [
+        {
+          "step": "star",
+          "param": "max_mismatches"
+        }
+      ]
+    },
+    {
+      "id": "multimap",
+      "label": "Most places a read may align to",
+      "hint": "1 keeps only reads that fit one place in the genome, which is what P-site analysis wants. The samtools step keeps MAPQ 20 and above, which also drops reads STAR places on two overlapping transcripts, so raising this alone adds no reads to the report.",
+      "targets": [
+        {
+          "step": "star",
+          "param": "max_multimap"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "fqc_raw",
+      "tool": "fastqc",
+      "label": "FastQC (raw reads)",
+      "files": {
+        "report_dir": "qc_raw/"
+      },
+      "position": {
+        "x": 0,
+        "y": 160
+      }
+    },
+    {
+      "key": "cut",
+      "tool": "cutadapt",
+      "label": "Trim 3' adapter (cutadapt)",
+      "params": {
+        "adapter": "AAAAAAAAAACAAAAAAAAAAGATCGGAAGAGCACACGTCTGAACTCCAGTCAC",
+        "error_rate": 0.1,
+        "min_overlap": 10,
+        "min_length": 36,
+        "quality_cutoff": 20
+      },
+      "files": {
+        "trimmed": "trimmed.fastq.gz",
+        "report": "cutadapt.txt"
+      },
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "key": "fqc_trim",
+      "tool": "fastqc",
+      "label": "FastQC (after cutadapt)",
+      "files": {
+        "report_dir": "qc_trimmed/"
+      },
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "umi",
+      "tool": "umi-tools-extract",
+      "label": "Move UMI to read name",
+      "params": {
+        "umi_end": "5prime",
+        "umi_length": 12,
+        "spacer_length": 4
+      },
+      "files": {
+        "extracted": "umi_extracted.fastq.gz",
+        "log": "umi_extract.log"
+      },
+      "position": {
+        "x": 520,
+        "y": 160
+      }
+    },
+    {
+      "key": "fqc_umi",
+      "tool": "fastqc",
+      "label": "FastQC (after UMI extraction)",
+      "files": {
+        "report_dir": "qc_umi/"
+      },
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "idx_rrna",
+      "tool": "bowtie2-build",
+      "label": "Index rRNA (bowtie2-build)",
+      "files": {
+        "index_dir": "idx_rrna/"
+      },
+      "position": {
+        "x": 780,
+        "y": 320
+      }
+    },
+    {
+      "key": "idx_trna",
+      "tool": "bowtie2-build",
+      "label": "Index tRNA (bowtie2-build)",
+      "files": {
+        "index_dir": "idx_trna/"
+      },
+      "position": {
+        "x": 1040,
+        "y": 320
+      }
+    },
+    {
+      "key": "idx_ncrna",
+      "tool": "bowtie2-build",
+      "label": "Index ncRNA (bowtie2-build)",
+      "files": {
+        "index_dir": "idx_ncrna/"
+      },
+      "position": {
+        "x": 1300,
+        "y": 320
+      }
+    },
+    {
+      "key": "rm_rrna",
+      "tool": "bowtie2-remove-reads",
+      "label": "Remove rRNA reads",
+      "files": {
+        "unaligned": "no_rRNA.fastq.gz",
+        "log": "rrna_removal.log"
+      },
+      "position": {
+        "x": 780,
+        "y": 160
+      }
+    },
+    {
+      "key": "rm_trna",
+      "tool": "bowtie2-remove-reads",
+      "label": "Remove tRNA reads",
+      "files": {
+        "unaligned": "no_tRNA.fastq.gz",
+        "log": "trna_removal.log"
+      },
+      "position": {
+        "x": 1040,
+        "y": 160
+      }
+    },
+    {
+      "key": "rm_ncrna",
+      "tool": "bowtie2-remove-reads",
+      "label": "Remove ncRNA reads",
+      "files": {
+        "unaligned": "no_ncRNA.fastq.gz",
+        "log": "ncrna_removal.log"
+      },
+      "position": {
+        "x": 1300,
+        "y": 160
+      }
+    },
+    {
+      "key": "fqc_clean",
+      "tool": "fastqc",
+      "label": "FastQC (after depletion)",
+      "files": {
+        "report_dir": "qc_clean/"
+      },
+      "position": {
+        "x": 1300,
+        "y": 0
+      }
+    },
+    {
+      "key": "star_idx",
+      "tool": "star-genomegenerate",
+      "label": "STAR genome index",
+      "files": {
+        "index_dir": "star_index/"
+      },
+      "position": {
+        "x": 1560,
+        "y": 320
+      }
+    },
+    {
+      "key": "star",
+      "tool": "star-riboseq",
+      "label": "STAR to transcripts",
+      "files": {
+        "out_dir": "star_riboseq/"
+      },
+      "position": {
+        "x": 1560,
+        "y": 160
+      }
+    },
+    {
+      "key": "view",
+      "tool": "samtools-view",
+      "label": "Keep mapped sense reads",
+      "params": {
+        "forward_only": true
+      },
+      "files": {
+        "filtered": "mapped.bam"
+      },
+      "position": {
+        "x": 1820,
+        "y": 160
+      }
+    },
+    {
+      "key": "sort",
+      "tool": "samtools-sort",
+      "label": "Sort alignments",
+      "files": {
+        "bam": "sorted.bam"
+      },
+      "position": {
+        "x": 2080,
+        "y": 160
+      }
+    },
+    {
+      "key": "index",
+      "tool": "samtools-index",
+      "label": "Index alignments",
+      "files": {
+        "bai": "sorted.bam.bai"
+      },
+      "position": {
+        "x": 2080,
+        "y": 320
+      }
+    },
+    {
+      "key": "dedup",
+      "tool": "umi-tools-dedup",
+      "label": "Remove PCR duplicates (UMI)",
+      "files": {
+        "deduplicated": "deduplicated.bam",
+        "log": "umi_dedup.log",
+        "stats_dir": "umi_stats/"
+      },
+      "position": {
+        "x": 2340,
+        "y": 160
+      }
+    },
+    {
+      "key": "ribo",
+      "tool": "ribowaltz-report",
+      "label": "riboWaltz report",
+      "files": {
+        "report_dir": "ribowaltz/"
+      },
+      "position": {
+        "x": 2600,
+        "y": 160
+      },
+      "params": {
+        "offset_refine": "frame"
+      }
+    },
+    {
+      "key": "mqc",
+      "tool": "multiqc",
+      "label": "MultiQC report",
+      "files": {
+        "report_dir": "multiqc/"
+      },
+      "position": {
+        "x": 2600,
+        "y": 320
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "cut",
+      "to": "fqc_trim",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "cut",
+      "to": "umi",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "umi",
+      "to": "fqc_umi",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "extracted"
+        }
+      ]
+    },
+    {
+      "from": "umi",
+      "to": "rm_rrna",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "extracted"
+        }
+      ]
+    },
+    {
+      "from": "idx_rrna",
+      "to": "rm_rrna",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index"
+        }
+      ]
+    },
+    {
+      "from": "rm_rrna",
+      "to": "rm_trna",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "unaligned"
+        }
+      ]
+    },
+    {
+      "from": "idx_trna",
+      "to": "rm_trna",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index"
+        }
+      ]
+    },
+    {
+      "from": "rm_trna",
+      "to": "rm_ncrna",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "unaligned"
+        }
+      ]
+    },
+    {
+      "from": "idx_ncrna",
+      "to": "rm_ncrna",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index"
+        }
+      ]
+    },
+    {
+      "from": "rm_ncrna",
+      "to": "fqc_clean",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "unaligned"
+        }
+      ]
+    },
+    {
+      "from": "rm_ncrna",
+      "to": "star",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "unaligned"
+        }
+      ]
+    },
+    {
+      "from": "star_idx",
+      "to": "star",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index_dir"
+        }
+      ]
+    },
+    {
+      "from": "star",
+      "to": "view",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "transcriptome_bam"
+        }
+      ]
+    },
+    {
+      "from": "view",
+      "to": "sort",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "filtered"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "index",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "dedup",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "index",
+      "to": "dedup",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "bai"
+        }
+      ]
+    },
+    {
+      "from": "dedup",
+      "to": "ribo",
+      "bind": [
+        {
+          "slot": "bams",
+          "output": "deduplicated"
+        }
+      ]
+    },
+    {
+      "from": "fqc_raw",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "report_dir"
+        }
+      ]
+    },
+    {
+      "from": "cut",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "report"
+        }
+      ]
+    },
+    {
+      "from": "fqc_trim",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "report_dir"
+        }
+      ]
+    },
+    {
+      "from": "umi",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "log"
+        }
+      ]
+    },
+    {
+      "from": "fqc_umi",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "report_dir"
+        }
+      ]
+    },
+    {
+      "from": "rm_rrna",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "log"
+        }
+      ]
+    },
+    {
+      "from": "rm_trna",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "log"
+        }
+      ]
+    },
+    {
+      "from": "rm_ncrna",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "log"
+        }
+      ]
+    },
+    {
+      "from": "fqc_clean",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "report_dir"
+        }
+      ]
+    },
+    {
+      "from": "star",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "log"
+        }
+      ]
+    },
+    {
+      "from": "dedup",
+      "to": "mqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "log"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "riboWaltz report",
+      "step": "ribo",
+      "slot": "report",
+      "hint": "One self-contained HTML page: read lengths, P-site offsets, periodicity, region counts, codon usage. Open it in a browser."
+    },
+    {
+      "label": "P-site offsets table",
+      "step": "ribo",
+      "slot": "offsets",
+      "hint": "psite_offsets.tsv: where the P-site sits for each read length."
+    },
+    {
+      "label": "Deduplicated transcript alignments",
+      "step": "dedup",
+      "slot": "deduplicated",
+      "hint": "The BAM riboWaltz read, one read per UMI and position."
+    },
+    {
+      "label": "Combined QC report",
+      "step": "mqc",
+      "slot": "report",
+      "hint": "Open multiqc_report.html: FastQC at four points, cutadapt, the three depletion steps, STAR and the deduplication log."
+    },
+    {
+      "label": "Trimming report",
+      "step": "cut",
+      "slot": "report",
+      "hint": "How many reads had the adapter and how many were dropped as too short."
+    },
+    {
+      "label": "rRNA removal summary",
+      "step": "rm_rrna",
+      "slot": "log",
+      "hint": "How much of the library was rRNA."
+    },
+    {
+      "label": "STAR mapping summary",
+      "step": "star",
+      "slot": "log",
+      "hint": "Log.final.out: unique, multi-mapped and unmapped reads."
+    },
+    {
+      "label": "Deduplication log",
+      "step": "dedup",
+      "slot": "log",
+      "hint": "Reads in and out of UMI-tools dedup."
+    }
+  ],
+  "references": [
+    {
+      "label": "Martin M. Cutadapt removes adapter sequences from high-throughput sequencing reads. EMBnet.journal 2011;17:10-12.",
+      "url": "https://doi.org/10.14806/ej.17.1.200"
+    },
+    {
+      "label": "Smith T, Heger A, Sudbery I. UMI-tools: modeling sequencing errors in Unique Molecular Identifiers to improve quantification accuracy. Genome Research 2017;27:491-499.",
+      "url": "https://doi.org/10.1101/gr.209601.116"
+    },
+    {
+      "label": "Langmead B, Salzberg SL. Fast gapped-read alignment with Bowtie 2. Nature Methods 2012;9:357-359.",
+      "url": "https://doi.org/10.1038/nmeth.1923"
+    },
+    {
+      "label": "Dobin A, Davis CA, Schlesinger F, et al. STAR: ultrafast universal RNA-seq aligner. Bioinformatics 2013;29:15-21.",
+      "url": "https://doi.org/10.1093/bioinformatics/bts635"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    },
+    {
+      "label": "Lauria F, Tebaldi T, Bernabo P, Groen EJN, Gillingwater TH, Viero G. riboWaltz: optimization of ribosome P-site positioning in ribosome profiling data. PLoS Computational Biology 2018;14:e1006169.",
+      "url": "https://doi.org/10.1371/journal.pcbi.1006169"
+    },
+    {
+      "label": "Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.",
+      "url": "https://doi.org/10.1093/bioinformatics/btw354"
+    },
+    {
+      "label": "Andrews S. FastQC: a quality control tool for high throughput sequence data.",
+      "url": "https://www.bioinformatics.babraham.ac.uk/projects/fastqc/"
+    },
+    {
+      "label": "Test library: Rao S, Hoskins I, Tonn T, et al. Genes with 5' terminal oligopyrimidine tracts preferentially escape global suppression of translation by the SARS-CoV-2 Nsp1 protein. RNA 2021;27:1025-1045 (GEO GSE158374, run SRR12693498).",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/34127534/"
+    },
+    {
+      "label": "Diagenode D-Plex Small RNA-seq Kit user guide v2 (2024), section Data analysis: the library layout (5' UMI, template-switch motif, poly(A) tail) this template starts from."
+    }
+  ]
+}

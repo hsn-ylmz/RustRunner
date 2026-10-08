@@ -1,0 +1,308 @@
+{
+  "formatVersion": 1,
+  "id": "nanopore-signal",
+  "name": "Nanopore from raw signal to coverage",
+  "description": "Start from the raw POD5 signal files of a Nanopore run: call the bases with Dorado, filter, check the reads, map them to a genome and measure coverage.",
+  "details": "Use this when you have the raw signal (POD5 files) straight from the sequencer and want to run the basecalling yourself. The pipeline merges your POD5 files into one and summarises it, calls the bases with the Dorado basecaller, turns the result into a FASTQ file, drops reads that are short or of low quality with chopper, reports the quality and length of what is left with NanoPlot, maps the reads to your reference genome with minimap2 (Nanopore preset), sorts and indexes the alignments, and measures how deeply each part of the genome is covered with mosdepth. Dorado is not a conda package: the app downloads it from Oxford Nanopore the first time, and that download exists for macOS on Apple silicon only. On Windows and on Linux, or if you already have FASTQ files from MinKNOW, use the template \"Nanopore reads from FASTQ to coverage\", which starts after the basecalling and works on every platform. The basecalling model (fast, hac or sup) is downloaded on the first run and needs the internet; basecalling is much faster on a graphics card or on Apple silicon than on a plain processor. The default model is hac, which is a good balance. Dorado drops reads below Q10 and chopper then drops reads shorter than 500 bases; change both in their steps for very short or noisy samples. Filtlong, another read filter, is in the tool catalog if you prefer it to chopper.",
+  "domain": "longread",
+  "difficulty": "advanced",
+  "minCatalogVersion": "2026.16.0",
+  "inputs": [
+    {
+      "id": "pod5",
+      "label": "Raw signal files",
+      "hint": "One or more POD5 files from the sequencer. If you have FAST5 files, convert them with the \"pod5 convert from FAST5\" tool first.",
+      "types": [
+        "pod5"
+      ],
+      "multiple": true,
+      "required": true,
+      "example": "run1.pod5",
+      "targets": [
+        {
+          "step": "merge",
+          "slot": "pods"
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "label": "Reference genome",
+      "hint": "The genome the reads should map to, as a FASTA file.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "genome.fa",
+      "targets": [
+        {
+          "step": "minimap2",
+          "slot": "ref"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "merge",
+      "tool": "pod5-merge",
+      "label": "Merge POD5 files",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "inspect",
+      "tool": "pod5-inspect",
+      "label": "Summarise the signal files",
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "key": "dorado",
+      "tool": "dorado-basecaller",
+      "label": "Call the bases (Dorado)",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "fastq",
+      "tool": "samtools-fastq",
+      "label": "Make FASTQ from the calls",
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "chopper",
+      "tool": "chopper",
+      "label": "Filter reads (chopper)",
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "key": "nanoplot",
+      "tool": "nanoplot",
+      "label": "Read quality report (NanoPlot)",
+      "position": {
+        "x": 1040,
+        "y": 160
+      }
+    },
+    {
+      "key": "minimap2",
+      "tool": "minimap2-long",
+      "label": "Map reads (minimap2)",
+      "position": {
+        "x": 1040,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort",
+      "tool": "samtools-sort",
+      "label": "Sort alignments",
+      "position": {
+        "x": 1300,
+        "y": 0
+      }
+    },
+    {
+      "key": "index",
+      "tool": "samtools-index",
+      "label": "Index alignments",
+      "position": {
+        "x": 1560,
+        "y": 0
+      }
+    },
+    {
+      "key": "mosdepth",
+      "tool": "mosdepth",
+      "label": "Coverage (mosdepth)",
+      "position": {
+        "x": 1820,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "merge",
+      "to": "inspect",
+      "bind": [
+        {
+          "slot": "pod",
+          "output": "merged"
+        }
+      ]
+    },
+    {
+      "from": "merge",
+      "to": "dorado",
+      "bind": [
+        {
+          "slot": "pod",
+          "output": "merged"
+        }
+      ]
+    },
+    {
+      "from": "dorado",
+      "to": "fastq",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "calls"
+        }
+      ]
+    },
+    {
+      "from": "fastq",
+      "to": "chopper",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "reads"
+        }
+      ]
+    },
+    {
+      "from": "chopper",
+      "to": "nanoplot",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "filtered"
+        }
+      ]
+    },
+    {
+      "from": "chopper",
+      "to": "minimap2",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "filtered"
+        }
+      ]
+    },
+    {
+      "from": "minimap2",
+      "to": "sort",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "index",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "mosdepth",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "index",
+      "to": "mosdepth",
+      "bind": [
+        {
+          "slot": "bai",
+          "output": "bai"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Filtered reads",
+      "step": "chopper",
+      "slot": "filtered",
+      "hint": "FASTQ with the reads that passed the quality and length filter."
+    },
+    {
+      "label": "Read quality report",
+      "step": "nanoplot",
+      "slot": "report",
+      "hint": "Open NanoPlot-report.html in a browser: read lengths and qualities."
+    },
+    {
+      "label": "Read statistics",
+      "step": "nanoplot",
+      "slot": "stats",
+      "hint": "The same numbers as text: number of reads, N50, mean quality."
+    },
+    {
+      "label": "Alignments",
+      "step": "sort",
+      "slot": "bam",
+      "hint": "Sorted BAM of the mapped reads."
+    },
+    {
+      "label": "Coverage summary",
+      "step": "mosdepth",
+      "slot": "summary",
+      "hint": "Mean depth for each chromosome."
+    },
+    {
+      "label": "Signal file summary",
+      "step": "inspect",
+      "slot": "report",
+      "hint": "How many reads and how much signal the POD5 files hold."
+    }
+  ],
+  "references": [
+    {
+      "label": "Dorado basecaller. Oxford Nanopore Technologies (software).",
+      "url": "https://github.com/nanoporetech/dorado"
+    },
+    {
+      "label": "Oxford Nanopore Technologies. pod5-file-format: the POD5 format for raw signal (software).",
+      "url": "https://github.com/nanoporetech/pod5-file-format"
+    },
+    {
+      "label": "De Coster W, Rademakers R. NanoPack2: population-scale evaluation of long-read sequencing data. Bioinformatics 2023;39:btad311.",
+      "url": "https://doi.org/10.1093/bioinformatics/btad311"
+    },
+    {
+      "label": "De Coster W, D'Hert S, Schultz DT, Cruts M, Van Broeckhoven C. NanoPack: visualizing and processing long-read sequencing data. Bioinformatics 2018;34:2666-2669.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty149"
+    },
+    {
+      "label": "Li H. Minimap2: pairwise alignment for nucleotide sequences. Bioinformatics 2018;34:3094-3100.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty191"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    },
+    {
+      "label": "Pedersen BS, Quinlan AR. Mosdepth: quick coverage calculation for genomes and exomes. Bioinformatics 2018;34:867-868.",
+      "url": "https://doi.org/10.1093/bioinformatics/btx699"
+    }
+  ]
+}

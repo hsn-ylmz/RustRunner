@@ -1,0 +1,328 @@
+import { describe, expect, it } from 'vitest';
+import {
+  PENDING_STATUS,
+  buildFailureCard,
+  describeInstallResult,
+  describeRunResult,
+  describeSetupProblem,
+  nodeStatusLine,
+  plainCheck,
+  plainFailure,
+  plainStepDetail,
+  sectionToEdit,
+  stateView,
+  type RunResult,
+} from '../runFeedback';
+import { applyRunEvent, rollupNodeStatuses, type StepEvent, type StepRuns } from '../stepEvents';
+
+const fold = (events: StepEvent[]): StepRuns => events.reduce(applyRunEvent, {} as StepRuns);
+
+describe('stateView', () => {
+  it('gives every state an icon and a word', () => {
+    for (const state of ['pending', 'running', 'retrying', 'succeeded', 'failed', 'skipped'] as const) {
+      const view = stateView(state);
+      expect(view.icon).toBeTruthy();
+      expect(view.label.length).toBeGreaterThan(2);
+    }
+  });
+
+  it('refines skipped to up to date and succeeded to mocked, only with the flag', () => {
+    expect(stateView('skipped').label).toBe('Skipped');
+    expect(stateView('skipped', { upToDate: true }).label).toBe('Up to date');
+    expect(stateView('succeeded').label).toBe('Done');
+    expect(stateView('succeeded', { mocked: true }).label).toBe('Mocked');
+    expect(stateView('failed', { mocked: true, upToDate: true }).label).toBe('Failed');
+  });
+});
+
+describe('nodeStatusLine', () => {
+  it('names the next attempt while retrying', () => {
+    const status = { state: 'retrying', finished: 0, total: 1, attempt: 1, maxAttempts: 3 } as const;
+    expect(nodeStatusLine(status)).toBe('Retrying, attempt 2 of 3');
+  });
+
+  it('never claims an attempt beyond the last', () => {
+    const status = { state: 'retrying', finished: 0, total: 1, attempt: 3, maxAttempts: 3 } as const;
+    expect(nodeStatusLine(status)).toBe('Retrying, attempt 3 of 3');
+  });
+
+  it('counts files for a step that expanded into many', () => {
+    expect(nodeStatusLine({ state: 'running', finished: 2, total: 5 })).toBe('Running, 2 of 5 files');
+    expect(nodeStatusLine({ state: 'running', finished: 0, total: 1 })).toBe('Running');
+  });
+
+  it('reads waiting, up to date and mocked', () => {
+    expect(nodeStatusLine(PENDING_STATUS)).toBe('Waiting');
+    expect(nodeStatusLine({ state: 'skipped', finished: 1, total: 1, upToDate: true })).toBe('Up to date');
+    expect(nodeStatusLine({ state: 'succeeded', finished: 1, total: 1, mocked: true })).toBe('Mocked');
+  });
+});
+
+describe('describeRunResult', () => {
+  const summary = {
+    total: 5,
+    succeeded: 3,
+    failed: 1,
+    skipped: 1,
+    retried: 0,
+    check_warnings: 0,
+    duration_secs: 4.2,
+  };
+  const result = (over: Partial<RunResult> = {}): RunResult => ({ status: 'succeeded', summary, ...over });
+
+  it('summarises duration and counts', () => {
+    const view = describeRunResult(result());
+    expect(view.title).toBe('Run succeeded');
+    expect(view.tone).toBe('success');
+    expect(view.detail).toBe('4.2 s, 3 succeeded, 1 failed, 1 skipped of 5 steps');
+  });
+
+  it('says dry run for a dry run and stopped for a stop', () => {
+    expect(describeRunResult(result(), true).title).toBe('Dry run succeeded');
+    expect(describeRunResult(result({ status: 'stopped' })).tone).toBe('neutral');
+  });
+
+  it('marks a failure and carries the engine error', () => {
+    const view = describeRunResult(
+      result({ status: 'failed', summary: { ...summary, error: ' step "a" failed ' } })
+    );
+    expect(view.tone).toBe('danger');
+    expect(view.icon).toBe('x');
+    expect(view.error).toBe('step "a" failed');
+  });
+
+  it('lists retries, warnings and mocked steps as notes only when present', () => {
+    expect(describeRunResult(result()).notes).toEqual([]);
+    const notes = describeRunResult(
+      result({ summary: { ...summary, retried: 1, check_warnings: 2, mocked: 1 } })
+    ).notes;
+    expect(notes).toEqual([
+      '1 step needed a retry',
+      '2 check warnings',
+      '1 step mocked, tools not run',
+    ]);
+  });
+
+  it('uses the singular for one step', () => {
+    const view = describeRunResult(
+      result({ summary: { ...summary, total: 1, succeeded: 1, failed: 0, skipped: 0 } })
+    );
+    expect(view.detail).toBe('4.2 s, 1 succeeded of 1 step');
+  });
+});
+
+describe('plainCheck', () => {
+  it('names the file, the check as the panel labels it, and the fix', () => {
+    expect(plainCheck('non_empty on all outputs: empty.txt: is empty')).toBe(
+      'empty.txt is empty, but "Outputs must be non-empty" is on. Check the command, or turn the check off.'
+    );
+    expect(plainCheck('min_lines 5 on counts.tsv: counts.tsv: has 2 lines, expected at least 5')).toBe(
+      'counts.tsv has 2 lines, expected at least 5, but "At least 5 lines" is on. Check the command, or turn the check off.'
+    );
+    expect(plainCheck('exists on out/{sample}.bam (non-blocking): out/a.bam: does not exist')).toContain(
+      'out/a.bam does not exist, but "Outputs must exist" is on.'
+    );
+  });
+
+  it('explains a check aimed at no output', () => {
+    expect(plainCheck('exists on gone.txt: no matching output to check')).toContain('no output matches');
+  });
+
+  it('keeps text in another shape', () => {
+    expect(plainCheck('empty.txt is empty')).toBe('empty.txt is empty');
+    expect(plainCheck(undefined)).toBe('');
+  });
+});
+
+describe('plainFailure', () => {
+  it('turns engine boilerplate into a sentence', () => {
+    expect(plainFailure("Step 'x' failed. See logs for details.")).toBe('The command ended with an error.');
+    expect(plainFailure("Step 'x' timed out after 5s and was killed.")).toContain('time limit');
+    expect(plainFailure('output check failed: empty.txt is empty')).toContain('did not pass a check');
+    expect(plainFailure(undefined)).toBe('The command ended with an error.');
+  });
+
+  it('keeps a message it does not recognise', () => {
+    expect(plainFailure('missing input a.txt')).toBe('missing input a.txt');
+  });
+});
+
+describe('buildFailureCard', () => {
+  const nodes = [
+    { stepId: 'make', label: 'Make' },
+    { stepId: 'align', label: 'Align' },
+    { stepId: 'count', label: 'Count' },
+  ];
+  const logs = [
+    'Starting step: align',
+    "[ERROR] Step 'align' failed with exit code: Some(2)",
+    '[ERROR] stderr:',
+    'bwa: cannot open index',
+    'check the reference path',
+    'Workflow failed',
+  ];
+
+  it('is null when nothing failed', () => {
+    const runs = fold([{ kind: 'start', stepId: 'make' }, { kind: 'done', stepId: 'make' }]);
+    expect(buildFailureCard(runs, nodes, logs)).toBeNull();
+  });
+
+  it('names the step, the reason and the last stderr lines', () => {
+    const runs = fold([
+      { kind: 'start', stepId: 'make' },
+      { kind: 'done', stepId: 'make' },
+      { kind: 'start', stepId: 'align' },
+      { kind: 'failed', stepId: 'align', message: "Step 'align' failed. See logs for details." },
+      { kind: 'skipped', stepId: 'count', reason: 'upstream failed' },
+    ]);
+    const card = buildFailureCard(runs, nodes, logs)!;
+    expect(card.headline).toBe('"Align" failed');
+    expect(card.what).toBe('The command ended with an error.');
+    expect(card.stderr).toEqual(['bwa: cannot open index', 'check the reference path']);
+    expect(card.notRun).toBe(1);
+    expect(card.check).toBeUndefined();
+  });
+
+  it('does not count up-to-date steps as not run', () => {
+    const runs = fold([
+      { kind: 'skipped', stepId: 'make', reason: 'up_to_date' },
+      { kind: 'start', stepId: 'align' },
+      { kind: 'failed', stepId: 'align', message: 'x' },
+    ]);
+    expect(buildFailureCard(runs, nodes, [])!.notRun).toBe(0);
+  });
+
+  it('carries the blocking check that failed the step', () => {
+    const runs = fold([
+      { kind: 'start', stepId: 'make' },
+      { kind: 'check', stepId: 'make', blocking: true, message: 'empty.txt is empty' },
+      { kind: 'failed', stepId: 'make', message: 'output check failed: empty.txt is empty' },
+    ]);
+    const card = buildFailureCard(runs, nodes, [])!;
+    expect(card.check).toBe('empty.txt is empty');
+    expect(card.what).toContain('did not pass a check');
+    expect(card.stderr).toEqual([]);
+    expect(sectionToEdit(card)).toBe('checks');
+  });
+
+  it('finds the failed instance of a step that expanded per file', () => {
+    const runs = fold([
+      { kind: 'done', stepId: 'align_a' },
+      { kind: 'start', stepId: 'align_b' },
+      { kind: 'failed', stepId: 'align_b', message: 'x' },
+    ]);
+    const card = buildFailureCard(runs, nodes, [
+      "[ERROR] Step 'align_b' failed with exit code: Some(1)",
+      '[ERROR] stderr:',
+      'boom',
+    ])!;
+    expect(card.engineId).toBe('align_b');
+    expect(card.nodeStepId).toBe('align');
+    expect(card.stderr).toEqual(['boom']);
+  });
+
+  it('rolls the failure and its check up on the node', () => {
+    const runs = fold([
+      { kind: 'check', stepId: 'make', blocking: true, message: 'm' },
+      { kind: 'failed', stepId: 'make', message: 'output check failed: m' },
+    ]);
+    const status = rollupNodeStatuses(runs, ['make'])['make'];
+    expect(status.failedCheck).toBe('m');
+    expect(status.failedStepId).toBe('make');
+  });
+});
+
+describe('sectionToEdit', () => {
+  it('sends a timeout to Reliability and anything else to Advanced', () => {
+    expect(sectionToEdit({ what: 'The step took longer than its time limit and was stopped.' })).toBe('reliability');
+    expect(sectionToEdit({ what: 'The command ended with an error.' })).toBe('advanced');
+  });
+});
+
+describe('plainStepDetail', () => {
+  const labels: Record<string, string> = { empty: 'Empty', bad: 'Bad step' };
+  const labelOf = (id: string) => labels[id];
+
+  it('says a failed check in the failure card words', () => {
+    const text = plainStepDetail(
+      'failed',
+      'output check failed: non_empty on all outputs: empty.txt: is empty',
+      labelOf
+    );
+    expect(text).toBe(
+      'empty.txt is empty, but "Outputs must be non-empty" is on. Check the command, or turn the check off.'
+    );
+    expect(text).not.toMatch(/non_empty|output check failed/);
+  });
+
+  it('joins several failed checks', () => {
+    const text = plainStepDetail(
+      'failed',
+      'output check failed: exists on all outputs: a.txt: does not exist; min_lines 5 on all outputs: b.txt: has 2 lines, expected at least 5',
+      labelOf
+    );
+    expect(text).toContain('a.txt does not exist');
+    expect(text).toContain('"At least 5 lines" is on');
+  });
+
+  it('uses the same sentence as the failure card for other failures', () => {
+    expect(plainStepDetail('failed', 'step timed out after 5s')).toBe(plainFailure('step timed out after 5s'));
+    expect(plainStepDetail('failed', undefined)).toBe('The command ended with an error.');
+  });
+
+  it('names the step that made a later step wait, by the name the person gave it', () => {
+    expect(plainStepDetail('skipped', "not run: the workflow stopped at step 'empty'", labelOf)).toBe(
+      'Did not run because "Empty" failed.'
+    );
+    expect(plainStepDetail('skipped', "not run: step 'bad' failed", labelOf)).toBe(
+      'Did not run because "Bad step" failed.'
+    );
+    expect(plainStepDetail('skipped', "not run: step 'zzz' failed")).toBe('Did not run because "zzz" failed.');
+    expect(plainStepDetail('skipped', 'not run: the workflow stopped early')).toBe(
+      'Did not run because the workflow stopped early.'
+    );
+  });
+
+  it('leaves a message it does not know alone', () => {
+    expect(plainStepDetail('skipped', 'something else')).toBe('something else');
+  });
+});
+
+describe('describeSetupProblem', () => {
+  it('turns a missing micromamba into a clear card with an install action', () => {
+    const view = describeSetupProblem({
+      kind: 'micromamba_missing',
+      message: 'long engine text with paths',
+      searched: ['/a/micromamba', '/b/micromamba'],
+    });
+    expect(view.headline).toBe('The tool installer (micromamba) is missing');
+    expect(view.actionLabel).toBe('Install the tool installer');
+    expect(view.searched).toEqual(['/a/micromamba', '/b/micromamba']);
+    expect(view.what).toMatch(/No step was run/);
+    // The card does not repeat the engine's multi-line text.
+    expect(view.what).not.toContain('long engine text');
+  });
+
+  it('shows the engine message for a kind it does not know, with no action', () => {
+    const view = describeSetupProblem({ kind: 'something_new', message: ' It broke. ', searched: [] });
+    expect(view.headline).toBe('The run could not start');
+    expect(view.what).toBe('It broke.');
+    expect(view.actionLabel).toBeUndefined();
+  });
+});
+
+describe('describeInstallResult', () => {
+  it('tells the person to run again after a successful install', () => {
+    expect(describeInstallResult({ ok: true, path: '/x/micromamba' })).toEqual({
+      tone: 'success',
+      text: 'The tool installer is installed. Press Run to start again.',
+    });
+  });
+
+  it('passes the reason of a failed install through', () => {
+    expect(describeInstallResult({ ok: false, error: 'checksum' })).toEqual({
+      tone: 'danger',
+      text: 'checksum',
+    });
+  });
+});

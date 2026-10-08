@@ -1,5 +1,8 @@
 /** Slim banner reporting auto-update status. */
 
+import { Button, Icon, IconButton, type IconName } from '../ui';
+import { versionLabel } from '../versionLabel';
+
 /**
  * Status payloads emitted by the main process over the 'update-status'
  * IPC channel. Kept inline (rather than imported from preload.d.ts) so the
@@ -22,6 +25,10 @@ export type UpdateStatus =
   | { status: 'downloading'; percent: number; bytesPerSecond: number; transferred: number; total: number }
   | { status: 'downloaded'; version: string; canAutoInstall: boolean }
   | { status: 'error'; manual: boolean; message: string };
+
+/** What an update failure means for the person, before the technical message. */
+export const UPDATE_ERROR_HELP =
+  'You can keep working. RustRunner tries again the next time it starts.';
 
 /** Human-readable bytes-per-second for the download progress line. */
 function formatBytesPerSec(bytes: number): string {
@@ -71,13 +78,17 @@ export function UpdateBanner({
   let progressPct: number | null = null;
   let action: { label: string; onClick: () => void } | null = null;
   let variant: 'info' | 'success' | 'error' = 'info';
+  let icon: IconName = 'info';
+  let busy = false;
 
   switch (status.status) {
     case 'checking':
       title = 'Checking for updates…';
+      icon = 'spinner';
+      busy = true;
       break;
     case 'available':
-      title = `Update available — v${status.version}`;
+      title = `Update available — ${versionLabel(status.version)}`;
       if (status.canAutoInstall) {
         detail = 'Downloading in the background…';
       } else {
@@ -89,6 +100,8 @@ export function UpdateBanner({
       break;
     case 'downloading': {
       title = 'Downloading update';
+      icon = 'spinner';
+      busy = true;
       progressPct = Math.max(0, Math.min(100, status.percent));
       const speed = formatBytesPerSec(status.bytesPerSecond);
       detail = speed
@@ -97,7 +110,7 @@ export function UpdateBanner({
       break;
     }
     case 'downloaded':
-      title = `Update ready — v${status.version}`;
+      title = `Update ready — ${versionLabel(status.version)}`;
       detail = status.canAutoInstall
         ? 'Restart RustRunner to install.'
         : 'Open the GitHub release page to install.';
@@ -106,27 +119,47 @@ export function UpdateBanner({
         onClick: onInstall,
       };
       variant = 'success';
+      icon = 'check';
       break;
     case 'up-to-date':
-      title = `You're up to date — v${status.version}`;
+      title = `You're up to date — ${versionLabel(status.version)}`;
       variant = 'success';
+      icon = 'check';
       break;
     case 'error':
-      title = 'Update check failed';
-      detail = status.message;
+      title = 'Could not check for updates';
+      detail = status.message ? `${UPDATE_ERROR_HELP} (${status.message})` : UPDATE_ERROR_HELP;
       variant = 'error';
+      icon = 'alert';
       break;
   }
 
   return (
-    <div className={`update-banner update-banner-${variant}`} role="status">
+    <div
+      className={`update-banner update-banner-${variant}`}
+      role="status"
+      data-testid="update-banner"
+      data-variant={variant}
+    >
+      <Icon name={icon} size={16} spin={busy} className="update-banner-icon" />
       <div className="update-banner-text">
         <span className="update-banner-title">{title}</span>
-        {detail && <span className="update-banner-detail">{detail}</span>}
+        {detail && (
+          <span className="update-banner-detail" title={detail}>
+            {detail}
+          </span>
+        )}
       </div>
 
       {progressPct !== null && (
-        <div className="update-banner-progress" aria-hidden="true">
+        <div
+          className="update-banner-progress"
+          role="progressbar"
+          aria-label="Download progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progressPct)}
+        >
           <div
             className="update-banner-progress-bar"
             style={{ width: `${progressPct}%` }}
@@ -136,18 +169,16 @@ export function UpdateBanner({
 
       <div className="update-banner-actions">
         {action && (
-          <button className="update-banner-button" onClick={action.onClick}>
+          <Button variant="primary" size="sm" onClick={action.onClick}>
             {action.label}
-          </button>
+          </Button>
         )}
-        <button
-          className="update-banner-dismiss"
+        <IconButton
+          icon="x"
+          size="sm"
+          label="Dismiss update notification"
           onClick={onDismiss}
-          aria-label="Dismiss update notification"
-          title="Dismiss"
-        >
-          ×
-        </button>
+        />
       </div>
     </div>
   );

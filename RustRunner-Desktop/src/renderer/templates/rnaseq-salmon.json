@@ -1,0 +1,164 @@
+{
+  "formatVersion": 1,
+  "id": "rnaseq-salmon",
+  "name": "RNA-seq quantification with Salmon",
+  "description": "Estimate how much of each transcript is present in an RNA-seq sample, without aligning the reads to a genome.",
+  "details": "Use this when you want expression levels per transcript (or per gene, after summing) from RNA-seq reads and you have the transcript sequences of your organism. It is the fastest way to get abundances. The pipeline trims adapters and poor-quality bases with fastp, builds a Salmon index from your transcript FASTA, lets Salmon estimate the abundance of every transcript (quant.sf: length, effective length, TPM and estimated read counts), and gathers the trimming and quantification summaries into one MultiQC report. The Salmon index is built again on every run, which is quick for a transcriptome. Set the library type in the Salmon step if you know your protocol (the default detects it). This template takes one single-end sample; for paired-end data use the kallisto or Salmon steps by hand, or run the sample files one after another. If you also need alignments or a genome browser track, use the alignment and gene counts template instead.",
+  "domain": "rna",
+  "difficulty": "intermediate",
+  "minCatalogVersion": "2026.15.0",
+  "readLayout": "single",
+  "inputs": [
+    {
+      "id": "reads",
+      "label": "Sequencing reads",
+      "hint": "One FASTQ file of single-end RNA-seq reads, plain or compressed (.fastq or .fastq.gz).",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample.fastq.gz",
+      "targets": [
+        {
+          "step": "fastp",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "transcripts",
+      "label": "Transcript sequences",
+      "hint": "A FASTA file with one sequence per transcript (the cDNA file of your organism, for example from Ensembl or GENCODE).",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "transcripts.fa",
+      "targets": [
+        {
+          "step": "salmon_index",
+          "slot": "transcripts"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "fastp",
+      "tool": "fastp",
+      "label": "Trim reads (fastp)",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "salmon_index",
+      "tool": "salmon-index",
+      "label": "Salmon index",
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "key": "salmon_quant",
+      "tool": "salmon-quant",
+      "label": "Salmon quantification",
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "multiqc",
+      "tool": "multiqc",
+      "label": "MultiQC report",
+      "files": {
+        "report_dir": "multiqc/"
+      },
+      "position": {
+        "x": 780,
+        "y": 160
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "fastp",
+      "to": "salmon_quant",
+      "bind": [
+        {
+          "slot": "reads",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "salmon_index",
+      "to": "salmon_quant",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index_dir"
+        }
+      ]
+    },
+    {
+      "from": "fastp",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "json_report"
+        }
+      ]
+    },
+    {
+      "from": "salmon_quant",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "out_dir"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Transcript abundances",
+      "step": "salmon_quant",
+      "slot": "quant",
+      "hint": "quant.sf in the Salmon result folder: one row per transcript with TPM and estimated read counts."
+    },
+    {
+      "label": "Combined report",
+      "step": "multiqc",
+      "slot": "report",
+      "hint": "Open multiqc_report.html in a browser: trimming and mapping rate on one page."
+    },
+    {
+      "label": "Trimmed reads",
+      "step": "fastp",
+      "slot": "trimmed",
+      "hint": "Cleaned reads, in case you want to reuse them."
+    }
+  ],
+  "references": [
+    {
+      "label": "Patro R, Duggal G, Love MI, Irizarry RA, Kingsford C. Salmon provides fast and bias-aware quantification of transcript expression. Nature Methods 2017;14:417-419.",
+      "url": "https://doi.org/10.1038/nmeth.4197"
+    },
+    {
+      "label": "Chen S, Zhou Y, Chen Y, Gu J. fastp: an ultra-fast all-in-one FASTQ preprocessor. Bioinformatics 2018;34:i884-i890.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty560"
+    },
+    {
+      "label": "Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.",
+      "url": "https://doi.org/10.1093/bioinformatics/btw354"
+    }
+  ]
+}

@@ -9,24 +9,21 @@ import {
   Controls,
   Handle,
   Position,
-  NodeToolbar,
-  useReactFlow,
   MiniMap,
+  Panel as FlowPanel,
   BaseEdge,
   getBezierPath,
   type EdgeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { NodeStatus } from '../stepEvents';
+import { nodeStatusLine, stateView } from '../runFeedback';
 import { firstFreePosition, type Rect } from '../nodePlacement';
 import type { TypeCheck } from '../tools/catalog';
-
-export const COLOR_OPTIONS = [
-  '#a8e6cf', '#88c5f7', '#d4a5f7', '#f5efe9',
-  '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6',
-];
-
-export const DEFAULT_COLOR = '#88c5f7';
+import { nodeColorVar, normalizeNodeColor } from '../nodeColors';
+import { edgeLabelWidth, mismatchLabel } from '../edgeLabel';
+import { useState } from 'react';
+import { Badge, Button, Icon, type IconName } from '../ui';
 
 /**
  * Chooses where a newly added node should appear.
@@ -36,8 +33,9 @@ export const DEFAULT_COLOR = '#88c5f7';
  * window-relative placement lands nodes near the canvas's bottom-right corner.
  *
  * Placement also has to dodge the floating overlays, which sit above the nodes
- * and swallow clicks on anything underneath them — the execution controls
+ * and swallow clicks on anything underneath them — the run controls
  * (top-left), the MiniMap (bottom-right) and the zoom Controls (bottom-left).
+ * The toolbar is a row above the canvas, not an overlay.
  * Nodes are laid out on a 3x2 grid inside the remaining box and cycle through
  * its cells, so consecutive nodes never stack on each other either.
  *
@@ -63,8 +61,8 @@ export function nextNodePosition(
   // Insets clearing the floating overlays. Generous rather than exact — the
   // cost of being wrong is an unclickable node.
   const box = {
-    left: rect.x + 170,
-    top: rect.y + 90,
+    left: rect.x + 230,
+    top: rect.y + 24,
     right: rect.right - 230,
     bottom: rect.bottom - 60,
   };
@@ -101,23 +99,30 @@ export function nextNodePosition(
   return firstFreePosition(candidates, occupied) ?? slot(nodeCount);
 }
 
-/** Badge glyph shown in the corner of a node for each execution state. */
-const STATUS_GLYPH: Record<string, string> = {
-  running: '●',
-  retrying: '↻',
-  succeeded: '✓',
-  skipped: '⏭',
-  failed: '✕',
+/** Icon shown in the corner of a node for each execution state. */
+const STATUS_ICON: Record<string, IconName> = {
+  running: 'dot',
+  retrying: 'retry',
+  succeeded: 'check',
+  skipped: 'skip',
+  failed: 'x',
 };
 
-function CustomNode({ id, data, selected }: any) {
-  const { updateNodeData } = useReactFlow();
+const STATUS_NAME: Record<string, string> = {
+  running: 'Running',
+  retrying: 'Retrying',
+  succeeded: 'Succeeded',
+  skipped: 'Skipped',
+  failed: 'Failed',
+};
 
-  const handleColorChange = (newColor: string) => {
-    updateNodeData(id, { color: newColor });
-  };
-
-  const nodeColor = data.color || DEFAULT_COLOR;
+/**
+ * A step on the canvas. Its colour is chosen in the properties panel (Basics),
+ * not in a toolbar floating over the canvas, which used to cover neighbouring
+ * nodes and edges.
+ */
+function CustomNode({ data, selected }: any) {
+  const nodeColor = normalizeNodeColor(data.color);
 
   // Injected by the editor rather than stored on the node, so execution state
   // never ends up in a saved workflow file.
@@ -125,24 +130,11 @@ function CustomNode({ id, data, selected }: any) {
   const invalidReason: string | undefined = data.__invalidReason;
 
   const state = status?.state ?? 'idle';
-  const showCount = status && status.total > 1;
+  const view = status ? stateView(status.state, status) : null;
+  const statusText = status ? nodeStatusLine(status) : '';
 
   return (
     <>
-      <NodeToolbar isVisible={selected} className="nopan">
-        <div className="color-picker-toolbar">
-          {COLOR_OPTIONS.map((colorOption) => (
-            <button
-              key={colorOption}
-              onClick={() => handleColorChange(colorOption)}
-              className={`color-button ${colorOption === nodeColor ? 'selected' : ''}`}
-              style={{ backgroundColor: colorOption }}
-              title={`Change color to ${colorOption}`}
-            />
-          ))}
-        </div>
-      </NodeToolbar>
-
       <div
         className={[
           'custom-node',
@@ -152,7 +144,7 @@ function CustomNode({ id, data, selected }: any) {
         ]
           .filter(Boolean)
           .join(' ')}
-        style={{ background: nodeColor }}
+        style={{ background: nodeColorVar(nodeColor) }}
         data-testid="workflow-node"
         data-state={state}
         title={
@@ -167,39 +159,53 @@ function CustomNode({ id, data, selected }: any) {
         <Handle type="target" position={Position.Top} />
 
         {state !== 'idle' && state !== 'pending' && (
-          <div className={`node-status-badge node-status-${state}`}>
-            {STATUS_GLYPH[state]}
+          <div
+            className={`node-status-badge node-status-${state}`}
+            role="img"
+            aria-label={STATUS_NAME[state]}
+          >
+            <Icon name={STATUS_ICON[state]} size={12} />
           </div>
         )}
 
         {(data.mock === true || data.mock === 'true') && (
-          <div
+          <Badge
+            tone="warning"
+            variant="dashed"
             className="node-mock-badge"
             data-testid="node-mock-badge"
             title="Mocked: the tool does not run, placeholder outputs are created"
           >
             MOCK
-          </div>
+          </Badge>
         )}
 
         <div className="node-label">{data.label || 'New Node'}</div>
         <div className="node-tool">{data.tool || 'No tool'}</div>
 
-        {status?.mocked && state === 'succeeded' && (
-          <div className="node-mocked-run" data-testid="node-mocked-run">
-            MOCKED
-          </div>
-        )}
-
-        {showCount && (
-          <div className="node-progress">
-            {status!.finished}/{status!.total}
+        {view && (
+          <div
+            className={`node-status-line node-status-line-${view.key}`}
+            data-testid="node-status-line"
+            data-status={view.key}
+          >
+            <Icon
+              name={state === 'running' ? 'spinner' : view.icon}
+              size={12}
+              spin={state === 'running'}
+            />
+            <span>{statusText}</span>
           </div>
         )}
 
         {invalidReason && (
-          <div className="node-invalid-badge" title={invalidReason}>
-            !
+          <div
+            className="node-invalid-badge"
+            title={invalidReason}
+            role="img"
+            aria-label={invalidReason}
+          >
+            <Icon name="alert" size={12} />
           </div>
         )}
 
@@ -212,9 +218,10 @@ function CustomNode({ id, data, selected }: any) {
 /**
  * An edge coloured by its file-type check: green and solid with a check mark
  * when an output type of the source is an input type of the target, orange and
- * dashed with a "types differ" label when not, neutral when either end is not a
- * catalog tool. Dash and label carry the verdict without colour. The editor injects the check under `__typeCheck`
- * (like `__status` on nodes), so it never reaches a saved workflow. The title
+ * dashed with a "needs sam/bam, gets fastq" label when not, neutral when either end is not a
+ * catalog tool. Dash and label carry the verdict without colour. The editor
+ * injects the check under `__typeCheck` (like `__status` on nodes), so it never
+ * reaches a saved workflow. The title
  * is the tooltip. The check only informs; it never blocks a connection.
  */
 function TypedEdge({
@@ -239,12 +246,16 @@ function TypedEdge({
     targetPosition,
   });
   const check = (data as { __typeCheck?: TypeCheck } | undefined)?.__typeCheck;
+  const active = (data as { __active?: boolean } | undefined)?.__active === true;
   const status = check?.status ?? 'unknown';
+  const label = check ? mismatchLabel(check) : '';
+  const mismatchWidth = edgeLabelWidth(label, 12);
 
   return (
     <g
-      className={`typed-edge typed-edge-${status}`}
+      className={`typed-edge typed-edge-${status}${active ? ' typed-edge-active' : ''}`}
       data-testid="typed-edge"
+      data-active={active ? 'true' : undefined}
       data-type-match={status}
     >
       {check && <title>{check.message}</title>}
@@ -263,9 +274,24 @@ function TypedEdge({
           data-testid="typed-edge-label"
           transform={`translate(${labelX}, ${labelY})`}
         >
-          <rect x={-38} y={-10} width={76} height={20} rx={10} />
-          <text textAnchor="middle" dominantBaseline="central">
-            ⚠ types differ
+          <rect
+            x={-mismatchWidth / 2}
+            y={-11}
+            width={mismatchWidth}
+            height={22}
+            rx={11}
+          />
+          {/* The warning mark is drawn, not typed: emoji and symbol glyphs
+              render differently on every OS. */}
+          <g
+            className="edge-label-icon"
+            transform={`translate(${-mismatchWidth / 2 + 8}, -6) scale(0.75)`}
+          >
+            <path d="M8 2.5L14 13H2L8 2.5z" />
+            <path d="M8 6.5v3M8 11.3v.2" />
+          </g>
+          <text x={8} textAnchor="middle" dominantBaseline="central">
+            {label}
           </text>
         </g>
       )}
@@ -287,7 +313,8 @@ function TypedEdge({
 
 const nodeTypes = { custom: CustomNode };
 const edgeTypes = { typed: TypedEdge };
-const defaultEdgeOptions = { animated: true, type: 'typed' };
+/** What every new connection gets; React Flow applies it to dragged ones only. */
+export const DEFAULT_EDGE_OPTIONS = { animated: true, type: 'typed' };
 
 export function WorkflowCanvas({
   nodes,
@@ -296,6 +323,7 @@ export function WorkflowCanvas({
   onEdgesChange,
   onConnect,
   onSelectionChange,
+  onDragStart,
 }: {
   nodes: any[];
   edges: any[];
@@ -303,33 +331,108 @@ export function WorkflowCanvas({
   onEdgesChange: (changes: any) => void;
   onConnect: (params: any) => void;
   onSelectionChange: (selection: any) => void;
+  /** A drag of one or several nodes is about to begin (one undo step). */
+  onDragStart?: () => void;
 }) {
+  const [minimapOpen, setMinimapOpen] = useState(readMinimapOpen);
+  const toggleMinimap = () => {
+    setMinimapOpen((open) => {
+      writeMinimapOpen(!open);
+      return !open;
+    });
+  };
+
   return (
     <ReactFlow
       nodes={nodes}
       edges={edges}
-      defaultEdgeOptions={defaultEdgeOptions}
+      defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
       onSelectionChange={onSelectionChange}
+      onNodeDragStart={onDragStart}
+      onSelectionDragStart={onDragStart}
+      // The editor deletes on Delete/Backspace itself (never while typing),
+      // so the removal is one undo step and also covers selected connections.
+      deleteKeyCode={null}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       fitView
       // A lone first node would otherwise be fitted at React Flow's 2x maximum
       // zoom, which makes it huge and throws off where later nodes land.
       fitViewOptions={{ maxZoom: 1 }}
+      // A 20-step pipeline laid out left to right is wider than the canvas at React Flow's
+      // default minimum zoom of 0.5, so "fit view" could not show all of it (the Ribo-seq
+      // template lost its last steps off the right edge).
+      minZoom={0.2}
     >
       <Background
         variant={BackgroundVariant.Dots}
         gap={30}
-        color="var(--canvas-grid)"
+        color="var(--canvas-dot)"
       />
-      <Controls />
-      <MiniMap
-        nodeStrokeWidth={1}
-        nodeColor={(node: any) => node.data?.color || '#aaa'}
-      />
+      {/* Top right: the run controls own the left edge, the minimap the bottom right. */}
+      <Controls position="top-right" orientation="horizontal" />
+      <MinimapToggle open={minimapOpen} onToggle={toggleMinimap} />
+      {minimapOpen && (
+        <MiniMap
+          className="canvas-minimap"
+          style={{ width: MINIMAP_WIDTH, height: MINIMAP_HEIGHT }}
+          nodeStrokeWidth={1}
+          nodeColor={(node: any) => nodeColorVar(node.data?.color)}
+          ariaLabel="Overview of the workflow"
+        />
+      )}
     </ReactFlow>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// Overview map
+// -----------------------------------------------------------------------------
+
+/** Small on purpose: it shows where the steps are, it does not compete with them. */
+export const MINIMAP_WIDTH = 132;
+export const MINIMAP_HEIGHT = 84;
+const MINIMAP_KEY = 'rustrunner.minimap-open';
+
+/** Whether the overview was left open last time (open by default); a per-viewer convenience. */
+function readMinimapOpen(): boolean {
+  try {
+    return window.localStorage.getItem(MINIMAP_KEY) !== 'closed';
+  } catch {
+    return true;
+  }
+}
+
+function writeMinimapOpen(open: boolean): void {
+  try {
+    window.localStorage.setItem(MINIMAP_KEY, open ? 'open' : 'closed');
+  } catch {
+    /* private window or blocked storage: the choice only lasts for this session */
+  }
+}
+
+/** The button that hides or shows the overview; it sits just above the map, or alone when the map is hidden. */
+function MinimapToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <FlowPanel
+      position="bottom-right"
+      className="minimap-toggle"
+      style={{ marginBottom: open ? MINIMAP_HEIGHT + 24 : 24 }}
+    >
+      <Button
+        size="sm"
+        variant="ghost"
+        icon={open ? 'chevron-down' : 'chevron-right'}
+        pressed={open}
+        aria-expanded={open}
+        data-testid="minimap-toggle"
+        onClick={onToggle}
+      >
+        {open ? 'Hide overview' : 'Show overview'}
+      </Button>
+    </FlowPanel>
   );
 }

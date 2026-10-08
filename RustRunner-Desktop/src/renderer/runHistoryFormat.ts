@@ -1,6 +1,7 @@
 /** Wording for the run history list. Pure, so it can be unit-tested. */
 
 import type { RunHistoryEntry, RunHistoryStatus } from '../main/runHistory';
+import type { IconName } from './ui/Icon';
 
 /** "850 ms", "12.3 s", "4 min 07 s", "1 h 02 min". */
 export function formatDuration(secs: number): string {
@@ -15,21 +16,37 @@ export function formatDuration(secs: number): string {
   return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`;
 }
 
-/** The start time in the viewer's locale; the raw text when it is not a date. */
-export function formatStarted(entry: Pick<RunHistoryEntry, 'startedAt' | 'startedMs'>): string {
+/**
+ * The start time in the viewer's locale with the month as a word ("7 Oct
+ * 2026, 00:01"), so day and month cannot be confused; the raw text when it is
+ * not a date. `locale` is for tests.
+ */
+export function formatStarted(
+  entry: Pick<RunHistoryEntry, 'startedAt' | 'startedMs'>,
+  locale?: string
+): string {
   if (entry.startedMs === null) return entry.startedAt;
-  return new Date(entry.startedMs).toLocaleString();
+  return new Date(entry.startedMs).toLocaleString(locale, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
-export const STATUS_TEXT: Record<RunHistoryStatus, { glyph: string; label: string }> = {
-  succeeded: { glyph: '✓', label: 'Succeeded' },
-  failed: { glyph: '✕', label: 'Failed' },
-  stopped: { glyph: '■', label: 'Stopped' },
-  unknown: { glyph: '?', label: 'Unknown' },
+/** Icon and wording for each run outcome; the icon never stands alone. */
+export const STATUS_TEXT: Record<RunHistoryStatus, { icon: IconName; label: string }> = {
+  succeeded: { icon: 'check', label: 'Succeeded' },
+  failed: { icon: 'x', label: 'Failed' },
+  stopped: { icon: 'stop', label: 'Stopped' },
+  unknown: { icon: 'info', label: 'Unknown' },
 };
 
 /** "3 of 5 steps succeeded, 1 failed, 1 skipped": only the non-zero parts. */
-export function formatCounts(entry: RunHistoryEntry): string {
+export function formatCounts(
+  entry: Pick<RunHistoryEntry, 'succeeded' | 'failed' | 'skipped' | 'total'>
+): string {
   const parts = [`${entry.succeeded} succeeded`];
   if (entry.failed > 0) parts.push(`${entry.failed} failed`);
   if (entry.skipped > 0) parts.push(`${entry.skipped} skipped`);

@@ -14,6 +14,9 @@ import {
   addEdge,
   ReactFlowProvider,
 } from '@xyflow/react';
+import './styles/tokens.css';
+import './styles/base.css';
+import './ui/ui.css';
 import './App.css';
 import {
   applyRunEvent,
@@ -33,26 +36,108 @@ import {
   labelToId,
   validateWorkflow,
 } from './workflowConversion';
-import { occupiedRects } from './nodePlacement';
+import {
+  belowPosition,
+  occupiedRects,
+  typicalNodeSize,
+  viewportToReveal,
+} from './nodePlacement';
+import {
+  emptyHistory,
+  record,
+  redo,
+  takeSnapshot,
+  undo,
+  type GraphSnapshot,
+  type History,
+  type RecordOptions,
+} from './history';
+import {
+  blockedReason,
+  collectIssues,
+  fieldErrors,
+  type ValidationIssue,
+} from './validation';
+import {
+  SHORTCUTS,
+  formatKeys,
+  isTypingTarget,
+  matchShortcut,
+  type ShortcutAction,
+} from './shortcuts';
+import { RUN_TOOLTIPS, describeRunState, type RunOutcome } from './runState';
 import { describeResume, type ResumeInfo } from './resume';
 import { UpdateBanner, type UpdateStatus } from './components/UpdateBanner';
-import { PropertiesPanel } from './components/PropertiesPanel';
+import { PropertiesPanel, type FocusRequest } from './components/PropertiesPanel';
+import { EmptyState } from './components/EmptyState';
+import { ProblemsPanel } from './components/ProblemsPanel';
+import { TemplateGallery } from './components/TemplateGallery';
+import { SaveTemplateDialog } from './components/SaveTemplateDialog';
+import { instantiateTemplate, valuesFromText, type SettingTexts } from './templates/instantiate';
+import { templateBlockers } from './templates/fromWorkflow';
+import type { WorkflowTemplate } from './templates/schema';
 import { ExecutionLogs, type ExecutionTab } from './components/ExecutionLogs';
 import { StepStatusPanel } from './components/StepStatusPanel';
 import { RunHistoryPanel } from './components/RunHistoryPanel';
 import type { RunHistoryEntry } from '../main/runHistory';
 import { ToolPalette } from './components/ToolPalette';
+import { EMPTY_PREFS, cleanPrefs, recordRecent, type PalettePrefs } from './toolBrowser';
 import {
   buildCatalogNodeData,
   checkEdge,
+  findTool,
   validateCatalogNodes,
   type CatalogTool,
 } from './tools/catalog';
+import { migrateNodes } from './tools/migrate';
 import {
+  DEFAULT_EDGE_OPTIONS,
   WorkflowCanvas,
-  DEFAULT_COLOR,
   nextNodePosition,
 } from './components/WorkflowCanvas';
+import { setConnection, upstreamChoices } from './connections';
+import {
+  applyBinding,
+  connectWithBinding,
+  kindPatch,
+  linkChoices,
+  linkPatch,
+  planBinding,
+  previewForNode,
+  slotStates,
+  typedPatch,
+  unlinkPatch,
+  type BindingOption,
+  type SlotKind,
+} from './slots';
+import { DEFAULT_NODE_COLOR } from './nodeColors';
+import {
+  Badge,
+  Button,
+  Checkbox,
+  ConfirmDialog,
+  Dialog,
+  Icon,
+  IconButton,
+  Kbd,
+  TextField,
+  ToastHost,
+  Tooltip,
+  useToasts,
+  type ConfirmRequest,
+} from './ui';
+import { RunBanner } from './components/RunBanner';
+import {
+  PENDING_STATUS,
+  buildFailureCard,
+  describeSetupProblem,
+  describeRunResult,
+  sectionToEdit,
+  type FailureCardData,
+  type RunResult,
+  type SetupProblemView,
+} from './runFeedback';
+import type { LogFilter } from './logLines';
 
 /**
  * Cap on retained log lines. A chatty run (or `seq 1 200000`) used to grow
@@ -61,9 +146,15 @@ import {
  */
 const MAX_LOG_LINES = 5000;
 
-/** Cap on undo history depth. */
-const MAX_HISTORY = 50;
+/** Space the run controls take at the left of the canvas, in pixels (for fitting a new template). */
+const TEMPLATE_INSET_LEFT = 216;
+/** The same with the problem list open beside them. */
+const TEMPLATE_INSET_WITH_LIST = 600;
+/** Narrowest canvas that opens the problem list after creating from a template. */
+const TEMPLATE_LIST_MIN_WIDTH = 1100;
 
+/** The Mac check decides which key is "Mod" in shortcuts and their labels. */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent);
 
 // =============================================================================
 // Main Editor Component
@@ -101,19 +192,58 @@ function WorkflowEditorInner() {
   const [resumeInfo, setResumeInfo] = useState<ResumeInfo | null>(null);
   /** Runs of this workflow in the working directory, newest first. */
   const [runHistory, setRunHistory] = useState<RunHistoryEntry[]>([]);
+  const [historyStatus, setHistoryStatus] = useState<'loading' | 'ready' | 'error'>('ready');
+  /** Bumped by "Try again" to reload the history. */
+  const [historyReload, setHistoryReload] = useState(0);
   /** HTML report of the last real run (absolute path from the engine). */
   const [latestReport, setLatestReport] = useState<string | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateDismissed, setUpdateDismissed] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** Favourite and recently used tools, kept in the app's settings file. */
+  const [palettePrefs, setPalettePrefs] = useState<PalettePrefs>(EMPTY_PREFS);
+  /** A connection that could fill several file slots: the person picks one in the later step's properties. */
+  const [pendingBinding, setPendingBinding] = useState<{ sourceId: string; targetId: string } | null>(null);
   /** The canvas viewport, for placing new nodes where they're actually visible. */
   const flowWrapperRef = useRef<HTMLDivElement>(null);
-  const { screenToFlowPosition } = useReactFlow();
+  /** The catalog button, so closing the palette hands focus back to it. */
+  const paletteButtonRef = useRef<HTMLButtonElement>(null);
+  const { screenToFlowPosition, fitView, getViewport, setViewport } = useReactFlow();
+
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  /** The "New from template" gallery, and the "Save as template" dialog. */
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  /** The problem list is open (the person asked, or tried to run with problems). */
+  const [problemsOpen, setProblemsOpen] = useState(false);
+  /** Show every problem on its field, not only on fields already visited. */
+  const [revealProblems, setRevealProblems] = useState(false);
+  const [focusRequest, setFocusRequest] = useState<FocusRequest | null>(null);
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+  const confirmResolver = useRef<((ok: boolean) => void) | null>(null);
+  const [runOutcome, setRunOutcome] = useState<RunOutcome | null>(null);
+  const [dryRunActive, setDryRunActive] = useState(false);
+  /** How the last run ended, from the engine's `run_finished` event. */
+  const [runResult, setRunResult] = useState<(RunResult & { dry: boolean }) | null>(null);
+  const [summaryDismissed, setSummaryDismissed] = useState(false);
+  /** Why the last run could not start, from the engine's `setup_failed` event. */
+  const [setupProblem, setSetupProblem] = useState<SetupProblemView | null>(null);
+  const [logFilter, setLogFilter] = useState<LogFilter>('all');
+  const { toasts, notify, dismiss: dismissToast } = useToasts();
+  /** Whether the run now in flight is a dry run, readable from the IPC listeners. */
+  const dryRunRef = useRef(false);
 
   const selectedNode =
     nodes.find((n: any) => n.id === selectedNodeId) ?? null;
 
   const invalidNodeIds = findInvalidNodeIds(nodes);
+
+  /** Everything that stops a run, for the problem list, the fields and the Run buttons. */
+  const issues = useMemo(
+    () => collectIssues(nodes, nodeWildcardFiles, edges),
+    [nodes, nodeWildcardFiles, edges]
+  );
+  const hasProblems = nodes.length > 0 && issues.length > 0;
 
   /**
    * Base step ids currently on the canvas, used to attribute engine events
@@ -172,6 +302,23 @@ function WorkflowEditorInner() {
     [appendLogLines]
   );
 
+  // The favourite and recent tools saved by an earlier session.
+  useEffect(() => {
+    let cancelled = false;
+    window.electron.ipcRenderer
+      .getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        const saved = cleanPrefs(settings.palette);
+        // A change made before the file was read wins over what was saved.
+        setPalettePrefs((current) => (current === EMPTY_PREFS ? saved : current));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Setup IPC listeners
   useEffect(() => {
     const unsubscribeOutput = window.electron.ipcRenderer.onWorkflowOutput(
@@ -185,9 +332,23 @@ function WorkflowEditorInner() {
     // Typed run events drive the canvas badges and the status panel.
     const unsubscribeEvent = window.electron.ipcRenderer.onWorkflowEvent(
       (runEvent) => {
-        if (runEvent.event === 'run_started') setLatestReport(null);
-        if (runEvent.event === 'run_finished' && runEvent.report) {
-          setLatestReport(runEvent.report);
+        if (runEvent.event === 'run_started') {
+          setLatestReport(null);
+          setRunResult(null);
+          setSetupProblem(null);
+          setSummaryDismissed(false);
+        }
+        if (runEvent.event === 'setup_failed') {
+          setSetupProblem(describeSetupProblem(runEvent));
+        }
+        if (runEvent.event === 'run_finished') {
+          if (runEvent.report) setLatestReport(runEvent.report);
+          setRunResult({
+            status: runEvent.status,
+            summary: runEvent.summary,
+            report: runEvent.report,
+            dry: dryRunRef.current,
+          });
         }
         const event = toStepEvent(runEvent);
         if (!event || !resolveBaseStepId(event.stepId, baseStepIdsRef.current)) {
@@ -201,6 +362,12 @@ function WorkflowEditorInner() {
       (success: boolean, message: string, outcome?: string) => {
         setExecutionState('idle');
         setRunPhase('ended');
+        // A dry run runs nothing, so it does not change how the last real run ended.
+        if (!dryRunRef.current) {
+          setRunOutcome(outcome === 'stopped' ? 'stopped' : success ? 'success' : 'failed');
+        }
+        dryRunRef.current = false;
+        setDryRunActive(false);
         if (outcome === 'stopped') {
           addLog('Workflow stopped by user');
         } else {
@@ -213,7 +380,11 @@ function WorkflowEditorInner() {
       (error: string) => {
         setExecutionState('idle');
         setRunPhase('ended');
+        if (!dryRunRef.current) setRunOutcome('failed');
+        dryRunRef.current = false;
+        setDryRunActive(false);
         addLog(`Execution error: ${error}`);
+        notify('danger', 'The run could not be started. See the log for details.');
       }
     );
 
@@ -241,7 +412,7 @@ function WorkflowEditorInner() {
       unsubscribeError();
       unsubscribeUpdate();
     };
-  }, [addLog, appendLogLines]);
+  }, [addLog, appendLogLines, notify]);
 
   // Auto-dismiss the "up to date" toast after a few seconds — it's only
   // there to give feedback that the manual check ran; we don't want it
@@ -266,13 +437,100 @@ function WorkflowEditorInner() {
     setSelectedNodeId(selectedNodes?.length > 0 ? selectedNodes[0].id : null);
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // Undo / redo
+  //
+  // Snapshots of the structural state (nodes, edges, selected files), kept in a
+  // ref so recording one does not render. `recordEdit` is called *before* an
+  // edit changes the canvas; the rules live in ./history.
+  // ---------------------------------------------------------------------------
+
+  /** The latest canvas state, readable from callbacks that must not re-subscribe. */
+  const graphRef = useRef<{ nodes: any[]; edges: any[]; wildcardFiles: Record<string, string[]> }>({
+    nodes,
+    edges,
+    wildcardFiles: nodeWildcardFiles,
+  });
+  graphRef.current = { nodes, edges, wildcardFiles: nodeWildcardFiles };
+
+  const historyRef = useRef<History<GraphSnapshot>>(emptyHistory());
+
+  const currentSnapshot = useCallback((): GraphSnapshot => {
+    const g = graphRef.current;
+    return takeSnapshot(g.nodes, g.edges, g.wildcardFiles);
+  }, []);
+
+  const recordEdit = useCallback(
+    (options?: RecordOptions) => {
+      historyRef.current = record(historyRef.current, currentSnapshot, options);
+    },
+    [currentSnapshot]
+  );
+
+  const resetHistory = useCallback(() => {
+    historyRef.current = emptyHistory();
+  }, []);
+
+  const restore = useCallback((state: GraphSnapshot) => {
+    setNodes(state.nodes);
+    setEdges(state.edges);
+    setNodeWildcardFiles(state.wildcardFiles);
+    setSelectedNodeId(null);
+  }, []);
+
+  const stepHistory = useCallback(
+    (direction: 'undo' | 'redo') => {
+      const step = (direction === 'undo' ? undo : redo)(historyRef.current, currentSnapshot());
+      if (!step) return;
+      historyRef.current = step.history;
+      restore(step.state);
+      markDirty();
+    },
+    [currentSnapshot, restore, markDirty]
+  );
+
+  /**
+   * Undo and redo from the Edit menu. A focused text field gets its own native
+   * undo instead; the accelerator is captured by the menu, so it is forwarded
+   * rather than swallowed.
+   */
+  const handleUndo = useCallback(() => {
+    const el = document.activeElement;
+    if (isTypingTarget(el)) {
+      document.execCommand('undo');
+      return;
+    }
+    stepHistory('undo');
+  }, [stepHistory]);
+
+  const handleRedo = useCallback(() => {
+    const el = document.activeElement;
+    if (isTypingTarget(el)) {
+      document.execCommand('redo');
+      return;
+    }
+    stepHistory('redo');
+  }, [stepHistory]);
+
   const onNodesChange = useCallback(
     (changes: any) => {
-      setNodes((nds) => applyNodeChanges(changes, nds) as any[]);
+      // updateNodeData (the colour picker) hands back the node as the canvas
+      // sees it, with the live status and problem keys added. Those are derived
+      // and must not become part of the saved node.
+      const cleaned = changes.map((c: any) => {
+        if (c.type !== 'replace' || !c.item?.data) return c;
+        const data = Object.fromEntries(
+          Object.entries(c.item.data).filter(([key]) => !key.startsWith('__'))
+        );
+        return { ...c, item: { ...c.item, data } };
+      });
+      if (cleaned.some((c: any) => c.type === 'replace')) {
+        recordEdit({ key: `replace:${cleaned.find((c: any) => c.type === 'replace').id}` });
+      }
+      setNodes((nds) => applyNodeChanges(cleaned, nds) as any[]);
 
-      // Deletions can also come from the Delete/Backspace key, which bypasses
-      // deleteSelectedNodes entirely. Purge here so the wildcard map doesn't
-      // accumulate entries for nodes that no longer exist.
+      // Deletions can also come from the canvas itself. Purge here so the
+      // wildcard map doesn't accumulate entries for nodes that no longer exist.
       const removed = changes.filter((c: any) => c.type === 'remove');
       if (removed.length > 0) {
         const removedIds = removed.map((c: any) => c.id);
@@ -288,7 +546,7 @@ function WorkflowEditorInner() {
         markDirty();
       }
     },
-    [markDirty]
+    [markDirty, recordEdit]
   );
 
   const onEdgesChange = useCallback(
@@ -299,16 +557,71 @@ function WorkflowEditorInner() {
     [markDirty]
   );
 
+  /**
+   * A new connection fills a free file slot of the later step with a matching
+   * output of the earlier one (see slots.ts). When several fit, the person is
+   * asked in the later step's properties, which open for that.
+   */
+  const bindAfterConnect = useCallback(
+    (sourceId: string, targetId: string, edgesBefore: any[], edgesAfter: any[]) => {
+      const current = graphRef.current.nodes;
+      const { nodes: bound, plan } = connectWithBinding(
+        current,
+        edgesBefore,
+        edgesAfter,
+        sourceId,
+        targetId
+      );
+      if (plan.kind === 'ask') {
+        setNodes(bound.map((n: any) => (n.selected === (n.id === targetId) ? n : { ...n, selected: n.id === targetId })));
+        setSelectedNodeId(targetId);
+        setPendingBinding({ sourceId, targetId });
+        return;
+      }
+      setPendingBinding(null);
+      if (bound.some((n: any, i: number) => n !== current[i])) setNodes(bound);
+    },
+    []
+  );
+
   const onConnect = useCallback(
     (params: any) => {
-      setEdges((eds) => addEdge(params, eds) as any[]);
+      recordEdit();
+      const before = graphRef.current.edges;
+      const after = addEdge(params, before) as any[];
+      setEdges(after);
+      if (after.length > before.length) {
+        bindAfterConnect(params.source, params.target, before, after);
+      }
       markDirty();
     },
-    [markDirty]
+    [markDirty, recordEdit, bindAfterConnect]
   );
+
+  /**
+   * "Runs after" in the properties panel: the keyboard's way to connect two
+   * steps. Same edge as a drag, one undo step; loops are refused.
+   */
+  const onConnectionChange = useCallback(
+    (sourceId: string, targetId: string, connected: boolean) => {
+      recordEdit();
+      const before = graphRef.current.edges;
+      const after = setConnection(before, sourceId, targetId, connected, DEFAULT_EDGE_OPTIONS);
+      setEdges(after);
+      if (connected && after.length > before.length) {
+        bindAfterConnect(sourceId, targetId, before, after);
+      }
+      markDirty();
+    },
+    [markDirty, recordEdit, bindAfterConnect]
+  );
+
+  /** A drag is one undo step: the state from before it started. */
+  const onDragStart = useCallback(() => recordEdit(), [recordEdit]);
 
   const onNodeUpdate = useCallback(
     (nodeId: string, field: string, value: string | boolean) => {
+      recordEdit({ key: `${nodeId}:${field}` });
       setNodes((nds) =>
         nds.map((node: any) =>
           node.id === nodeId
@@ -318,12 +631,13 @@ function WorkflowEditorInner() {
       );
       markDirty();
     },
-    [markDirty]
+    [markDirty, recordEdit]
   );
 
   /** Changes several fields of a node at once, so no render sees a half-applied edit. */
   const onNodePatch = useCallback(
     (nodeId: string, patch: Record<string, unknown>) => {
+      recordEdit({ key: `${nodeId}:${Object.keys(patch).sort().join(',')}` });
       setNodes((nds) =>
         nds.map((node: any) =>
           node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
@@ -331,96 +645,59 @@ function WorkflowEditorInner() {
       );
       markDirty();
     },
-    [markDirty]
+    [markDirty, recordEdit]
   );
 
   const handleNodeFilesUpdate = useCallback(
     (nodeId: string, files: string[]) => {
+      recordEdit({ key: `${nodeId}:files` });
       setNodeWildcardFiles((prev) => ({ ...prev, [nodeId]: files }));
       markDirty();
     },
-    [markDirty]
+    [markDirty, recordEdit]
   );
 
-  // ---------------------------------------------------------------------------
-  // Undo / redo
-  //
-  // Snapshots of the structural state only. Held in refs rather than state so
-  // pushing a snapshot doesn't itself trigger a render.
-  // ---------------------------------------------------------------------------
-
-  const undoStack = useRef<any[]>([]);
-  const redoStack = useRef<any[]>([]);
-
-  const snapshot = useCallback(
-    () => ({
-      nodes: JSON.parse(JSON.stringify(nodes)),
-      edges: JSON.parse(JSON.stringify(edges)),
-      nodeWildcardFiles: JSON.parse(JSON.stringify(nodeWildcardFiles)),
-    }),
-    [nodes, edges, nodeWildcardFiles]
-  );
-
-  /** Records the current state as an undo point. Call *before* mutating. */
-  const pushHistory = useCallback(() => {
-    undoStack.current = [...undoStack.current, snapshot()].slice(-MAX_HISTORY);
-    redoStack.current = [];
-  }, [snapshot]);
-
-  const restore = useCallback((state: any) => {
-    setNodes(state.nodes);
-    setEdges(state.edges);
-    setNodeWildcardFiles(state.nodeWildcardFiles);
-    setSelectedNodeId(null);
-  }, []);
-
-  const handleUndo = useCallback(() => {
-    // A focused text field gets native undo instead — the accelerator is
-    // captured by the menu, so forward it rather than swallowing it.
-    const tag = document.activeElement?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA') {
-      document.execCommand('undo');
-      return;
+  /**
+   * Where a new step goes: under the selected step, or under the one added
+   * last, so a chain reads top to bottom and its connections run straight
+   * down (see belowPosition). The view pans when that spot is off screen.
+   * With nothing to follow, the first free cell of the visible canvas.
+   */
+  const placeNewNode = useCallback((): { x: number; y: number } => {
+    const occupied = occupiedRects(nodes);
+    const anchorNode = nodes.find((n: any) => n.id === selectedNodeId) ?? nodes[nodes.length - 1];
+    const below = anchorNode ? belowPosition(occupiedRects([anchorNode])[0], occupied) : null;
+    if (!below) {
+      return nextNodePosition(flowWrapperRef.current, nodes.length, screenToFlowPosition, occupied);
     }
-
-    const prev = undoStack.current[undoStack.current.length - 1];
-    if (!prev) return;
-
-    undoStack.current = undoStack.current.slice(0, -1);
-    redoStack.current = [...redoStack.current, snapshot()].slice(-MAX_HISTORY);
-    restore(prev);
-    markDirty();
-  }, [snapshot, restore, markDirty]);
-
-  const handleRedo = useCallback(() => {
-    const tag = document.activeElement?.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA') {
-      document.execCommand('redo');
-      return;
+    const wrapper = flowWrapperRef.current;
+    if (wrapper) {
+      const box = wrapper.getBoundingClientRect();
+      const current = getViewport();
+      const next = viewportToReveal(
+        current,
+        { ...below, ...typicalNodeSize(occupied) },
+        { width: box.width, height: box.height },
+        // Clear of the run controls on the left; on the right, of the
+        // properties panel that opens when nothing was selected yet.
+        { top: 16, left: 216, bottom: 24, right: 24 + (selectedNodeId ? 0 : 320) }
+      );
+      if (next.x !== current.x || next.y !== current.y) void setViewport(next);
     }
-
-    const next = redoStack.current[redoStack.current.length - 1];
-    if (!next) return;
-
-    redoStack.current = redoStack.current.slice(0, -1);
-    undoStack.current = [...undoStack.current, snapshot()].slice(-MAX_HISTORY);
-    restore(next);
-    markDirty();
-  }, [snapshot, restore, markDirty]);
+    return below;
+  }, [nodes, selectedNodeId, screenToFlowPosition, getViewport, setViewport]);
 
   const addNode = useCallback(() => {
-    pushHistory();
+    recordEdit();
 
-    const position = nextNodePosition(
-      flowWrapperRef.current,
-      nodes.length,
-      screenToFlowPosition,
-      occupiedRects(nodes)
-    );
+    const position = placeNewNode();
 
+    // Selected at once, like a step from the catalog, so its properties are
+    // next in the tab order and the keyboard can fill it in straight away.
     const newNode = {
       id: `node_${Date.now()}`,
       position,
+      selected: true,
       data: {
         label: `Node ${nodes.length + 1}`,
         tool: '',
@@ -428,25 +705,45 @@ function WorkflowEditorInner() {
         input: '',
         output: '',
         threads: 1,
-        color: DEFAULT_COLOR,
+        color: DEFAULT_NODE_COLOR,
       },
       type: 'custom',
     };
-    setNodes((nds) => [...nds, newNode]);
+    setNodes((nds) => [...nds.map((n: any) => (n.selected ? { ...n, selected: false } : n)), newNode]);
+    setEdges((eds) => (eds.some((e: any) => e.selected) ? eds.map((e: any) => ({ ...e, selected: false })) : eds));
+    setSelectedNodeId(newNode.id);
+    // The problem list would cover the new step; its button stays.
+    setProblemsOpen(false);
     markDirty();
-  }, [nodes, screenToFlowPosition, pushHistory, markDirty]);
+  }, [nodes, placeNewNode, recordEdit, markDirty]);
 
   /** Adds a node prefilled from a catalog tool and selects it, so its options show. */
+  /** Remembers the palette's favourites and recent tools in the settings file. */
+  const updatePalettePrefs = useCallback(
+    (next: PalettePrefs) => {
+      setPalettePrefs(next);
+      window.electron.ipcRenderer.setPalettePrefs(next).catch(() => {
+        notify('danger', 'Your favourite tools could not be saved.');
+      });
+    },
+    [notify]
+  );
+
+  const openToolDocs = useCallback(
+    (url: string) => {
+      void window.electron.ipcRenderer.openDocs(url).then((result) => {
+        if (!result.ok) notify('danger', 'The documentation page could not be opened.');
+      });
+    },
+    [notify]
+  );
+
   const addCatalogNode = useCallback(
     (tool: CatalogTool) => {
-      pushHistory();
+      updatePalettePrefs(recordRecent(palettePrefs, tool.id));
+      recordEdit();
 
-      const position = nextNodePosition(
-        flowWrapperRef.current,
-        nodes.length,
-        screenToFlowPosition,
-        occupiedRects(nodes)
-      );
+      const position = placeNewNode();
 
       const newNode = {
         id: `node_${Date.now()}`,
@@ -461,49 +758,88 @@ function WorkflowEditorInner() {
       setNodes((nds) => [...nds.map((n: any) => ({ ...n, selected: false })), newNode]);
       setSelectedNodeId(newNode.id);
       setPaletteOpen(false);
+      setProblemsOpen(false);
       markDirty();
     },
-    [nodes, screenToFlowPosition, pushHistory, markDirty]
+    [nodes, placeNewNode, recordEdit, markDirty, palettePrefs, updatePalettePrefs]
   );
 
-  const deleteSelectedNodes = useCallback(() => {
-    const selectedIds = nodes.filter((n: any) => n.selected).map((n: any) => n.id);
-    if (selectedIds.length === 0) return;
+  /** Removes the selected steps (with their connections) and the selected connections. */
+  const deleteSelection = useCallback(() => {
+    const g = graphRef.current;
+    const nodeIds = g.nodes.filter((n: any) => n.selected).map((n: any) => n.id);
+    const edgeIds = g.edges.filter((e: any) => e.selected).map((e: any) => e.id);
+    if (nodeIds.length === 0 && edgeIds.length === 0) return;
 
-    pushHistory();
-    setNodes((nds) => nds.filter((node: any) => !node.selected));
+    recordEdit();
+    setNodes((nds) => nds.filter((node: any) => !nodeIds.includes(node.id)));
     setEdges((eds) =>
-      eds.filter((edge: any) => !selectedIds.includes(edge.source) && !selectedIds.includes(edge.target))
+      eds.filter(
+        (edge: any) =>
+          !edgeIds.includes(edge.id) &&
+          !nodeIds.includes(edge.source) &&
+          !nodeIds.includes(edge.target)
+      )
     );
-
     setNodeWildcardFiles((prev) => {
       const updated = { ...prev };
-      selectedIds.forEach((id) => delete updated[id]);
+      nodeIds.forEach((id: string) => delete updated[id]);
       return updated;
     });
-
     setSelectedNodeId(null);
     markDirty();
-  }, [nodes, pushHistory, markDirty]);
+  }, [recordEdit, markDirty]);
+
+  /** Clears the selection (Escape). */
+  const deselectAll = useCallback(() => {
+    setNodes((nds) => (nds.some((n: any) => n.selected) ? nds.map((n: any) => ({ ...n, selected: false })) : nds));
+    setEdges((eds) => (eds.some((e: any) => e.selected) ? eds.map((e: any) => ({ ...e, selected: false })) : eds));
+    setSelectedNodeId(null);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // File operations
   // ---------------------------------------------------------------------------
+
+  /** Asks in the app (not the operating system) and resolves with the answer. */
+  const askConfirm = useCallback(
+    (request: ConfirmRequest): Promise<boolean> =>
+      new Promise((resolve) => {
+        confirmResolver.current?.(false);
+        confirmResolver.current = resolve;
+        setConfirmRequest(request);
+      }),
+    []
+  );
+
+  const resolveConfirm = useCallback((ok: boolean) => {
+    confirmResolver.current?.(ok);
+    confirmResolver.current = null;
+    setConfirmRequest(null);
+  }, []);
 
   /**
    * Gate for destructive actions. Resolves false when the user backs out of
    * discarding unsaved work.
    */
   const confirmDiscardIfDirty = useCallback(
-    async (message: string): Promise<boolean> => {
+    async (request: ConfirmRequest): Promise<boolean> => {
       if (!isDirty) return true;
-      return window.electron.ipcRenderer.confirmDiscard(message);
+      return askConfirm(request);
     },
-    [isDirty]
+    [isDirty, askConfirm]
   );
 
   const handleNew = useCallback(async () => {
-    if (!(await confirmDiscardIfDirty('Start a new workflow without saving?'))) return;
+    if (
+      !(await confirmDiscardIfDirty({
+        title: 'Start a new workflow?',
+        message: 'This workflow has unsaved changes. Starting a new one discards them.',
+        confirmLabel: 'Discard changes',
+      }))
+    ) {
+      return;
+    }
     setTempWorkflowName('My Workflow');
     setTempWorkflowVersion('');
     setTempKeepGoing(false);
@@ -540,13 +876,13 @@ function WorkflowEditorInner() {
       {
         id: 'node_1',
         position: { x: 250, y: 100 },
-        data: { label: 'Start', tool: '', command: '', input: '', output: '', threads: 1, color: '#a8e6cf' },
+        data: { label: 'Start', tool: '', command: '', input: '', output: '', threads: 1, color: 'mint' },
         type: 'custom',
       },
       {
         id: 'node_2',
         position: { x: 250, y: 250 },
-        data: { label: 'Process', tool: '', command: '', input: '', output: '', threads: 1, color: DEFAULT_COLOR },
+        data: { label: 'Process', tool: '', command: '', input: '', output: '', threads: 1, color: DEFAULT_NODE_COLOR },
         type: 'custom',
       },
     ];
@@ -560,12 +896,111 @@ function WorkflowEditorInner() {
     setRunPhase('none');
     setCurrentFilePath(null);
     setIsDirty(false);
-    undoStack.current = [];
-    redoStack.current = [];
-  }, [tempWorkflowName, tempWorkflowVersion, tempKeepGoing, addLog]);
+    resetHistory();
+    setRunOutcome(null);
+    setProblemsOpen(false);
+    setRevealProblems(false);
+  }, [tempWorkflowName, tempWorkflowVersion, tempKeepGoing, addLog, resetHistory]);
+
+  /**
+   * Replaces the canvas with the steps of a template. The files the person
+   * chose are already in the steps' slots, and whatever is still missing shows
+   * in the problem list. Resolves false when the person keeps their current
+   * workflow instead.
+   */
+  const handleCreateFromTemplate = useCallback(
+    async (
+      template: WorkflowTemplate,
+      texts: Record<string, string>,
+      name: string,
+      settings: SettingTexts
+    ): Promise<boolean> => {
+      const made = instantiateTemplate(template, valuesFromText(template, texts), {
+        edgeDefaults: DEFAULT_EDGE_OPTIONS,
+        settings,
+      });
+      if (made.ok === false) {
+        notify('danger', made.errors[0]);
+        return false;
+      }
+      if (
+        !(await confirmDiscardIfDirty({
+          title: 'Replace the current workflow?',
+          message: 'This workflow has unsaved changes. Creating one from the template discards them.',
+          confirmLabel: 'Discard changes',
+        }))
+      ) {
+        return false;
+      }
+      setWorkflowName(name);
+      setWorkflowVersion('');
+      setKeepGoing(false);
+      // A workflow made from a template is a new identity, like New.
+      setWorkflowId(generateWorkflowId());
+      setNodes(made.nodes);
+      setEdges(made.edges);
+      setSelectedNodeId(null);
+      setExecutionState('idle');
+      setNodeWildcardFiles({});
+      setStepRuns({});
+      setRunPhase('none');
+      setCurrentFilePath(null);
+      // Nothing is saved yet, so closing now should ask first.
+      setIsDirty(true);
+      resetHistory();
+      setRunOutcome(null);
+      setRevealProblems(false);
+      // The list opens when there is room beside the run controls; a narrow window keeps its "problems" button.
+      const roomForList = (flowWrapperRef.current?.getBoundingClientRect().width ?? 0) >= TEMPLATE_LIST_MIN_WIDTH;
+      setProblemsOpen(made.missing.length > 0 && roomForList);
+      addLog(`New workflow created from template "${template.name}": ${made.nodes.length} steps`);
+      notify(
+        'success',
+        made.missing.length === 0
+          ? `Created "${name}" with ${made.nodes.length} steps.`
+          : `Created "${name}". ${made.missing.length === 1 ? 'One file is' : `${made.missing.length} files are`} still missing: the problem list shows where.`
+      );
+      // Fit the steps into the part of the canvas the run controls and the problem list leave free.
+      const left = made.missing.length > 0 && roomForList ? TEMPLATE_INSET_WITH_LIST : TEMPLATE_INSET_LEFT;
+      window.setTimeout(
+        () =>
+          fitView({
+            maxZoom: 1,
+            padding: { top: '24px', right: '24px', bottom: '24px', left: `${left}px` },
+            duration: 200,
+          }),
+        50
+      );
+      return true;
+    },
+    [notify, confirmDiscardIfDirty, resetHistory, addLog, fitView]
+  );
+
+  const saveBlockedReason = useMemo(() => templateBlockers(nodes)[0], [nodes]);
+
+  /** Stores the template and says where to find it; resolves a problem sentence or null. */
+  const handleSaveTemplate = useCallback(
+    async (template: WorkflowTemplate): Promise<string | null> => {
+      const result = await window.electron.ipcRenderer.saveUserTemplate(template);
+      if (result.ok === false) return result.error;
+      setSaveTemplateOpen(false);
+      addLog(`Saved template "${template.name}"`);
+      notify('success', `Saved "${template.name}". It is under New from template, My templates.`);
+      return null;
+    },
+    [addLog, notify]
+  );
 
   const handleOpen = useCallback(async () => {
-    if (!(await confirmDiscardIfDirty('Open another workflow without saving?'))) return;
+    if (
+      !(await confirmDiscardIfDirty({
+        title: 'Open another workflow?',
+        message: 'This workflow has unsaved changes. Opening another one discards them.',
+        confirmLabel: 'Discard changes',
+      }))
+    ) {
+      return;
+    }
 
     try {
       const result = await window.electron.ipcRenderer.openWorkflow();
@@ -577,14 +1012,18 @@ function WorkflowEditorInner() {
       // would otherwise blow up deep inside the renderer.
       if (!Array.isArray(data.nodes) || !Array.isArray(data.edges)) {
         addLog('Invalid workflow file: expected "nodes" and "edges" arrays');
+        notify('danger', 'That file is not a RustRunner workflow.');
         return;
       }
       if (!data.nodes.every((n: any) => n && typeof n.id === 'string' && n.position)) {
         addLog('Invalid workflow file: one or more nodes are malformed');
+        notify('danger', 'That workflow file is damaged: one or more steps cannot be read.');
         return;
       }
 
-      setNodes(data.nodes);
+      // Steps saved with the version 1 tool catalog are brought up to date.
+      const { nodes: openedNodes, migrated } = migrateNodes(data.nodes);
+      setNodes(openedNodes);
       setEdges(data.edges);
       setSelectedNodeId(null);
       setStepRuns({});
@@ -602,17 +1041,29 @@ function WorkflowEditorInner() {
       const hasId = isValidWorkflowId(fileId);
       setWorkflowId(hasId ? fileId : generateWorkflowId());
       setCurrentFilePath(result.path);
-      setIsDirty(!hasId);
-      undoStack.current = [];
-      redoStack.current = [];
+      setIsDirty(!hasId || migrated > 0);
+      resetHistory();
+      setRunOutcome(null);
+      setProblemsOpen(false);
+      setRevealProblems(false);
 
       addLog(
         `Workflow opened: ${data.nodes.length} nodes, ${data.edges.length} edges — ${result.path}`
       );
+      if (migrated > 0) {
+        addLog(`Updated ${migrated} catalog step(s) to the new tool catalog.`);
+        notify(
+          'info',
+          migrated === 1
+            ? 'One step was updated to the new tool catalog. Save to keep the change.'
+            : `${migrated} steps were updated to the new tool catalog. Save to keep the changes.`
+        );
+      }
     } catch (error) {
       addLog(`Failed to open workflow: ${error}`);
+      notify('danger', 'Could not open that workflow file.');
     }
-  }, [addLog, confirmDiscardIfDirty]);
+  }, [addLog, confirmDiscardIfDirty, resetHistory, notify]);
 
   /**
    * Writes the workflow. `saveAs` forces a location prompt; otherwise the
@@ -650,8 +1101,10 @@ function WorkflowEditorInner() {
         setCurrentFilePath(written);
         setIsDirty(false);
         addLog(`Workflow saved: ${written}`);
+        notify('success', `Saved ${written.split(/[\\/]/).pop()}`);
       } catch (error) {
         addLog(`Failed to save workflow: ${error}`);
+        notify('danger', 'Could not save the workflow. Check that the folder is writable.');
       }
     },
     [
@@ -664,6 +1117,7 @@ function WorkflowEditorInner() {
       keepGoing,
       currentFilePath,
       addLog,
+      notify,
     ]
   );
 
@@ -672,9 +1126,20 @@ function WorkflowEditorInner() {
 
   const handleClear = useCallback(async () => {
     if (nodes.length === 0 && edges.length === 0) return;
-    if (!(await confirmDiscardIfDirty('Clear all nodes and edges?'))) return;
+    if (
+      !(await confirmDiscardIfDirty({
+        title: 'Clear the canvas?',
+        message:
+          'Every step and connection is removed. You can bring them back with Undo (' +
+          formatKeys('Mod+Z', IS_MAC) +
+          ') until you open or start another workflow.',
+        confirmLabel: 'Clear canvas',
+      }))
+    ) {
+      return;
+    }
 
-    pushHistory();
+    recordEdit();
     setNodes([]);
     setEdges([]);
     setSelectedNodeId(null);
@@ -683,15 +1148,16 @@ function WorkflowEditorInner() {
     setStepRuns({});
     setRunPhase('none');
     addLog('Canvas cleared');
-  }, [nodes.length, edges.length, confirmDiscardIfDirty, pushHistory, addLog]);
+  }, [nodes.length, edges.length, confirmDiscardIfDirty, recordEdit, addLog]);
 
   const handleSelectDirectory = useCallback(async () => {
     const directory = await window.electron.ipcRenderer.selectDirectory();
     if (directory) {
       setWorkingDirectory(directory);
       addLog(`Working directory set: ${directory}`);
+      notify('info', `Working directory: ${directory}`);
     }
-  }, [addLog]);
+  }, [addLog, notify]);
 
   /**
    * Shared preflight for Run and Dry Run: resolves a working directory,
@@ -723,6 +1189,10 @@ function WorkflowEditorInner() {
       if (errors.length > 0) {
         addLog('Workflow validation failed:');
         errors.forEach((err) => addLog(`  - ${err}`));
+        notify(
+          'danger',
+          `The workflow cannot run yet: ${errors[0]}${errors.length > 1 ? ` (and ${errors.length - 1} more)` : ''}`
+        );
         return null;
       }
 
@@ -756,6 +1226,7 @@ function WorkflowEditorInner() {
       keepGoing,
       workingDirectory,
       addLog,
+      notify,
     ]
   );
 
@@ -790,18 +1261,23 @@ function WorkflowEditorInner() {
     }
     if (executionState !== 'idle') return;
     let cancelled = false;
+    setHistoryStatus('loading');
     window.electron.ipcRenderer
       .listRunHistory(workingDirectory, workflowName, workflowId)
       .then((runs) => {
-        if (!cancelled) setRunHistory(runs);
+        if (cancelled) return;
+        setRunHistory(runs);
+        setHistoryStatus('ready');
       })
       .catch(() => {
-        if (!cancelled) setRunHistory([]);
+        if (cancelled) return;
+        setRunHistory([]);
+        setHistoryStatus('error');
       });
     return () => {
       cancelled = true;
     };
-  }, [workflowName, workflowId, workingDirectory, executionState]);
+  }, [workflowName, workflowId, workingDirectory, executionState, historyReload]);
 
   const openReport = useCallback(
     async (reportRef: string) => {
@@ -810,13 +1286,31 @@ function WorkflowEditorInner() {
           workingDirectory,
           reportRef
         );
-        if (result.ok === false) addLog(`Could not open the report: ${result.error}`);
+        if (result.ok === false) {
+          addLog(`Could not open the report: ${result.error}`);
+          notify('danger', 'Could not open the report. It may have been moved or deleted.');
+        }
       } catch (err) {
         addLog(`Could not open the report: ${err instanceof Error ? err.message : String(err)}`);
+        notify('danger', 'Could not open the report. It may have been moved or deleted.');
       }
     },
-    [workingDirectory, addLog]
+    [workingDirectory, addLog, notify]
   );
+
+  /**
+   * True when a run must not start. With problems on the canvas the list opens
+   * and every one of them shows on its field: Run being greyed out is not left
+   * as the only signal.
+   */
+  const refuseRun = useCallback((): boolean => {
+    if (nodes.length === 0) return true;
+    if (issues.length === 0) return false;
+    setProblemsOpen(true);
+    setRevealProblems(true);
+    setPaletteOpen(false);
+    return true;
+  }, [nodes.length, issues.length]);
 
   // Execution. A normal run lets the engine skip every step whose outputs are
   // up to date (they exist, are newer than the inputs, and the step's command
@@ -825,6 +1319,7 @@ function WorkflowEditorInner() {
   // ignore its saved state so that every step runs.
   const startRun = useCallback(
     async (fresh: boolean) => {
+      if (refuseRun()) return;
       const prepared = await prepareRun(fresh ? 'run from scratch' : 'run');
       if (!prepared) return;
 
@@ -839,10 +1334,13 @@ function WorkflowEditorInner() {
         addLog('Running: no saved progress for this workflow yet, every step runs');
       }
 
+      dryRunRef.current = false;
+      setRunOutcome(null);
+      setRunResult(null);
       setExecutionState('running');
       window.electron.ipcRenderer.runWorkflow(prepared.workflow, false, prepared.dir, fresh);
     },
-    [prepareRun, resumeInfo, addLog]
+    [prepareRun, resumeInfo, addLog, refuseRun]
   );
 
   const handleRun = useCallback(async () => {
@@ -857,14 +1355,18 @@ function WorkflowEditorInner() {
   const handleRunFromScratch = useCallback(() => startRun(true), [startRun]);
 
   const handleDryRun = useCallback(async () => {
+    if (refuseRun()) return;
     const prepared = await prepareRun('dry run');
     if (!prepared) return;
+    dryRunRef.current = true;
+    setDryRunActive(true);
+    setRunResult(null);
 
     addLog('Starting dry run (commands will not execute)...');
     // Not fresh: the preview shows which steps would be skipped as up to date
     // and why the others would run. A dry run never touches saved state.
     window.electron.ipcRenderer.runWorkflow(prepared.workflow, true, prepared.dir, false);
-  }, [prepareRun, addLog]);
+  }, [prepareRun, addLog, refuseRun]);
 
   const handlePause = useCallback(() => {
     if (executionState === 'running') {
@@ -883,12 +1385,106 @@ function WorkflowEditorInner() {
 
   const handleClearLogs = useCallback(() => {
     setExecutionLogs([]);
-    const timestamp = new Date().toLocaleTimeString();
-    setExecutionLogs([`[${timestamp}] Logs cleared`]);
   }, []);
 
   const handleTogglePanel = useCallback(() => {
     setShowExecutionPanel((prev) => !prev);
+  }, []);
+
+  /** "Show logs" on the failure card: the log, narrowed to the errors. */
+  const showErrorLogs = useCallback(() => {
+    setShowExecutionPanel(true);
+    setExecutionTab('logs');
+    setLogFilter('errors');
+  }, []);
+
+  /** "Edit step" on the failure card: select the step and open the section that fixes it. */
+  const editFailedStep = useCallback(
+    (card: FailureCardData) => {
+      const node = nodes.find((n: any) => labelToId(n.data?.label || '') === card.nodeStepId);
+      if (!node) {
+        notify('warning', `"${card.nodeLabel}" is no longer on the canvas.`);
+        return;
+      }
+      setNodes((nds) => nds.map((n: any) => ({ ...n, selected: n.id === node.id })));
+      setEdges((eds) =>
+        eds.some((e: any) => e.selected) ? eds.map((e: any) => ({ ...e, selected: false })) : eds
+      );
+      setSelectedNodeId(node.id);
+      setFocusRequest({ nodeId: node.id, section: sectionToEdit(card) });
+      fitView({ nodes: [{ id: node.id }], maxZoom: 1, duration: 200 });
+    },
+    [nodes, notify, fitView]
+  );
+
+  /** Selects the step a problem belongs to, brings it into view and puts the cursor in the field. */
+  const jumpToIssue = useCallback(
+    (issue: ValidationIssue) => {
+      if (!issue.nodeId) return;
+      const nodeId = issue.nodeId;
+      setNodes((nds) => nds.map((n: any) => ({ ...n, selected: n.id === nodeId })));
+      setEdges((eds) => (eds.some((e: any) => e.selected) ? eds.map((e: any) => ({ ...e, selected: false })) : eds));
+      setSelectedNodeId(nodeId);
+      if (issue.field) setFocusRequest({ nodeId, field: issue.field });
+      fitView({ nodes: [{ id: nodeId }], maxZoom: 1, duration: 200 });
+    },
+    [fitView]
+  );
+
+  const openPalette = useCallback(() => {
+    setProblemsOpen(false);
+    setPaletteOpen(true);
+  }, []);
+
+  const closePalette = useCallback(() => {
+    setPaletteOpen(false);
+    paletteButtonRef.current?.focus();
+  }, []);
+
+  // Keyboard shortcuts. The handler reads the latest actions from a ref so the
+  // listener is attached once. The File and Edit menu accelerators can deliver
+  // the same key press too (the page may see it first), so one action is not
+  // run twice within a moment.
+  const shortcutActions = useRef<Record<ShortcutAction, () => void>>(null as never);
+  const modalOpen =
+    nameDialog !== null || confirmRequest !== null || shortcutsOpen || templatesOpen || saveTemplateOpen;
+  const modalOpenRef = useRef(false);
+  modalOpenRef.current = modalOpen;
+  shortcutActions.current = {
+    save: () => void handleSave(),
+    open: () => void handleOpen(),
+    run: () => {
+      if (executionState !== 'running') void handleRun();
+    },
+    palette: openPalette,
+    undo: () => stepHistory('undo'),
+    redo: () => stepHistory('redo'),
+    delete: deleteSelection,
+    escape: () => {
+      if (paletteOpen) closePalette();
+      else if (problemsOpen) setProblemsOpen(false);
+      else deselectAll();
+    },
+    help: () => setShortcutsOpen(true),
+  };
+  useEffect(() => {
+    let last = { action: '' as string, at: 0 };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || modalOpenRef.current) return;
+      const action = matchShortcut(e, { isMac: IS_MAC, typing: isTypingTarget(e.target) });
+      if (!action) return;
+      const now = Date.now();
+      if (last.action === action && now - last.at < 100) {
+        e.preventDefault();
+        return;
+      }
+      last = { action, at: now };
+      // Keys that act on the canvas must not also scroll or navigate the page.
+      e.preventDefault();
+      shortcutActions.current[action]();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
   // Menu → renderer dispatch. The File/Edit menu items can't act in the main
@@ -908,6 +1504,12 @@ function WorkflowEditorInner() {
           break;
         case 'save-as':
           handleSaveAs();
+          break;
+        case 'new-from-template':
+          setTemplatesOpen(true);
+          break;
+        case 'save-as-template':
+          setSaveTemplateOpen(true);
           break;
         case 'undo':
           handleUndo();
@@ -944,21 +1546,100 @@ function WorkflowEditorInner() {
   // reason: it is derived from the nodes and must not be saved.
   const decoratedEdges = useMemo(
     () =>
-      edges.map((edge: any) => ({
-        ...edge,
-        data: { ...edge.data, __typeCheck: checkEdge(edge, nodes) },
-      })),
-    [edges, nodes]
+      edges.map((edge: any) => {
+        const targetState = stepStatus[nodeIdToStepId(edge.target)]?.state;
+        return {
+          ...edge,
+          data: {
+            ...edge.data,
+            __typeCheck: checkEdge(edge, nodes),
+            // The edge that feeds a step that is working right now.
+            __active: targetState === 'running' || targetState === 'retrying',
+          },
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [edges, nodes, stepStatus]
   );
 
   const mockedCount = countMockedNodes(nodes);
 
+  const summaryVisible = runResult !== null && runPhase === 'ended' && !summaryDismissed;
+  const failureCard = useMemo(
+    () =>
+      summaryVisible && runResult?.status === 'failed' && !runResult.dry
+        ? buildFailureCard(
+            stepRuns,
+            nodes.map((n: any) => ({
+              stepId: labelToId(n.data?.label || ''),
+              label: n.data?.label || 'Node',
+            })),
+            executionLogs
+          )
+        : null,
+    [summaryVisible, runResult, stepRuns, nodes, executionLogs]
+  );
+
   const decoratedNodes = nodes.map((node: any) => {
-    const status = stepStatus[nodeIdToStepId(node.id)];
+    // While a run is active a step the engine has not reached yet is waiting.
+    const status =
+      stepStatus[nodeIdToStepId(node.id)] ?? (runPhase === 'active' ? PENDING_STATUS : undefined);
     const invalidReason = invalidNodeIds[node.id];
     if (!status && !invalidReason) return node;
     return { ...node, data: { ...node.data, __status: status, __invalidReason: invalidReason } };
   });
+
+  const selectedEdgeCount = edges.filter((e: any) => e.selected).length;
+  const fieldIssues = selectedNode ? fieldErrors(issues, selectedNode.id) : {};
+
+  // Named file slots of the selected step (see slots.ts).
+  const slotView = useMemo(() => {
+    if (!selectedNode) return null;
+    return {
+      states: slotStates(selectedNode, nodes, edges),
+      choices: linkChoices(selectedNode, nodes, edges),
+      preview: previewForNode(selectedNode, nodes, edges),
+    };
+  }, [selectedNode, nodes, edges]);
+
+  /** The question shown in the later step's properties after a connection that fits several slots. */
+  const bindingPrompt = useMemo(() => {
+    if (!pendingBinding || selectedNodeId !== pendingBinding.targetId) return null;
+    const plan = planBinding(nodes, edges, pendingBinding.sourceId, pendingBinding.targetId);
+    if (plan.kind !== 'ask') return null;
+    const source = nodes.find((n: any) => n.id === pendingBinding.sourceId);
+    return { sourceLabel: (source?.data?.label || '').trim() || 'the earlier step', options: plan.options };
+  }, [pendingBinding, selectedNodeId, nodes, edges]);
+
+  const chooseBinding = useCallback(
+    (option: BindingOption) => {
+      if (!pendingBinding) return;
+      recordEdit();
+      setNodes((nds) => applyBinding(nds, pendingBinding.targetId, pendingBinding.sourceId, option));
+      setPendingBinding(null);
+      markDirty();
+    },
+    [pendingBinding, recordEdit, markDirty]
+  );
+
+  const finishedSteps = Object.values(stepStatus).filter(
+    (st) => st.state === 'succeeded' || st.state === 'failed' || st.state === 'skipped'
+  ).length;
+  const runView = describeRunState({
+    executionState,
+    dryRun: dryRunActive,
+    outcome: runOutcome,
+    finished: finishedSteps,
+    total: nodes.length,
+  });
+
+  /** Why a run cannot start right now, or undefined when it can. */
+  const startBlockedReason =
+    nodes.length === 0
+      ? 'Add a step to run the workflow'
+      : hasProblems
+        ? blockedReason(issues)
+        : undefined;
 
   const progress = (() => {
     const entries = Object.values(stepStatus);
@@ -980,126 +1661,305 @@ function WorkflowEditorInner() {
         />
       )}
 
-      <div className="main-content">
-        <div className="flow-container" ref={flowWrapperRef}>
-          {/* Top Toolbar */}
-          <div className="top-toolbar">
-            <div className="workflow-info">
-              <div className="workflow-title" data-testid="workflow-title">
-                {workflowName}
-                {isDirty && <span className="dirty-marker" title="Unsaved changes">•</span>}
-              </div>
-              {(currentFilePath || workingDirectory) && (
-                <div className="working-directory">
-                  {(currentFilePath || workingDirectory).replace(/^.*[\\\/]/, '')}
-                </div>
-              )}
-            </div>
-
-            <div className="file-buttons">
-              <button className="toolbar-button" onClick={handleNew}>New</button>
-              <button className="toolbar-button" onClick={handleOpen}>Open</button>
-              <button className="toolbar-button" onClick={handleSave}>Save</button>
-              <button className="toolbar-button" onClick={handleSaveAs}>Save As</button>
-              <button className="toolbar-button" onClick={handleClear}>Clear</button>
-              <button className="toolbar-button" data-testid="details" onClick={handleEditDetails}>
-                Details
-              </button>
-              <button className="toolbar-button" onClick={handleSelectDirectory}
-              data-testid="set-directory">
-                Set Directory
-              </button>
-            </div>
-
-            <div className="edit-buttons">
+      {/* The workflow bar: a row above the canvas, never over it, so the canvas
+          and its overlays keep their place whatever the window width. */}
+      <header className="top-toolbar" aria-label="Workflow">
+        <div className="workflow-info">
+          <div className="workflow-title" data-testid="workflow-title">
+            <Tooltip content="Rename the workflow, set its version and what happens after a failure">
               <button
-                className="toolbar-button"
-                onClick={() => setPaletteOpen((open) => !open)}
-                data-testid="open-palette"
-                aria-expanded={paletteOpen}
-                title="Search the bundled catalog of common bioinformatics tools"
+                type="button"
+                className="workflow-name-button"
+                data-testid="details"
+                onClick={handleEditDetails}
               >
-                Tool Catalog
+                <span className="workflow-name">{workflowName}</span>
+                <Icon name="pencil" size={14} className="workflow-name-icon" />
+                <span className="visually-hidden">(workflow details)</span>
               </button>
-              <button className="toolbar-button add-button" onClick={addNode}
-              data-testid="add-node">+ Add Node</button>
-              <button className="toolbar-button delete-button" onClick={deleteSelectedNodes}
-              data-testid="delete-node">Delete</button>
-            </div>
+            </Tooltip>
+            {isDirty && (
+              <Badge tone="neutral" variant="outline" className="dirty-marker">
+                Unsaved
+              </Badge>
+            )}
           </div>
-
-          {/* Execution Controls */}
-          <div className="execution-controls">
-            <button
-              className={`execution-button run-button ${executionState === 'running' ? 'active' : ''}`}
-              onClick={handleRun}
-              data-testid="run"
-              disabled={nodes.length === 0 || executionState === 'running'}
-              title={
-                executionState === 'paused'
-                  ? 'Continue the paused run.'
-                  : `Run the workflow, skipping steps whose outputs are already up to date. ${describeResume(
-                      resumeInfo,
-                      Boolean(workingDirectory)
-                    )}`
+          <div className="workflow-location">
+            <Tooltip
+              content={
+                workingDirectory
+                  ? `Results go to ${workingDirectory}. Click to choose another folder.`
+                  : 'Choose the folder where results are written. Run asks for one if none is set.'
               }
             >
-              {executionState === 'paused' ? 'Continue' : 'Run'}
-            </button>
+              <button
+                type="button"
+                className={workingDirectory ? 'working-directory' : 'working-directory is-unset'}
+                data-testid="set-directory"
+                onClick={handleSelectDirectory}
+              >
+                <Icon name="folder" size={12} />
+                {workingDirectory
+                  ? `Folder: ${workingDirectory.replace(/^.*[\\/]/, '')}`
+                  : 'Choose results folder'}
+              </button>
+            </Tooltip>
+            {currentFilePath && (
+              <span className="workflow-file" title={currentFilePath}>
+                <Icon name="file" size={12} />
+                {currentFilePath.replace(/^.*[\\/]/, '')}
+              </span>
+            )}
+          </div>
+        </div>
 
-            <button
-              className="execution-button resume-button"
-              onClick={handleRunFromScratch}
-              data-testid="run-from-scratch"
-              disabled={nodes.length === 0 || executionState !== 'idle'}
-              title="Discard saved progress and run every step again."
-            >
-              Run from scratch
-            </button>
+        <div className="file-buttons" role="group" aria-label="File">
+          <Button variant="ghost" onClick={handleNew}>New</Button>
+          <Button
+            variant="ghost"
+            onClick={() => setTemplatesOpen(true)}
+            data-testid="new-from-template"
+            tooltip="Start from a ready-made pipeline, or one you saved"
+          >
+            Templates
+          </Button>
+          <Button variant="ghost" onClick={handleOpen}>Open</Button>
+          <Button variant="ghost" onClick={handleSave}>Save</Button>
+          <Button variant="ghost" onClick={handleSaveAs}>Save as</Button>
+          <Button
+            variant="ghost"
+            onClick={handleClear}
+            tooltip="Remove every step from the canvas"
+          >
+            Clear canvas
+          </Button>
+        </div>
 
-            <button
-              className="execution-button dry-run-button"
-              onClick={handleDryRun}
-              data-testid="dry-run"
-              disabled={nodes.length === 0 || executionState !== 'idle'}
-            >
-              Dry Run
-            </button>
+        <div className="edit-buttons" role="group" aria-label="Steps">
+          <Button
+            ref={paletteButtonRef}
+            onClick={() => (paletteOpen ? closePalette() : openPalette())}
+            data-testid="open-palette"
+            aria-expanded={paletteOpen}
+            tooltip={
+              <>
+                Search the bundled catalog of common bioinformatics tools{' '}
+                <Kbd keys={formatKeys('Mod+K', IS_MAC)} />
+              </>
+            }
+          >
+            Tool catalog
+          </Button>
+          <Button
+            icon="plus"
+            onClick={addNode}
+            data-testid="add-node"
+            tooltip="Add a step whose command you write yourself"
+          >
+            Add node
+          </Button>
+          <Button
+            icon="trash"
+            onClick={deleteSelection}
+            data-testid="delete-node"
+            disabledReason={
+              selectedNode || selectedEdgeCount > 0
+                ? undefined
+                : 'Select a step or a connection to delete it'
+            }
+            tooltip="Delete the selected step or connection (Delete key)"
+          >
+            Delete
+          </Button>
+          <IconButton
+            icon="info"
+            label="Keyboard shortcuts (?)"
+            onClick={() => setShortcutsOpen(true)}
+            data-testid="open-shortcuts"
+          />
+        </div>
+      </header>
 
-            <button
-              className={`execution-button pause-button ${executionState === 'paused' ? 'active' : ''}`}
-              onClick={handlePause}
-              data-testid="pause"
-              disabled={executionState !== 'running'}
-            >
-              Pause
-            </button>
+      <div className="main-content">
+        <div className="flow-container" ref={flowWrapperRef}>
+          {/* Run controls: what is happening, how to start, how to hold or end it. */}
+          <div
+            className="execution-controls"
+            role="group"
+            aria-label="Run controls"
+            data-testid="run-controls"
+          >
+            <div className="run-state" data-testid="run-state" role="status">
+              <Badge tone={runView.tone} variant="subtle" icon={runView.icon}>
+                {runView.label}
+              </Badge>
+            </div>
 
-            <button
-              className="execution-button stop-button"
-              onClick={handleStop}
-              data-testid="stop"
-              disabled={executionState === 'idle'}
+            {/* Clicking a greyed-out Run is how someone asks "why not?": show the problems. */}
+            <div
+              className="run-group"
+              role="group"
+              aria-label="Start"
+              onClick={() => {
+                if (hasProblems && executionState === 'idle') refuseRun();
+              }}
             >
-              Stop
-            </button>
+              <Button
+                variant="primary"
+                size="lg"
+                fullWidth
+                icon="play"
+                onClick={handleRun}
+                data-testid="run"
+                loading={executionState === 'running'}
+                disabledReason={executionState === 'paused' ? undefined : startBlockedReason}
+                tooltipPlacement="right"
+                tooltip={
+                  executionState === 'paused'
+                    ? 'Continue the paused run.'
+                    : `${RUN_TOOLTIPS.run} ${describeResume(resumeInfo, Boolean(workingDirectory))}`
+                }
+              >
+                {executionState === 'paused' ? 'Continue' : executionState === 'running' ? 'Running…' : 'Run'}
+              </Button>
+
+              <Button
+                size="sm"
+                fullWidth
+                onClick={handleRunFromScratch}
+                data-testid="run-from-scratch"
+                disabledReason={
+                  startBlockedReason ??
+                  (executionState !== 'idle' ? 'A run is in progress' : undefined)
+                }
+                tooltipPlacement="right"
+                tooltip={RUN_TOOLTIPS.fromScratch}
+              >
+                Run from scratch
+              </Button>
+
+              <Button
+                size="sm"
+                fullWidth
+                onClick={handleDryRun}
+                data-testid="dry-run"
+                disabledReason={
+                  startBlockedReason ??
+                  (executionState !== 'idle' ? 'A run is in progress' : undefined)
+                }
+                tooltipPlacement="right"
+                tooltip={RUN_TOOLTIPS.dryRun}
+              >
+                Dry run
+              </Button>
+            </div>
+
+            <div className="run-group run-group-row" role="group" aria-label="During a run">
+              <Button
+                size="sm"
+                fullWidth
+                icon="pause"
+                pressed={executionState === 'paused'}
+                onClick={handlePause}
+                data-testid="pause"
+                disabledReason={
+                  executionState === 'running'
+                    ? undefined
+                    : executionState === 'paused'
+                      ? 'Paused. Press Continue to go on.'
+                      : 'Nothing is running'
+                }
+                tooltipPlacement="right"
+                tooltip={RUN_TOOLTIPS.pause}
+              >
+                Pause
+              </Button>
+
+              <Button
+                variant="danger"
+                size="sm"
+                fullWidth
+                icon="stop"
+                onClick={handleStop}
+                data-testid="stop"
+                disabledReason={executionState === 'idle' ? 'Nothing is running' : undefined}
+                tooltipPlacement="right"
+                tooltip={RUN_TOOLTIPS.stop}
+              >
+                Stop
+              </Button>
+            </div>
+
+            {hasProblems && (
+              <Button
+                size="sm"
+                fullWidth
+                icon="alert"
+                className="problems-toggle"
+                data-testid="problems-toggle"
+                aria-expanded={problemsOpen}
+                onClick={() => {
+                  setProblemsOpen((open) => !open);
+                  setRevealProblems(true);
+                  setPaletteOpen(false);
+                }}
+              >
+                {issues.length === 1 ? '1 problem' : `${issues.length} problems`}
+              </Button>
+            )}
 
             {mockedCount > 0 && (
-              <div
+              <Badge
+                tone="warning"
+                variant="outline"
+                icon="alert"
                 className="mock-warning"
                 data-testid="mock-warning"
                 title="Mocked steps do not run their tool; they only create placeholder outputs. Results downstream are not real."
               >
-                ⚠ {mockedCount} mocked step{mockedCount === 1 ? '' : 's'}
-              </div>
+                {mockedCount} mocked step{mockedCount === 1 ? '' : 's'}
+              </Badge>
             )}
 
             {progress && <div className="execution-progress" data-testid="progress">{progress}</div>}
           </div>
 
+          {paletteOpen && <ToolPalette
+              onAdd={addCatalogNode}
+              onClose={closePalette}
+              prefs={palettePrefs}
+              onPrefsChange={updatePalettePrefs}
+              onOpenDocs={openToolDocs}
+              selectedStep={
+                selectedNode
+                  ? {
+                      label: String(selectedNode.data?.label || 'the selected step'),
+                      tool: findTool(selectedNode.data?.catalogId),
+                    }
+                  : null
+              }
+              onAddCustom={() => {
+                closePalette();
+                addNode();
+              }}
+            />}
 
-          {paletteOpen && (
-            <ToolPalette onAdd={addCatalogNode} onClose={() => setPaletteOpen(false)} />
+          {problemsOpen && hasProblems && (
+            <ProblemsPanel
+              issues={issues}
+              onSelect={jumpToIssue}
+              onClose={() => setProblemsOpen(false)}
+            />
+          )}
+
+          {nodes.length === 0 && !paletteOpen && (
+            <EmptyState
+              modifier={formatKeys('Mod', IS_MAC)}
+              onOpenTemplates={() => setTemplatesOpen(true)}
+              onOpenCatalog={openPalette}
+              onAddCustom={addNode}
+              onOpenWorkflow={handleOpen}
+            />
           )}
 
           <WorkflowCanvas
@@ -1109,6 +1969,7 @@ function WorkflowEditorInner() {
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
             onSelectionChange={onSelectionChange}
+            onDragStart={onDragStart}
           />
         </div>
 
@@ -1120,7 +1981,44 @@ function WorkflowEditorInner() {
             nodeFiles={nodeWildcardFiles[selectedNode.id] || []}
             onNodeFilesUpdate={handleNodeFilesUpdate}
             addLog={addLog}
-            invalidReason={invalidNodeIds[selectedNode.id]}
+            fieldIssues={fieldIssues}
+            revealErrors={revealProblems}
+            focusRequest={focusRequest}
+            onFocusHandled={() => setFocusRequest(null)}
+            keepGoing={keepGoing}
+            onOpenDetails={handleEditDetails}
+            upstream={upstreamChoices(nodes, edges, selectedNode.id)}
+            onConnectionChange={(sourceId, connected) =>
+              onConnectionChange(sourceId, selectedNode.id, connected)
+            }
+            slots={slotView?.states ?? []}
+            slotChoices={slotView?.choices ?? []}
+            commandPreview={slotView?.preview ?? null}
+            onSlotFile={(slotId: string, value: string) =>
+              onNodePatch(selectedNode.id, typedPatch(selectedNode.data, slotId, value))
+            }
+            onSlotKind={(slotId: string, kind: SlotKind) =>
+              onNodePatch(selectedNode.id, kindPatch(selectedNode.data, slotId, kind))
+            }
+            onSlotLink={(slotId: string, nodeId: string, outputKey: string) =>
+              onNodePatch(selectedNode.id, linkPatch(selectedNode.data, slotId, nodeId, outputKey))
+            }
+            onSlotUnlink={(slotId: string, fromNodeId?: string) =>
+              onNodePatch(
+                selectedNode.id,
+                unlinkPatch(
+                  selectedNode,
+                  nodes,
+                  edges,
+                  slotId,
+                  undefined,
+                  fromNodeId ? { nodeId: fromNodeId } : undefined
+                )
+              )
+            }
+            bindingPrompt={bindingPrompt}
+            onChooseBinding={chooseBinding}
+            onDismissBinding={() => setPendingBinding(null)}
           />
         )}
       </div>
@@ -1139,80 +2037,166 @@ function WorkflowEditorInner() {
           <RunHistoryPanel
             runs={runHistory}
             hasWorkingDirectory={Boolean(workingDirectory)}
+            status={historyStatus}
+            onRetry={() => setHistoryReload((n) => n + 1)}
             onOpenReport={openReport}
           />
         }
         historyCount={runHistory.length}
         latestReport={latestReport !== null}
         onOpenLatestReport={() => latestReport && openReport(latestReport)}
+        filter={logFilter}
+        onFilterChange={setLogFilter}
+        onNotify={notify}
+        bannerSize={
+          summaryVisible ? (failureCard || setupProblem ? 'failure' : 'summary') : undefined
+        }
+        banner={
+          summaryVisible && runResult ? (
+            <RunBanner
+              summary={describeRunResult(runResult, runResult.dry)}
+              failure={failureCard}
+              setup={setupProblem}
+              hasReport={Boolean(runResult.report)}
+              onOpenReport={() => runResult.report && openReport(runResult.report)}
+              onShowLogs={showErrorLogs}
+              onEditStep={editFailedStep}
+              onDismiss={() => setSummaryDismissed(true)}
+            />
+          ) : undefined
+        }
       />
+
+      <ToastHost toasts={toasts} onDismiss={dismissToast} />
 
       {/* Name / details dialog */}
       {nameDialog && (
-        <div className="dialog-overlay" onClick={() => setNameDialog(null)}>
-          <div className="dialog-box" onClick={(e) => e.stopPropagation()}>
-            <h3>{nameDialog === 'new' ? 'New Workflow' : 'Workflow Details'}</h3>
-            <label>
-              Workflow Name:
-              <input
-                type="text"
-                className="dialog-input"
-                data-testid="dialog-name"
-                value={tempWorkflowName}
-                onChange={(e) => setTempWorkflowName(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === 'Enter' &&
-                  (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
-                }
-                autoFocus
-              />
-            </label>
-            <label>
-              Version (optional):
-              <input
-                type="text"
-                className="dialog-input"
-                value={tempWorkflowVersion}
-                placeholder="e.g. 1.0"
-                onChange={(e) => setTempWorkflowVersion(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === 'Enter' &&
-                  (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
-                }
-              />
-            </label>
-            <label className="dialog-checkbox">
-              <input
-                type="checkbox"
-                data-testid="keep-going"
-                checked={tempKeepGoing}
-                onChange={(e) => setTempKeepGoing(e.target.checked)}
-              />{' '}
-              Keep going after a failure
-            </label>
-            <p className="dialog-hint">
-              When a step fails, steps that do not depend on it still run. The run still ends as
-              failed, with a summary of what failed and what was not run.
-            </p>
-            <p className="dialog-hint">
-              {nameDialog === 'new'
-                ? 'You will choose a working directory when you click Run.'
-                : 'Shown in the run log and saved with each run. Renaming the workflow keeps its saved run, so its saved progress is still found.'}
-            </p>
-            <div className="dialog-buttons">
-              <button className="dialog-button cancel" onClick={() => setNameDialog(null)}>
-                Cancel
-              </button>
-              <button
-                className="dialog-button confirm"
+        <Dialog
+          title={nameDialog === 'new' ? 'New workflow' : 'Workflow details'}
+          onClose={() => setNameDialog(null)}
+          dirty={
+            nameDialog === 'new'
+              ? tempWorkflowName !== 'My Workflow' || tempWorkflowVersion !== '' || tempKeepGoing
+              : tempWorkflowName !== workflowName ||
+                tempWorkflowVersion !== workflowVersion ||
+                tempKeepGoing !== keepGoing
+          }
+          testId="workflow-dialog"
+          footer={
+            <>
+              <Button onClick={() => setNameDialog(null)}>Cancel</Button>
+              <Button
+                variant="primary"
                 data-testid="dialog-confirm"
                 onClick={nameDialog === 'new' ? handleConfirmNew : handleConfirmDetails}
+                disabledReason={tempWorkflowName.trim() ? undefined : 'Give the workflow a name'}
               >
                 {nameDialog === 'new' ? 'Create' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
+              </Button>
+            </>
+          }
+        >
+          <TextField
+            label="Workflow name"
+            data-testid="dialog-name"
+            value={tempWorkflowName}
+            onChange={(e) => setTempWorkflowName(e.target.value)}
+            onKeyDown={(e) =>
+              e.key === 'Enter' &&
+              (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
+            }
+            autoFocus
+          />
+          <TextField
+            label="Version"
+            optional
+            value={tempWorkflowVersion}
+            placeholder="e.g. 1.0"
+            hint={
+              nameDialog === 'new'
+                ? undefined
+                : 'Shown in the run log and saved with each run. Renaming the workflow keeps its saved run, so its saved progress is still found.'
+            }
+            onChange={(e) => setTempWorkflowVersion(e.target.value)}
+            onKeyDown={(e) =>
+              e.key === 'Enter' &&
+              (nameDialog === 'new' ? handleConfirmNew() : handleConfirmDetails())
+            }
+          />
+          <Checkbox
+            label="Keep going after a failure"
+            data-testid="keep-going"
+            checked={tempKeepGoing}
+            onChange={(e) => setTempKeepGoing(e.target.checked)}
+            hint="When a step fails, steps that do not depend on it still run. The run still ends as failed, with a summary of what failed and what was not run."
+          />
+          {nameDialog === 'new' && (
+            <p className="dialog-note">You will choose a working directory when you click Run.</p>
+          )}
+          {nameDialog === 'new' && (
+            <Button
+              icon="template"
+              data-testid="new-dialog-templates"
+              onClick={() => {
+                setNameDialog(null);
+                setTemplatesOpen(true);
+              }}
+            >
+              Start from a template instead
+            </Button>
+          )}
+        </Dialog>
+      )}
+
+      {templatesOpen && (
+        <TemplateGallery
+          onClose={() => setTemplatesOpen(false)}
+          onCreate={handleCreateFromTemplate}
+          onSaveCurrent={() => {
+            setTemplatesOpen(false);
+            setSaveTemplateOpen(true);
+          }}
+          saveBlockedReason={saveBlockedReason}
+          onConfirm={askConfirm}
+          notify={notify}
+        />
+      )}
+
+      {saveTemplateOpen && (
+        <SaveTemplateDialog
+          nodes={nodes}
+          edges={edges}
+          defaultName={workflowName}
+          onClose={() => setSaveTemplateOpen(false)}
+          onSave={handleSaveTemplate}
+        />
+      )}
+
+      {confirmRequest && <ConfirmDialog request={confirmRequest} onResolve={resolveConfirm} />}
+
+      {shortcutsOpen && (
+        <Dialog
+          title="Keyboard shortcuts"
+          onClose={() => setShortcutsOpen(false)}
+          testId="shortcuts-dialog"
+          footer={<Button onClick={() => setShortcutsOpen(false)}>Close</Button>}
+        >
+          <table className="shortcuts-table">
+            <tbody>
+              {SHORTCUTS.map((shortcut) => (
+                <tr key={shortcut.action}>
+                  <td>{shortcut.label}</td>
+                  <td>
+                    <Kbd keys={formatKeys(shortcut.keys, IS_MAC)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="dialog-note">
+            Shortcuts that edit the canvas do not fire while you are typing in a field.
+          </p>
+        </Dialog>
       )}
     </div>
   );

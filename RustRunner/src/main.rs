@@ -43,7 +43,7 @@ use rustrunner::execution::process::{install_signal_handlers, is_shutting_down};
 use rustrunner::execution::step::cleanup_scripts;
 use rustrunner::execution::Engine;
 use rustrunner::workflow::parser::load_workflow;
-use rustrunner::{APP_NAME, VERSION};
+use rustrunner::{version_label, APP_NAME, VERSION};
 
 /// Default workflow file used when none is specified.
 const DEFAULT_WORKFLOW: &str = "workflow.yaml";
@@ -106,7 +106,7 @@ fn setup_logging(verbose: bool) {
 /// Prints the application banner with version information.
 fn print_banner() {
     println!();
-    println!("{} v{}", APP_NAME, VERSION);
+    println!("{} v{}", APP_NAME, version_label(VERSION));
     println!("Visual Workflow Execution Engine");
     println!();
 }
@@ -156,7 +156,7 @@ fn parse_arguments(args: &[String]) -> Result<Config, String> {
                 std::process::exit(0);
             }
             "--version" | "-V" => {
-                println!("{} {}", APP_NAME, VERSION);
+                println!("{} {}", APP_NAME, version_label(VERSION));
                 std::process::exit(0);
             }
             "--dry-run" => {

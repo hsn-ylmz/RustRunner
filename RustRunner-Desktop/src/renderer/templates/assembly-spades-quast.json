@@ -1,0 +1,144 @@
+{
+  "formatVersion": 1,
+  "id": "assembly-spades-quast",
+  "name": "Genome assembly from short reads (SPAdes and QUAST)",
+  "description": "Put Illumina reads of a microbial genome together without a reference, then measure how good the assembly is.",
+  "details": "Use this to assemble the genome of a cultured organism such as a bacterium, a virus or a small fungus from Illumina reads. SPAdes builds contigs (and scaffolds) from one file of reads or a pair of files, set up here for a single cultured organism sequenced deeply; for a mixture of organisms or a single cell, change \"Kind of sample\" in the SPAdes step. QUAST then reports how many contigs there are, how long they are (N50), the total size and the share of G and C. If you also give a reference genome of a close relative, QUAST says how much of it the assembly covers and how many misassemblies it finds. Reads are used as they are, because SPAdes corrects read errors itself; trim adapters first if your data still has them. SPAdes needs a few gigabytes of memory, and the limit is set in its step (8 GB by default). For long reads use \"Genome assembly from long reads (Flye and QUAST)\".",
+  "domain": "assembly",
+  "difficulty": "intermediate",
+  "minCatalogVersion": "2026.16.0",
+  "readLayout": "either",
+  "inputs": [
+    {
+      "id": "reads1",
+      "label": "Reads, first of the pair",
+      "hint": "The FASTQ file of reads, or the first file of a pair, plain or compressed.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample_R1.fastq.gz",
+      "targets": [
+        {
+          "step": "spades",
+          "slot": "reads1"
+        }
+      ]
+    },
+    {
+      "id": "reads2",
+      "label": "Reads, second of the pair (optional)",
+      "hint": "The second file of a pair. Leave empty for single-end reads.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": false,
+      "example": "sample_R2.fastq.gz",
+      "targets": [
+        {
+          "step": "spades",
+          "slot": "reads2"
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "label": "Reference genome (optional)",
+      "hint": "A genome of the same or a close species as FASTA. QUAST compares the assembly with it. Leave empty to judge the assembly on its own.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": false,
+      "example": "reference.fa",
+      "targets": [
+        {
+          "step": "quast",
+          "slot": "reference"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "spades",
+      "tool": "spades",
+      "label": "Assemble (SPAdes)",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "quast",
+      "tool": "quast",
+      "label": "Assembly quality (QUAST)",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "spades",
+      "to": "quast",
+      "bind": [
+        {
+          "slot": "assemblies",
+          "output": "contigs"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Contigs",
+      "step": "spades",
+      "slot": "contigs",
+      "hint": "FASTA with the assembled sequences."
+    },
+    {
+      "label": "Scaffolds",
+      "step": "spades",
+      "slot": "scaffolds",
+      "hint": "FASTA with contigs joined where the read pairs allow it."
+    },
+    {
+      "label": "Assembly graph",
+      "step": "spades",
+      "slot": "graph",
+      "hint": "GFA file; open it in Bandage to see how the contigs connect."
+    },
+    {
+      "label": "Quality summary",
+      "step": "quast",
+      "slot": "summary",
+      "hint": "Text with the number of contigs, N50 and total length."
+    },
+    {
+      "label": "Quality table",
+      "step": "quast",
+      "slot": "table",
+      "hint": "The same numbers as a table."
+    },
+    {
+      "label": "Quality report",
+      "step": "quast",
+      "slot": "report",
+      "hint": "Open report.html in a browser."
+    }
+  ],
+  "references": [
+    {
+      "label": "Prjibelski A, Antipov D, Meleshko D, Lapidus A, Korobeynikov A. Using SPAdes de novo assembler. Current Protocols in Bioinformatics 2020;70:e102.",
+      "url": "https://doi.org/10.1002/cpbi.102"
+    },
+    {
+      "label": "Gurevich A, Saveliev V, Vyahhi N, Tesler G. QUAST: quality assessment tool for genome assemblies. Bioinformatics 2013;29:1072-1075.",
+      "url": "https://doi.org/10.1093/bioinformatics/btt086"
+    }
+  ]
+}

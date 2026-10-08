@@ -54,7 +54,15 @@ export interface ResumeInfo {
 }
 
 /** Menu selections forwarded from the main process over 'menu-action'. */
-export type MenuAction = 'new' | 'open' | 'save' | 'save-as' | 'undo' | 'redo';
+export type MenuAction =
+  | 'new'
+  | 'open'
+  | 'save'
+  | 'save-as'
+  | 'undo'
+  | 'redo'
+  | 'new-from-template'
+  | 'save-as-template';
 
 /** How a run ended, so the renderer can style a user-stop distinctly. */
 export type WorkflowOutcome = 'success' | 'failed' | 'stopped';
@@ -116,11 +124,37 @@ interface ElectronAPI {
       workingDir: string,
       reportRef: string
     ): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+    /**
+     * Downloads micromamba (pinned version, https only, checksum verified) to
+     * where the engine looks for it. Resolves with the installed path or why not.
+     */
+    installMicromamba(): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+    /** Opens a tool's documentation page (https links only) in the default browser. */
+    openDocs(url: string): Promise<{ ok: true } | { ok: false; error: string }>;
+    /** Settings kept for this person in the app's data folder. */
+    getSettings(): Promise<{ palette: { favourites: string[]; recent: string[] } }>;
+    /** Saves the palette's favourites and recently used tools; resolves to what was stored. */
+    setPalettePrefs(palette: {
+      favourites: string[];
+      recent: string[];
+    }): Promise<{ palette: { favourites: string[]; recent: string[] } }>;
     pauseWorkflow(): void;
     resumeWorkflow(): void;
     stopWorkflow(): void;
     selectDirectory(): Promise<string | null>;
-    selectFiles(): Promise<string[] | null>;
+    /** Asks for files. `extensions` (no dots) are offered first; `multiple` defaults to true. */
+    selectFiles(options?: {
+      title?: string;
+      multiple?: boolean;
+      extensions?: string[];
+      typeName?: string;
+    }): Promise<string[] | null>;
+
+    /** The person's own workflow templates: the files of <home>/.rustrunner/templates, not yet checked. */
+    listUserTemplates(): Promise<Array<{ id: string; raw?: unknown; error?: string }>>;
+    saveUserTemplate(raw: unknown): Promise<{ ok: true } | { ok: false; error: string }>;
+    deleteUserTemplate(id: string): Promise<{ ok: true } | { ok: false; error: string }>;
+    renameUserTemplate(id: string, name: string): Promise<{ ok: true } | { ok: false; error: string }>;
 
     // Workflow persistence. filePath = null prompts for a location;
     // resolves to the path written, or null if the user cancelled.
@@ -130,7 +164,6 @@ interface ElectronAPI {
       suggestedName: string
     ): Promise<string | null>;
     openWorkflow(): Promise<{ path: string; contents: string } | null>;
-    confirmDiscard(message: string): Promise<boolean>;
     setDirty(dirty: boolean): void;
 
     // Event listeners. All return an unsubscribe function so React effects

@@ -1,0 +1,281 @@
+/* =============================================================================
+   Design tokens
+
+   The single place where colours, spacing, type, radii, shadows, the focus ring
+   and motion are defined. Everything else in the renderer refers to these with
+   var(--name); raw colour values anywhere else fail `designSystem.test.ts`.
+
+   Rules a token must keep (checked by the same test, in both themes):
+   - text on a surface: 4.5:1 or more
+   - the edge of a control, an edge on the canvas, a focus ring: 3:1 or more
+   Change a value here and run `npm test` to see whether it still holds.
+
+   Theme: follows the OS. `data-theme="light" | "dark"` on <html> overrides it
+   (used by the screenshot script and ready for an in-app switch).
+   ============================================================================= */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Surfaces ---------------------------------------------------------- */
+  --bg: #f5f3f0; /* the canvas and the window behind everything */
+  --surface: #ffffff; /* toolbar, palette, dialogs' parent surface */
+  --surface-muted: #f5f5f5; /* side and bottom panels */
+  --surface-sunken: #ffffff; /* text fields and the log */
+  --elevated: #ffffff; /* dialogs, popovers, tooltips' parent */
+  --overlay: rgb(15 23 42 / 0.5); /* the dim behind a dialog */
+
+  /* ---- Text -------------------------------------------------------------- */
+  --text: #1f2933;
+  --text-muted: #5b6470; /* hints, captions, placeholders */
+  --text-inverse: #ffffff; /* on solid fills and tooltips */
+  --tooltip-bg: #1f2933;
+  --tooltip-text: #ffffff;
+
+  /* ---- Borders ----------------------------------------------------------- */
+  --border: #d9dce1; /* decoration only: dividers, card outlines */
+  --border-strong: #858b94; /* the edge of a control (3:1) */
+
+  /* ---- Interaction ------------------------------------------------------- */
+  --hover-bg: rgb(15 23 42 / 0.06);
+  --active-bg: rgb(15 23 42 / 0.12);
+  --disabled-bg: #e6e8eb;
+  --disabled-text: #6b7280;
+  --focus-ring-color: #2563a8;
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+
+  /* ---- Roles --------------------------------------------------------------
+     --X          text and icons in this colour, on a surface or on --X-subtle
+     --X-solid    a filled button or badge, with --text-inverse on top
+     --X-solid-hover  the same fill under the pointer
+     --X-subtle   a tinted background for a message or tag in this colour */
+  --accent: #2563a8;
+  --accent-solid: #2563a8;
+  --accent-solid-hover: #1d4f8a;
+  --accent-subtle: #e6eef8;
+
+  --success: #1f7a3d;
+  --success-solid: #1f7a3d;
+  --success-solid-hover: #17632f;
+  --success-subtle: #e6f4ea;
+
+  --warning: #9a5b00;
+  --warning-solid: #9a5b00;
+  --warning-solid-hover: #804b00;
+  --warning-subtle: #fff4dc;
+
+  --danger: #b3304f;
+  --danger-solid: #b3304f;
+  --danger-solid-hover: #962644;
+  --danger-subtle: #fdecef;
+
+  --info: #0a6c8c;
+  --info-solid: #0a6c8c;
+  --info-solid-hover: #085873;
+  --info-subtle: #e3f3f8;
+
+  --neutral-solid: #5b6470; /* badges for states with no colour of their own */
+
+  /* ---- Step status (nodes, edges' endpoints, status panel, history) ------- */
+  --status-pending: var(--text-muted);
+  --status-running: var(--accent);
+  --status-retrying: var(--warning);
+  --status-succeeded: var(--success);
+  --status-failed: var(--danger);
+  --status-skipped: var(--text-muted);
+  --status-running-solid: var(--accent-solid);
+  --status-retrying-solid: var(--warning-solid);
+  --status-succeeded-solid: var(--success-solid);
+  --status-failed-solid: var(--danger-solid);
+  --status-skipped-solid: var(--neutral-solid);
+  --status-pending-solid: var(--neutral-solid);
+
+  /* ---- Canvas: edges and nodes ------------------------------------------- */
+  --canvas-dot: #b8bcc4;
+  --edge-default: #6b7280;
+  --edge-match: #15803d;
+  --edge-mismatch: #c2410c;
+  --edge-match-subtle: var(--success-subtle);
+  --edge-mismatch-subtle: var(--warning-subtle);
+  --edge-match-text: var(--success);
+  --edge-mismatch-text: var(--warning);
+  --node-border: #6b7280;
+  --node-text: #1f2933; /* on every node colour below */
+  --node-text-muted: #374151;
+
+  /* Node colours a person can pick. A node file stores the name after
+     `--node-` (see nodeColors.ts). All are light, so one ink works on each. */
+  --node-mint: #a8e6cf;
+  --node-sky: #88c5f7;
+  --node-lilac: #d4a5f7;
+  --node-sand: #f5efe9;
+  --node-rose: #f4a6b4;
+  --node-peach: #fdba8c;
+  --node-lemon: #f5de7a;
+  --node-sage: #a7dba0;
+  --node-periwinkle: #a9b8f5;
+  --node-lavender: #c4b0f0;
+
+  /* ---- Spacing (4-point scale) ------------------------------------------- */
+  --space-half: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ---- Radius ------------------------------------------------------------- */
+  --radius-control: 4px;
+  --radius-card: 8px;
+  --radius-pill: 999px;
+
+  /* ---- Type --------------------------------------------------------------- */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu,
+    Cantarell, sans-serif;
+  --font-mono: 'SF Mono', Monaco, Menlo, Consolas, monospace;
+  --text-xs: 12px; /* captions, hints, badges */
+  --text-sm: 13px; /* tables, the log */
+  --text-md: 14px; /* body and controls */
+  --text-lg: 16px; /* section titles */
+  --text-xl: 20px; /* dialog titles */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --leading-tight: 1.25;
+  --leading-normal: 1.45;
+
+  /* ---- Elevation ---------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.12);
+  --shadow-md: 0 2px 8px rgb(15 23 42 / 0.16);
+  --shadow-lg: 0 8px 28px rgb(15 23 42 / 0.28);
+
+  /* ---- Motion -------------------------------------------------------------- */
+  --duration-fast: 100ms;
+  --duration-base: 160ms;
+  --duration-slow: 300ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* The dark values are written twice, once for the OS setting and once for the
+   explicit attribute (CSS cannot share a block between a media query and a
+   selector). `designSystem.test.ts` fails if the two blocks differ. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --bg: #161b22;
+    --surface: #1f2733;
+    --surface-muted: #19212b;
+    --surface-sunken: #11161c;
+    --elevated: #273140;
+    --overlay: rgb(0 0 0 / 0.6);
+
+    --text: #e8edf2;
+    --text-muted: #aab5c2;
+    --text-inverse: #ffffff;
+    --tooltip-bg: #e8edf2;
+  --tooltip-text: #161b22;
+    --tooltip-text: #161b22;
+
+    --border: #323d4d;
+    --border-strong: #7a8798;
+
+    --hover-bg: rgb(255 255 255 / 0.08);
+    --active-bg: rgb(255 255 255 / 0.14);
+    --disabled-bg: #262f3b;
+    --disabled-text: #8c9bad;
+    --focus-ring-color: #74c0fc;
+
+    --accent: #74c0fc;
+    --accent-solid: #2f6fb5;
+    --accent-solid-hover: #285fa0;
+    --accent-subtle: #1c2f47;
+
+    --success: #69db7c;
+    --success-solid: #2e8049;
+    --success-solid-hover: #266b3d;
+    --success-subtle: #17301f;
+
+    --warning: #ffb454;
+    --warning-solid: #a3600a;
+    --warning-solid-hover: #8a5208;
+    --warning-subtle: #3a2c12;
+
+    --danger: #ff8fa3;
+    --danger-solid: #c23a5a;
+    --danger-solid-hover: #a8304d;
+    --danger-subtle: #3a1d26;
+
+    --info: #5fd4f4;
+    --info-solid: #12789a;
+    --info-solid-hover: #0e6786;
+    --info-subtle: #17313a;
+    --neutral-solid: #66758a;
+
+    --canvas-dot: #4a5565;
+    --edge-default: #9aa6b5;
+    --edge-match: #4ade80;
+    --edge-mismatch: #fb923c;
+    --node-border: #9aa6b5;
+  }
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #161b22;
+  --surface: #1f2733;
+  --surface-muted: #19212b;
+  --surface-sunken: #11161c;
+  --elevated: #273140;
+  --overlay: rgb(0 0 0 / 0.6);
+
+  --text: #e8edf2;
+  --text-muted: #aab5c2;
+  --text-inverse: #ffffff;
+  --tooltip-bg: #e8edf2;
+  --tooltip-text: #161b22;
+
+  --border: #323d4d;
+  --border-strong: #7a8798;
+
+  --hover-bg: rgb(255 255 255 / 0.08);
+  --active-bg: rgb(255 255 255 / 0.14);
+  --disabled-bg: #262f3b;
+  --disabled-text: #8c9bad;
+  --focus-ring-color: #74c0fc;
+
+  --accent: #74c0fc;
+  --accent-solid: #2f6fb5;
+  --accent-solid-hover: #285fa0;
+  --accent-subtle: #1c2f47;
+
+  --success: #69db7c;
+  --success-solid: #2e8049;
+  --success-solid-hover: #266b3d;
+  --success-subtle: #17301f;
+
+  --warning: #ffb454;
+  --warning-solid: #a3600a;
+  --warning-solid-hover: #8a5208;
+  --warning-subtle: #3a2c12;
+
+  --danger: #ff8fa3;
+  --danger-solid: #c23a5a;
+  --danger-solid-hover: #a8304d;
+  --danger-subtle: #3a1d26;
+
+  --info: #5fd4f4;
+  --info-solid: #12789a;
+  --info-solid-hover: #0e6786;
+  --info-subtle: #17313a;
+  --neutral-solid: #66758a;
+
+  --canvas-dot: #4a5565;
+  --edge-default: #9aa6b5;
+  --edge-match: #4ade80;
+  --edge-mismatch: #fb923c;
+  --node-border: #9aa6b5;
+}

@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 use log::{debug, error, info, warn};
 
 use crate::environment::conda::{MAMBA_ROOT_PREFIX, MICROMAMBA_PATH};
+use crate::environment::install::{current_platform, path_with_first, tools_root, Install};
+use crate::workflow::slots::render_command;
 use crate::workflow::Step;
 
 use super::events::{Event, EventSink};
@@ -52,6 +54,9 @@ use super::tools::is_system_tool;
 /// The following placeholders are supported:
 /// - `{input}` / `{inputs}` - Space-separated input files
 /// - `{output}` / `{outputs}` - Space-separated output files
+/// - `{threads}` - The step's thread count
+/// - `{name}` - The files of a named input or output slot (see
+///   [`crate::workflow::slots`])
 pub fn execute_step(
     step: &Step,
     tool_env_map: &HashMap<String, String>,
@@ -119,9 +124,8 @@ pub fn execute_step_with_events(
 ) -> StepRun {
     let step_name = &step.id;
 
-    // Parse comma-separated file lists
-    let input_files = parse_file_list(&step.input);
-    let output_files = parse_file_list(&step.output);
+    // Every declared output, including the named ones.
+    let output_files = step.output_paths();
 
     // Create output directories
     if let Err(e) = ensure_output_directories(&output_files, working_dir) {
@@ -146,16 +150,17 @@ pub fn execute_step_with_events(
     // Resolve placeholders. Each file is shell-quoted individually so paths
     // containing spaces or shell metacharacters (e.g. a filename picked from
     // disk like `my sample; rm -rf ~.fastq`) are passed as literal arguments
-    // rather than being interpreted by bash.
-    let inputs_str = shell_join(&input_files);
-    let outputs_str = shell_join(&output_files);
-
-    let command_text = step
-        .command
-        .replace("{input}", &inputs_str)
-        .replace("{output}", &outputs_str)
-        .replace("{inputs}", &inputs_str)
-        .replace("{outputs}", &outputs_str);
+    // rather than being interpreted by bash. A step with named slots fails
+    // here, before anything runs, when a placeholder has no file.
+    let command_text = match render_command(step) {
+        Ok(text) => text,
+        Err(errors) => {
+            return StepRun {
+                attempts: 1,
+                result: Err(errors.join("\n").into()),
+            }
+        }
+    };
 
     let max_attempts = step.retries.saturating_add(1);
     let timeout = step.timeout_secs.map(Duration::from_secs);
@@ -298,11 +303,16 @@ fn run_attempt(
     let script_path = create_execution_script(step_name, command_text)
         .map_err(|e| AttemptError::Fatal(e.to_string()))?;
 
-    // Execute based on tool type
-    let tracked = if is_system_tool(&step.tool) {
-        execute_with_bash(&script_path, working_dir, timeout)
-    } else {
-        execute_with_conda(&script_path, &step.tool, tool_env_map, working_dir, timeout)
+    // Execute based on where the tool comes from
+    let tracked = match launch_for(step, tool_env_map) {
+        Ok(Launch::Bash) => execute_with_bash(&script_path, working_dir, timeout, None),
+        Ok(Launch::BashWithPath(dir)) => {
+            execute_with_bash(&script_path, working_dir, timeout, Some(&dir))
+        }
+        Ok(Launch::Conda(env_name)) => {
+            execute_with_conda(&script_path, &env_name, working_dir, timeout)
+        }
+        Err(e) => Err(e.into()),
     };
 
     // Clean up script
@@ -366,34 +376,9 @@ fn run_attempt(
     }
 }
 
-/// Quotes a single string for safe use as one POSIX shell word.
-///
-/// Wraps the value in single quotes and escapes any embedded single quote as
-/// `'\''`, which is the standard way to make an arbitrary string a single
-/// shell argument.
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// Shell-quotes each file and joins them with spaces for command substitution.
-fn shell_join(files: &[String]) -> String {
-    files
-        .iter()
-        .map(|f| shell_quote(f))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Parses comma-separated file strings into a vector.
-fn parse_file_list(files: &[String]) -> Vec<String> {
-    files
-        .iter()
-        .flat_map(|s| s.split(',').map(|part| part.trim().to_string()))
-        .filter(|s| !s.is_empty())
-        .collect()
-}
-
-/// Creates parent directories for output files.
+/// Creates parent directories for output files. An output that names a folder
+/// (a path ending in `/`) is created itself, so a tool that writes into it
+/// finds it there.
 fn ensure_output_directories(
     output_files: &[String],
     working_dir: &Option<PathBuf>,
@@ -407,6 +392,14 @@ fn ensure_output_directories(
             Some(dir) => dir.join(output_file),
             None => PathBuf::from(output_file),
         };
+
+        if output_file.ends_with('/') || output_file.ends_with('\\') {
+            if !output_path.exists() {
+                fs::create_dir_all(&output_path)?;
+                debug!("Created output folder: {}", output_path.display());
+            }
+            continue;
+        }
 
         if let Some(parent) = output_path.parent() {
             if !parent.exists() {
@@ -502,9 +495,15 @@ fn execute_with_bash(
     script_path: &PathBuf,
     working_dir: &Option<PathBuf>,
     timeout: Option<Duration>,
+    path_first: Option<&Path>,
 ) -> Result<TrackedOutput, Box<dyn Error + Send + Sync>> {
     let mut cmd = Command::new("bash");
     cmd.arg(script_path);
+    if let Some(dir) = path_first {
+        if let Some(path) = path_with_first(dir) {
+            cmd.env("PATH", path);
+        }
+    }
 
     if let Some(dir) = working_dir {
         cmd.current_dir(dir);
@@ -514,28 +513,85 @@ fn execute_with_bash(
     Ok(run_tracked_with_timeout(cmd, timeout)?)
 }
 
+/// How a step's script is started.
+#[derive(Debug, PartialEq, Eq)]
+enum Launch {
+    /// `bash script`: a system tool, or a program already on the `PATH`.
+    Bash,
+    /// `bash script` with this folder first on the `PATH` (a downloaded tool).
+    BashWithPath(PathBuf),
+    /// `micromamba run -n <env> bash script`.
+    Conda(String),
+}
+
+/// The conda environment the step runs in, if it runs in one: the one its
+/// `install` block names (version included), else the environment
+/// `env_map.json` maps its tool to. Used for launching and, as a label, for
+/// the step's definition hash.
+pub fn environment_label(step: &Step, tool_env_map: &HashMap<String, String>) -> Option<String> {
+    match &step.install {
+        Some(install) => install.hash_label(current_platform()),
+        None => tool_env_map.get(&step.tool).cloned(),
+    }
+}
+
+fn launch_for(step: &Step, tool_env_map: &HashMap<String, String>) -> Result<Launch, String> {
+    match &step.install {
+        Some(Install::System { .. }) => Ok(Launch::Bash),
+        Some(install @ Install::External { binary, .. }) => install
+            .installed_path_dir(&tools_root(), current_platform())
+            .map(Launch::BashWithPath)
+            .ok_or_else(|| {
+                format!(
+                    "The tool '{}' has not been downloaded (or the download was not verified). \
+                     Run the workflow again to download it.",
+                    binary
+                )
+            }),
+        Some(install @ Install::Conda { package, .. }) => {
+            let name = install
+                .conda_env_name(current_platform())
+                .ok_or_else(|| format!("No conda environment can be named for '{}'", package))?;
+            Ok(Launch::Conda(name))
+        }
+        None if is_system_tool(&step.tool) => Ok(Launch::Bash),
+        None => tool_env_map
+            .get(&step.tool)
+            .map(|name| Launch::Conda(name.clone()))
+            .ok_or_else(|| {
+                format!(
+                    "No conda environment configured for tool '{}'. \
+                     Create one with: micromamba create -n {} {} -c bioconda -c conda-forge",
+                    step.tool, step.tool, step.tool
+                )
+            }),
+    }
+}
+
+/// Runs the step script (`$0`) after putting the environment's own Java first
+/// on PATH. conda's openjdk installs `java` under `lib/jvm/bin` and only sets
+/// JAVA_HOME, so tools that call plain `java` (FastQC, Picard, GATK, Qualimap,
+/// snpEff) would otherwise reach the system `java`, which on a Mac without a
+/// JDK is a stub that pops up an "install Java" dialog.
+const CONDA_SCRIPT_LAUNCHER: &str =
+    "if [ -n \"${CONDA_PREFIX:-}\" ] && [ -x \"$CONDA_PREFIX/lib/jvm/bin/java\" ]; \
+then PATH=\"$CONDA_PREFIX/lib/jvm/bin:$PATH\"; export PATH; fi; exec bash \"$0\"";
+
 /// Executes a script within a conda environment.
 fn execute_with_conda(
     script_path: &PathBuf,
-    tool: &str,
-    tool_env_map: &HashMap<String, String>,
+    env_name: &str,
     working_dir: &Option<PathBuf>,
     timeout: Option<Duration>,
 ) -> Result<TrackedOutput, Box<dyn Error + Send + Sync>> {
-    let env_name = tool_env_map.get(tool).ok_or_else(|| {
-        format!(
-            "No conda environment configured for tool '{}'. \
-             Create one with: micromamba create -n {} {} -c bioconda -c conda-forge",
-            tool, tool, tool
-        )
-    })?;
-
     let mut cmd = Command::new(&*MICROMAMBA_PATH);
     cmd.env("MAMBA_ROOT_PREFIX", &*MAMBA_ROOT_PREFIX);
     cmd.arg("run")
         .arg("-n")
         .arg(env_name)
         .arg("bash")
+        .arg("-c")
+        .arg(CONDA_SCRIPT_LAUNCHER)
         .arg(script_path);
 
     if let Some(dir) = working_dir {
@@ -553,6 +609,56 @@ fn execute_with_conda(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workflow::model::split_list as parse_file_list;
+    use crate::workflow::slots::{shell_join, shell_quote};
+
+    /// Runs CONDA_SCRIPT_LAUNCHER the way `micromamba run` would, with the
+    /// given CONDA_PREFIX, and returns what `command -v java` printed.
+    #[cfg(unix)]
+    fn java_seen_by_launcher(prefix: &std::path::Path) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("step.sh");
+        std::fs::write(&script, "command -v java || echo none\n").unwrap();
+        let output = Command::new("bash")
+            .arg("-c")
+            .arg(CONDA_SCRIPT_LAUNCHER)
+            .arg(&script)
+            .env("CONDA_PREFIX", prefix)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_conda_launcher_prefers_the_environment_java() {
+        use std::os::unix::fs::PermissionsExt;
+        let prefix = tempfile::tempdir().unwrap();
+        let jvm_bin = prefix.path().join("lib/jvm/bin");
+        std::fs::create_dir_all(&jvm_bin).unwrap();
+        let java = jvm_bin.join("java");
+        std::fs::write(&java, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&java, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            java_seen_by_launcher(prefix.path()),
+            java.display().to_string()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_conda_launcher_leaves_path_alone_without_an_environment_java() {
+        let prefix = tempfile::tempdir().unwrap();
+        let seen = java_seen_by_launcher(prefix.path());
+        assert!(
+            !seen.starts_with(&prefix.path().display().to_string()),
+            "got {}",
+            seen
+        );
+    }
 
     #[test]
     fn test_parse_file_list() {
@@ -873,5 +979,243 @@ mod tests {
         assert_eq!(run.attempts, 2);
         assert!(run.result.is_ok());
         assert!(started.elapsed() >= Duration::from_millis(500));
+    }
+
+    // ---- named slots through a real shell ----
+
+    /// File names that would hurt if the shell interpreted them. Each is
+    /// written to disk, so these are real, legal names.
+    #[cfg(unix)]
+    const NASTY_NAMES: [&str; 9] = [
+        "plain.txt",
+        "with space.txt",
+        "semi; touch PWNED_SEMI.txt",
+        "sub $(touch PWNED_SUB.txt) shell.txt",
+        "tick `touch PWNED_TICK.txt`.txt",
+        "it's quoted.txt",
+        "dq \"quoted\" and \\ back.txt",
+        "vars $HOME ${USER} $0.txt",
+        "-leading dash and * glob.txt",
+    ];
+
+    /// Runs `command` with slot `f` = every nasty name and `o` = out.txt, and
+    /// returns what the command wrote for each. Fails the test when any
+    /// PWNED marker file appears.
+    #[cfg(unix)]
+    fn run_with_nasty_names(id: &str, command: &str) -> Vec<String> {
+        let mut results = Vec::new();
+        for name in NASTY_NAMES {
+            let dir = tempdir().unwrap();
+            std::fs::write(dir.path().join(name), name).unwrap();
+            let step = Step::new(id, "bash", command)
+                .with_named_input("f", &[name])
+                .with_named_output("o", &["out.txt"]);
+            let run = execute_step_with_retries(
+                &step,
+                &HashMap::new(),
+                &Some(dir.path().to_path_buf()),
+                None,
+            );
+            assert!(run.result.is_ok(), "{name}: {:?}", run.result);
+            let leaked: Vec<_> = std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| n.starts_with("PWNED"))
+                .collect();
+            assert!(leaked.is_empty(), "{name} injected {leaked:?}");
+            results.push(std::fs::read_to_string(dir.path().join("out.txt")).unwrap());
+        }
+        results
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_slot_paths_are_one_literal_argument_unquoted() {
+        // cat reads the file named by the slot; its content is the name.
+        let results = run_with_nasty_names("nasty_plain", "cat -- {f} > {o}");
+        assert_eq!(results, NASTY_NAMES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_slot_paths_are_literal_inside_double_quotes() {
+        let results = run_with_nasty_names("nasty_double", "printf '%s' \"{f}\" > {o}");
+        assert_eq!(results, NASTY_NAMES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_slot_paths_are_literal_inside_single_quotes() {
+        let results = run_with_nasty_names("nasty_single", "printf '%s' '{f}' > {o}");
+        assert_eq!(results, NASTY_NAMES);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_slot_paths_are_literal_after_an_equals_sign() {
+        let results = run_with_nasty_names("nasty_equals", "printf '%s' --file={f} > {o}");
+        let expected: Vec<String> = NASTY_NAMES
+            .iter()
+            .map(|n| format!("--file={}", n))
+            .collect();
+        assert_eq!(results, expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_several_files_in_one_slot_are_separate_arguments() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("a b.txt"), "A").unwrap();
+        std::fs::write(dir.path().join("c'd.txt"), "C").unwrap();
+        let step = Step::new("slot_many", "bash", "cat {both} > {o}")
+            .with_named_input("both", &["a b.txt", "c'd.txt"])
+            .with_named_output("o", &["merged.txt"]);
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            None,
+        );
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("merged.txt")).unwrap(),
+            "AC"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_unbound_slot_fails_before_anything_runs() {
+        let dir = tempdir().unwrap();
+        let step =
+            Step::new("slot_unbound", "bash", "touch ran.txt {ref}").with_named_input("ref", &[]);
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            None,
+        );
+        let err = run.result.unwrap_err().to_string();
+        assert!(err.contains("{ref}"), "{err}");
+        assert!(!dir.path().join("ran.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_named_output_directories_are_created_and_mock_makes_them() {
+        let dir = tempdir().unwrap();
+        let mut step = Step::new("slot_mocked", "bash", "false")
+            .with_named_output("bam", &["out/deep/a.bam"])
+            .with_output("plain.txt");
+        step.mock = true;
+        let run = execute_step_with_retries(
+            &step,
+            &HashMap::new(),
+            &Some(dir.path().to_path_buf()),
+            None,
+        );
+        assert!(run.result.is_ok(), "{:?}", run.result);
+        assert!(dir.path().join("out/deep/a.bam").exists());
+        assert!(dir.path().join("plain.txt").exists());
+    }
+
+    // ---- where the tool comes from ----
+
+    fn conda_install(version: Option<&str>) -> Install {
+        Install::Conda {
+            package: "samtools".into(),
+            version: version.map(String::from),
+            channel: None,
+            osx64: false,
+            constraints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_launch_follows_the_install_block() {
+        let map = HashMap::new();
+        let plain = Step::new("a", "bash", "true");
+        assert_eq!(launch_for(&plain, &map), Ok(Launch::Bash));
+
+        let pinned = Step::new("a", "samtools", "true").with_install(conda_install(Some("1.24")));
+        assert_eq!(
+            launch_for(&pinned, &map),
+            Ok(Launch::Conda("samtools-1.24".to_string()))
+        );
+
+        let system = Step::new("a", "minimap2", "true").with_install(Install::System {
+            binary: "minimap2".into(),
+        });
+        assert_eq!(launch_for(&system, &map), Ok(Launch::Bash));
+    }
+
+    #[test]
+    fn test_launch_without_install_uses_the_env_map_as_before() {
+        let mut map = HashMap::new();
+        map.insert("samtools".to_string(), "my_env".to_string());
+        let step = Step::new("a", "samtools", "true");
+        assert_eq!(
+            launch_for(&step, &map),
+            Ok(Launch::Conda("my_env".to_string()))
+        );
+        let unmapped = Step::new("a", "bowtie2", "true");
+        let error = launch_for(&unmapped, &map).unwrap_err();
+        assert!(
+            error.contains("No conda environment configured for tool 'bowtie2'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn test_an_external_tool_that_was_never_downloaded_says_so() {
+        let mut url = std::collections::BTreeMap::new();
+        let mut sha = std::collections::BTreeMap::new();
+        for platform in crate::environment::install::PLATFORMS {
+            url.insert(platform.to_string(), "https://example.org/t".to_string());
+            sha.insert(platform.to_string(), "a".repeat(64));
+        }
+        let step = Step::new("a", "t", "t").with_install(Install::External {
+            binary: "t".into(),
+            version: None,
+            url,
+            sha256: sha,
+            license: None,
+        });
+        let error = launch_for(&step, &HashMap::new()).unwrap_err();
+        assert!(error.contains("has not been downloaded"), "{error}");
+    }
+
+    #[test]
+    fn test_environment_label_makes_a_pin_part_of_the_definition() {
+        let mut map = HashMap::new();
+        map.insert("samtools".to_string(), "samtools".to_string());
+        let old = Step::new("a", "samtools", "true");
+        assert_eq!(environment_label(&old, &map), Some("samtools".to_string()));
+        let a = Step::new("a", "samtools", "true").with_install(conda_install(Some("1.20")));
+        let b = Step::new("a", "samtools", "true").with_install(conda_install(Some("1.24")));
+        assert_ne!(environment_label(&a, &map), environment_label(&b, &map));
+        let system =
+            Step::new("a", "x", "true").with_install(Install::System { binary: "x".into() });
+        assert_eq!(environment_label(&system, &map), None);
+    }
+
+    #[test]
+    fn test_output_that_names_a_folder_is_created_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = Some(dir.path().to_path_buf());
+        ensure_output_directories(
+            &[
+                "qc/".to_string(),
+                "deep/er/file.txt".to_string(),
+                "plain.txt".to_string(),
+            ],
+            &base,
+        )
+        .unwrap();
+        assert!(dir.path().join("qc").is_dir());
+        assert!(dir.path().join("deep/er").is_dir());
+        assert!(!dir.path().join("deep/er/file.txt").exists());
+        assert!(!dir.path().join("plain.txt").exists());
     }
 }

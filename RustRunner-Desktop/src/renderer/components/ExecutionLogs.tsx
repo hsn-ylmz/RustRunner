@@ -1,24 +1,10 @@
-import { useEffect, useRef, useCallback, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useCallback, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Button, Icon, TextField, type Notify } from '../ui';
+import { describeLogCount, filterLogLines, logsToText, type LogFilter } from '../logLines';
 
 export type ExecutionTab = 'logs' | 'steps' | 'history';
 
-/**
- * Picks a severity class for one log line.
- *
- * Ordered most- to least-specific: the engine's own `[ERROR]`/`[WARN]` prefixes
- * win over keyword sniffing, so a command that merely mentions "error" isn't
- * painted red. Applied per line rather than per stdout chunk.
- */
-export function classifyLogLine(line: string): string {
-  if (/^\s*\[ERROR\]/.test(line)) return 'error';
-  if (/^\s*\[WARN\]/.test(line)) return 'warning';
-  if (/^\s*\[(PAUSED|STOPPED)\]/.test(line)) return 'warning';
-  if (/completed successfully|Workflow completed/i.test(line)) return 'success';
-  if (/\bfailed\b|Execution error/i.test(line)) return 'error';
-  if (/stopped by user|paused/i.test(line)) return 'warning';
-  if (/\[DRY RUN\]|Wildcards|Starting step:/i.test(line)) return 'info';
-  return '';
-}
+export { classifyLogLine } from '../logLines';
 
 export function ExecutionLogs({
   logs,
@@ -33,6 +19,11 @@ export function ExecutionLogs({
   historyCount = 0,
   latestReport = false,
   onOpenLatestReport,
+  banner,
+  bannerSize,
+  onNotify,
+  filter: controlledFilter,
+  onFilterChange,
 }: {
   logs: string[];
   visible: boolean;
@@ -49,105 +40,257 @@ export function ExecutionLogs({
   /** True once a run has produced a report that can be opened. */
   latestReport?: boolean;
   onOpenLatestReport?: () => void;
+  /** The end-of-run summary and failure card, shown above the tab content. */
+  banner?: ReactNode;
+  /** Makes room for the banner: a one-line summary, or the failure card too. */
+  bannerSize?: 'summary' | 'failure';
+  onNotify?: Notify;
+  /** The severity filter, when the editor sets it (the failure card's "Show logs"). */
+  filter?: LogFilter;
+  onFilterChange?: (filter: LogFilter) => void;
 }) {
   const showHistory = Boolean(historyView) && tab === 'history';
   const showSteps = Boolean(stepsView) && tab === 'steps';
   const showLogs = !showSteps && !showHistory;
-  const logsEndRef = useRef<HTMLDivElement>(null);
   const logContentRef = useRef<HTMLDivElement>(null);
-  /** False while the user has scrolled up, so new output doesn't yank them back. */
-  const stickToBottomRef = useRef(true);
+  const [ownFilter, setOwnFilter] = useState<LogFilter>('all');
+  const filter = controlledFilter ?? ownFilter;
+  const setFilter = onFilterChange ?? setOwnFilter;
+  const [query, setQuery] = useState('');
+  /** Follow new output. Scrolling up turns it off, scrolling back to the end (or the toggle) on. */
+  const [follow, setFollow] = useState(true);
 
-  // Auto-scroll logs, but only while the user is already at the bottom.
+  const rows = useMemo(() => filterLogLines(logs, filter, query), [logs, filter, query]);
+
+  // Follow the output while it is on.
   useEffect(() => {
-    if (stickToBottomRef.current) {
-      logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [logs]);
+    const el = logContentRef.current;
+    if (follow && el) el.scrollTop = el.scrollHeight;
+  }, [rows, follow, showLogs, visible]);
 
   const handleLogScroll = useCallback(() => {
     const el = logContentRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distanceFromBottom < 40;
+    setFollow(distanceFromBottom < 40);
   }, []);
 
+  const copyVisible = useCallback(async () => {
+    const text = logsToText(rows);
+    try {
+      await navigator.clipboard.writeText(text);
+      onNotify?.('success', `Copied ${describeLogCount(rows.length, rows.length)} to the clipboard`);
+    } catch {
+      onNotify?.('danger', 'Could not copy the log. Select the text and copy it instead.');
+    }
+  }, [rows, onNotify]);
+
+  const filtering = filter !== 'all' || query.trim() !== '';
+
+  const tabs: Array<{ id: ExecutionTab; label: string; testId: string }> = [
+    { id: 'logs', label: 'Execution logs', testId: 'tab-logs' },
+    { id: 'steps', label: `Step status${stepCount > 0 ? ` (${stepCount})` : ''}`, testId: 'tab-steps' },
+    ...(historyView
+      ? [
+          {
+            id: 'history' as ExecutionTab,
+            label: `Run history${historyCount > 0 ? ` (${historyCount})` : ''}`,
+            testId: 'tab-history',
+          },
+        ]
+      : []),
+  ];
+
+  /** Arrow keys, Home and End move between tabs (the tablist pattern). */
+  const onTabKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (!onTabChange || !keys.includes(e.key)) return;
+    const at = tabs.findIndex((t) => t.id === tab);
+    const next =
+      e.key === 'Home'
+        ? 0
+        : e.key === 'End'
+          ? tabs.length - 1
+          : (at + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    e.preventDefault();
+    onTabChange(tabs[next].id);
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus();
+  };
+
+  const panelProps = (id: ExecutionTab) => ({
+    role: 'tabpanel',
+    id: `execution-tabpanel-${id}`,
+    'aria-labelledby': `execution-tab-${id}`,
+  });
+
   return (
-    <div className={`execution-panel ${visible ? 'visible' : 'hidden'}`}>
+    <div
+      className={`execution-panel ${visible ? 'visible' : 'hidden'}${
+        banner && bannerSize ? ` has-${bannerSize}` : ''
+      }`}
+    >
       <div className="execution-panel-header">
         {stepsView && onTabChange ? (
-          <div className="execution-tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={tab === 'logs'}
-              data-testid="tab-logs"
-              className={`execution-tab ${tab === 'logs' ? 'active' : ''}`}
-              onClick={() => onTabChange('logs')}
-            >
-              Execution Logs
-            </button>
-            <button
-              role="tab"
-              aria-selected={tab === 'steps'}
-              data-testid="tab-steps"
-              className={`execution-tab ${tab === 'steps' ? 'active' : ''}`}
-              onClick={() => onTabChange('steps')}
-            >
-              Step Status{stepCount > 0 ? ` (${stepCount})` : ''}
-            </button>
-            {historyView && (
+          <div className="execution-tabs" role="tablist" aria-label="Run output" onKeyDown={onTabKeyDown}>
+            {tabs.map((t) => (
               <button
+                key={t.id}
+                type="button"
                 role="tab"
-                aria-selected={tab === 'history'}
-                data-testid="tab-history"
-                className={`execution-tab ${tab === 'history' ? 'active' : ''}`}
-                onClick={() => onTabChange('history')}
+                id={`execution-tab-${t.id}`}
+                aria-selected={tab === t.id}
+                aria-controls={`execution-tabpanel-${t.id}`}
+                tabIndex={tab === t.id ? 0 : -1}
+                data-testid={t.testId}
+                className={`execution-tab ${tab === t.id ? 'active' : ''}`}
+                onClick={() => onTabChange(t.id)}
               >
-                Run History{historyCount > 0 ? ` (${historyCount})` : ''}
+                {t.label}
               </button>
-            )}
+            ))}
           </div>
         ) : (
-          <h3>Execution Logs</h3>
+          <h3>Execution logs</h3>
         )}
         <div className="execution-panel-controls">
           {latestReport && onOpenLatestReport && (
-            <button
-              className="panel-button"
+            <Button
+              size="sm"
               data-testid="open-latest-report"
               onClick={onOpenLatestReport}
               title="Open the HTML report of the last run"
             >
               Open latest report
-            </button>
+            </Button>
           )}
           {showLogs && (
-            <button className="panel-button" onClick={onClear}>Clear</button>
+            <Button size="sm" onClick={onClear}>
+              Clear log
+            </Button>
           )}
-          <button className="panel-button" onClick={onToggle}>
+          <Button size="sm" onClick={onToggle} aria-expanded={visible}>
             {visible ? 'Hide' : 'Show'}
-          </button>
+          </Button>
         </div>
       </div>
-      {visible && showSteps && (
-        <div className="execution-panel-content">{stepsView}</div>
-      )}
-      {visible && showHistory && (
-        <div className="execution-panel-content">{historyView}</div>
-      )}
-      {visible && showLogs && (
-        <div
-          className="execution-panel-content"
-          ref={logContentRef}
-          onScroll={handleLogScroll}
-        >
-          {logs.map((log, index) => (
-            <div key={index} className={`log-entry ${classifyLogLine(log)}`} data-testid="log-entry">
-              {log}
-            </div>
-          ))}
-          <div ref={logsEndRef} />
+      {/* The summary, the failure card and the tab content scroll together, so
+          nothing (the card's buttons included) is ever cut off by the panel's height. */}
+      {visible && (
+      <div className="execution-body" data-testid="execution-body">
+      {banner && <div className="execution-banner">{banner}</div>}
+      {showSteps && (
+        <div className="execution-panel-content" {...panelProps('steps')}>
+          {stepsView}
         </div>
+      )}
+      {showHistory && (
+        <div className="execution-panel-content" {...panelProps('history')}>
+          {historyView}
+        </div>
+      )}
+      {showLogs && (
+        <div className="log-view" {...panelProps('logs')}>
+          <div className="log-toolbar" role="toolbar" aria-label="Log tools">
+            <div className="log-filter" role="group" aria-label="Show">
+              {(
+                [
+                  ['all', 'All'],
+                  ['errors', 'Errors'],
+                  ['warnings', 'Warnings'],
+                ] as Array<[LogFilter, string]>
+              ).map(([id, label]) => (
+                <Button
+                  key={id}
+                  size="sm"
+                  variant="ghost"
+                  pressed={filter === id}
+                  aria-pressed={filter === id}
+                  data-testid={`log-filter-${id}`}
+                  onClick={() => setFilter(id)}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+            <TextField
+              label="Search the log"
+              hideLabel
+              type="search"
+              placeholder="Search the log"
+              value={query}
+              data-testid="log-search"
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <span className="log-count" data-testid="log-count">
+              {describeLogCount(rows.length, logs.length)}
+            </span>
+            <div className="log-toolbar-actions">
+              <Button
+                size="sm"
+                variant="ghost"
+                pressed={follow}
+                aria-pressed={follow}
+                data-testid="log-follow"
+                tooltip="Keep the newest line in view"
+                onClick={() => setFollow((f) => !f)}
+              >
+                Follow output
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                icon="file"
+                data-testid="log-copy"
+                disabledReason={rows.length === 0 ? 'There is nothing to copy' : undefined}
+                onClick={copyVisible}
+              >
+                Copy
+              </Button>
+            </div>
+          </div>
+          <div
+            className="execution-panel-content log-content"
+            ref={logContentRef}
+            onScroll={handleLogScroll}
+            tabIndex={0}
+            aria-label="Log lines"
+          >
+            {rows.length === 0 && (
+              <div className="log-empty" data-testid="log-empty">
+                <Icon name={filtering ? 'info' : 'circle'} size={16} />
+                {filtering ? (
+                  <span>
+                    No lines match.{' '}
+                    <button
+                      type="button"
+                      className="link-button"
+                      data-testid="log-reset-filter"
+                      onClick={() => {
+                        setFilter('all');
+                        setQuery('');
+                      }}
+                    >
+                      Show all lines
+                    </button>
+                  </span>
+                ) : (
+                  <span>No output yet. Messages from a run appear here as it goes.</span>
+                )}
+              </div>
+            )}
+            {rows.map((row) => (
+              <div
+                key={row.index}
+                className={`log-entry ${row.severity}`}
+                data-testid="log-entry"
+              >
+                {row.line}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      </div>
       )}
     </div>
   );

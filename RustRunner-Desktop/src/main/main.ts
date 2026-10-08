@@ -6,6 +6,7 @@
  */
 
 import path from 'path';
+import os from 'os';
 import fs from 'fs';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import {
@@ -22,10 +23,23 @@ import yaml from 'js-yaml';
 
 import MenuBuilder from './menu';
 import { setupAutoUpdater } from './updater';
+import { describeVersion } from './appVersion';
 import { resolveHtmlPath } from './util';
 import { readResumeInfoFor, workflowFileStem } from './resumeState';
 import { readRunHistory, resolveReportPath, type RunHistoryEntry } from './runHistory';
 import { EngineOutputSplitter, type SplitOutput } from './engineEvents';
+import { safeDocsUrl } from './docsUrl';
+import { installMicromamba, installTarget, resolveSource, type InstallResult } from './micromambaInstall';
+import {
+  deleteUserTemplate,
+  listUserTemplates,
+  renameUserTemplate,
+  saveUserTemplate,
+  templatesDir,
+  type StoredTemplate,
+  type StoreResult,
+} from './userTemplates';
+import { readSettings, sanitizeSettings, writeSettings, type AppSettings } from './appSettings';
 
 // =============================================================================
 // Types
@@ -156,16 +170,39 @@ function resolveRustExecutable(): string {
 // IPC Handlers
 // =============================================================================
 
-// File selection for wildcards
-ipcMain.handle('select-files', async (): Promise<string[] | null> => {
+/** What the file picker may be asked for (the renderer's request is cleaned before use). */
+interface SelectFilesOptions {
+  title?: string;
+  /** False: one file only. Default true. */
+  multiple?: boolean;
+  /** File name endings without the dot ('fastq', 'fq'); the picker offers them first. */
+  extensions?: string[];
+  /** Name for the extension filter ("FASTQ reads"). */
+  typeName?: string;
+}
+
+// File selection for wildcards and for template inputs
+ipcMain.handle('select-files', async (_event, options?: SelectFilesOptions): Promise<string[] | null> => {
   if (!mainWindow) return null;
 
+  const title =
+    typeof options?.title === 'string' && options.title.length <= 120
+      ? options.title
+      : 'Select Files for Batch Processing';
+  const extensions = Array.isArray(options?.extensions)
+    ? options!.extensions.filter((e): e is string => typeof e === 'string' && /^[A-Za-z0-9.]{1,12}$/.test(e))
+    : [];
+  const typeName =
+    typeof options?.typeName === 'string' && options.typeName.length <= 40 ? options.typeName : 'Expected files';
+  const multiple = options?.multiple !== false;
+
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openFile', 'multiSelections'],
-    title: 'Select Files for Batch Processing',
-    message: 'Choose multiple files to process with wildcards',
-    buttonLabel: 'Select Files',
+    properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+    title,
+    message: multiple ? 'Choose one or more files' : 'Choose a file',
+    buttonLabel: 'Select',
     filters: [
+      ...(extensions.length > 0 ? [{ name: typeName, extensions }] : []),
       { name: 'All Files', extensions: ['*'] },
       { name: 'FASTQ Files', extensions: ['fastq', 'fq'] },
       { name: 'Text Files', extensions: ['txt', 'csv', 'tsv'] },
@@ -255,26 +292,6 @@ ipcMain.handle(
     return { path: target, contents: fs.readFileSync(target, 'utf-8') };
   }
 );
-
-/**
- * Asks the user whether to discard unsaved changes. Used both for in-app
- * destructive actions (New / Open / Clear) and the window close guard.
- */
-ipcMain.handle('confirm-discard', async (_event, message: string): Promise<boolean> => {
-  if (!mainWindow) return true;
-
-  const { response } = await dialog.showMessageBox(mainWindow, {
-    type: 'warning',
-    buttons: ['Discard', 'Cancel'],
-    defaultId: 1,
-    cancelId: 1,
-    title: 'Unsaved Changes',
-    message,
-    detail: 'Your changes will be lost.',
-  });
-
-  return response === 0;
-});
 
 /** Renderer keeps the main process informed so the close guard can act. */
 ipcMain.on('set-dirty', (_event, dirty: boolean) => {
@@ -476,6 +493,28 @@ ipcMain.handle(
   }
 );
 
+/**
+ * Opens a tool's documentation page in the default browser. Only plain https
+ * addresses are opened (see docsUrl.ts), so this cannot start a program.
+ */
+ipcMain.handle(
+  'open-docs',
+  async (_event, url: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+    const safe = safeDocsUrl(url);
+    if (!safe) {
+      log.warn('Refused to open a documentation link', url);
+      return { ok: false, error: 'Only https:// links can be opened.' };
+    }
+    try {
+      await shell.openExternal(safe);
+      return { ok: true };
+    } catch (error) {
+      log.error('Could not open documentation', error);
+      return { ok: false, error: String(error) };
+    }
+  }
+);
+
 ipcMain.on('pause-workflow', (event: IpcMainEvent) => {
   if (!currentRustProcess || !pauseFlagPath) return;
 
@@ -550,6 +589,34 @@ const getThemedIconPath = (getAssetPath: (...paths: string[]) => string): string
   return getAssetPath(`${iconName}.png`);
 };
 
+/**
+ * Switches the app icon to match the system theme.
+ *
+ * macOS has no per-window icon (BrowserWindow.setIcon is Windows/Linux only and
+ * throws "Failed to load image" for an .icns path), so there the Dock icon is
+ * set instead, from the PNG. A failure is logged, never thrown: an icon must not
+ * crash the main process.
+ */
+const applyThemedIcon = (
+  window: BrowserWindow,
+  getAssetPath: (...paths: string[]) => string,
+): void => {
+  try {
+    if (process.platform === 'darwin') {
+      const iconName = nativeTheme.shouldUseDarkColors ? 'icon_dark' : 'icon_light';
+      const pngPath = getAssetPath(`${iconName}.png`);
+      log.info(`System theme changed — switching Dock icon to: ${path.basename(pngPath)}`);
+      app.dock?.setIcon(pngPath);
+    } else {
+      const iconPath = getThemedIconPath(getAssetPath);
+      log.info(`System theme changed — switching icon to: ${path.basename(iconPath)}`);
+      window.setIcon(iconPath);
+    }
+  } catch (err) {
+    log.warn('Could not switch the app icon for the new theme:', err);
+  }
+};
+
 const createWindow = async (): Promise<void> => {
 
   const RESOURCES_PATH = app.isPackaged
@@ -570,6 +637,20 @@ const createWindow = async (): Promise<void> => {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+
+  // The window title and the About panel say which build this is ("open beta").
+  const versionInfo = describeVersion(app.getVersion());
+  const windowTitle = `RustRunner ${versionInfo.label}`;
+  app.setAboutPanelOptions({
+    applicationName: 'RustRunner',
+    applicationVersion: versionInfo.label,
+    copyright: 'MIT License',
+    website: 'https://github.com/hsn-ylmz/RustRunner',
+  });
+  mainWindow.setTitle(windowTitle);
+  mainWindow.on('page-title-updated', (event) => {
+    event.preventDefault();
   });
 
   mainWindow.loadURL(resolveHtmlPath('index.html'));
@@ -615,12 +696,10 @@ const createWindow = async (): Promise<void> => {
     mainWindow = null;
   });
 
-  // Listen for system theme changes and update the window icon dynamically
+  // Listen for system theme changes and update the icon dynamically
   nativeTheme.on('updated', () => {
     if (mainWindow) {
-      const newIconPath = getThemedIconPath(getAssetPath);
-      log.info(`System theme changed — switching icon to: ${path.basename(newIconPath)}`);
-      mainWindow.setIcon(newIconPath);
+      applyThemedIcon(mainWindow, getAssetPath);
     }
   });
 
@@ -671,3 +750,82 @@ app
     });
   })
   .catch(log.error);
+
+// -----------------------------------------------------------------------------
+// The tool installer (micromamba)
+// -----------------------------------------------------------------------------
+
+let micromambaInstall: Promise<InstallResult> | null = null;
+
+/**
+ * Downloads and installs micromamba after the engine reported it missing. One
+ * install at a time: a second click joins the first. The source is pinned and
+ * verified in micromambaInstall.ts; nothing from the renderer is trusted.
+ */
+ipcMain.handle('install-micromamba', (): Promise<InstallResult> => {
+  if (!micromambaInstall) {
+    const source = resolveSource({
+      platform: process.platform,
+      arch: process.arch,
+      isPackaged: app.isPackaged,
+      env: process.env,
+    });
+    if ('error' in source) {
+      return Promise.resolve({ ok: false, error: source.error });
+    }
+    const target = installTarget({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      env: process.env,
+      homeDir: os.homedir(),
+      // __dirname is dist/main/ at runtime, so walk back up to the repo root.
+      sourceRuntimeDir: path.join(__dirname, '../../../RustRunner/runtime'),
+    });
+    log.info('Installing micromamba', { target });
+    micromambaInstall = installMicromamba({ source, target }).finally(() => {
+      micromambaInstall = null;
+    });
+  }
+  return micromambaInstall;
+});
+
+// -----------------------------------------------------------------------------
+// The person's own workflow templates: <home>/.rustrunner/templates/<id>.json
+// -----------------------------------------------------------------------------
+
+ipcMain.handle('list-user-templates', (): StoredTemplate[] => listUserTemplates(templatesDir(os.homedir())));
+
+ipcMain.handle('save-user-template', (_event, raw: unknown): StoreResult => {
+  const result = saveUserTemplate(templatesDir(os.homedir()), raw);
+  if (result.ok === false) log.warn('Could not save a template', result.error);
+  return result;
+});
+
+ipcMain.handle('delete-user-template', (_event, id: unknown): StoreResult =>
+  typeof id === 'string' ? deleteUserTemplate(templatesDir(os.homedir()), id) : { ok: false, error: 'Not a template id.' }
+);
+
+ipcMain.handle('rename-user-template', (_event, id: unknown, name: unknown): StoreResult =>
+  typeof id === 'string' && typeof name === 'string'
+    ? renameUserTemplate(templatesDir(os.homedir()), id, name)
+    : { ok: false, error: 'Not a template.' }
+);
+
+/** The per-person settings file, in the app's own data folder. */
+function settingsFile(): string {
+  return path.join(app.getPath('userData'), 'settings.json');
+}
+
+/** Favourites and recently used tools of the palette. */
+ipcMain.handle('get-settings', (): AppSettings => readSettings(settingsFile()));
+
+/** Saves the palette's favourites and recent tools; the main process cleans what the renderer sends. */
+ipcMain.handle('set-palette-prefs', (_event, palette: unknown): AppSettings => {
+  const next = sanitizeSettings({ palette });
+  try {
+    return writeSettings(settingsFile(), next);
+  } catch (error) {
+    log.error('Could not save settings', error);
+    return next;
+  }
+});

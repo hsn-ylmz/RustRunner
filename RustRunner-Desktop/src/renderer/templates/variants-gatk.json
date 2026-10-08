@@ -1,0 +1,357 @@
+{
+  "formatVersion": 1,
+  "id": "variants-gatk",
+  "name": "Germline variant calling with GATK",
+  "description": "Find variants in one sample with GATK HaplotypeCaller, the standard caller for human and other diploid genomes.",
+  "details": "Use this to call germline SNPs and small indels with GATK HaplotypeCaller, which re-assembles the reads around every candidate site and is the usual choice for diploid organisms and clinical-style work. The pipeline trims the reads with fastp, indexes your reference and aligns the reads with BWA-MEM, sorts the alignments, marks duplicates with Picard, indexes the result, prepares the reference files GATK requires (a .fai index and a sequence dictionary), calls variants, summarises them with bcftools stats and gathers the reports into MultiQC. The output is a standard VCF; filter it by quality afterwards (add a bcftools filter step) because HaplotypeCaller reports every candidate. The setup step asks how many copies of each chromosome your organism has (2 for most animals and plants, 1 for bacteria). GATK needs about 2 GB of memory by default; raise it in the HaplotypeCaller step for large genomes. Base-quality recalibration is not included. One single-end sample at a time.",
+  "domain": "dna",
+  "difficulty": "advanced",
+  "minCatalogVersion": "2026.15.1",
+  "readLayout": "single",
+  "inputs": [
+    {
+      "id": "reads",
+      "label": "Sequencing reads",
+      "hint": "One FASTQ file of single-end DNA reads, plain or compressed. For paired reads use the paired-end template.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample.fastq.gz",
+      "targets": [
+        {
+          "step": "fastp",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "label": "Reference genome",
+      "hint": "The reference genome as a FASTA file. The reads are compared against it.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "reference.fa",
+      "targets": [
+        {
+          "step": "bwa_index",
+          "slot": "ref"
+        },
+        {
+          "step": "faidx",
+          "slot": "ref"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "ploidy",
+      "label": "Copies of each chromosome (ploidy)",
+      "hint": "2 for humans and most animals and plants, 1 for bacteria and haploid yeast.",
+      "targets": [
+        {
+          "step": "hc",
+          "param": "ploidy"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "fastp",
+      "tool": "fastp",
+      "label": "Trim reads (fastp)",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "bwa_index",
+      "tool": "bwa-index",
+      "label": "BWA index",
+      "position": {
+        "x": 260,
+        "y": 160
+      }
+    },
+    {
+      "key": "bwa_mem",
+      "tool": "bwa-mem",
+      "label": "Align reads (BWA-MEM)",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort",
+      "tool": "samtools-sort",
+      "label": "Sort alignments",
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "markdup",
+      "tool": "picard-markduplicates",
+      "label": "Mark duplicates (Picard)",
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "key": "bam_index",
+      "tool": "samtools-index",
+      "label": "Index alignments",
+      "files": {
+        "bai": "marked.bam.bai"
+      },
+      "position": {
+        "x": 1040,
+        "y": 0
+      }
+    },
+    {
+      "key": "faidx",
+      "tool": "samtools-faidx",
+      "label": "Reference index (.fai)",
+      "position": {
+        "x": 0,
+        "y": 320
+      }
+    },
+    {
+      "key": "dict",
+      "tool": "gatk-createsequencedictionary",
+      "label": "Reference dictionary",
+      "position": {
+        "x": 260,
+        "y": 320
+      }
+    },
+    {
+      "key": "hc",
+      "tool": "gatk-haplotypecaller",
+      "label": "Call variants (HaplotypeCaller)",
+      "position": {
+        "x": 520,
+        "y": 320
+      }
+    },
+    {
+      "key": "stats",
+      "tool": "bcftools-stats",
+      "label": "Variant statistics",
+      "position": {
+        "x": 780,
+        "y": 320
+      }
+    },
+    {
+      "key": "multiqc",
+      "tool": "multiqc",
+      "label": "MultiQC report",
+      "files": {
+        "report_dir": "multiqc/"
+      },
+      "position": {
+        "x": 1040,
+        "y": 320
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "fastp",
+      "to": "bwa_mem",
+      "bind": [
+        {
+          "slot": "reads1",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "bwa_index",
+      "to": "bwa_mem",
+      "bind": [
+        {
+          "slot": "ref",
+          "output": "indexed_ref"
+        }
+      ]
+    },
+    {
+      "from": "bwa_mem",
+      "to": "sort",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "sort",
+      "to": "markdup",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "markdup",
+      "to": "bam_index",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "marked"
+        }
+      ]
+    },
+    {
+      "from": "faidx",
+      "to": "dict",
+      "bind": [
+        {
+          "slot": "ref",
+          "output": "fasta"
+        }
+      ]
+    },
+    {
+      "from": "dict",
+      "to": "hc",
+      "bind": [
+        {
+          "slot": "ref",
+          "output": "fasta"
+        }
+      ]
+    },
+    {
+      "from": "markdup",
+      "to": "hc",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "marked"
+        }
+      ]
+    },
+    {
+      "from": "bam_index",
+      "to": "hc",
+      "bind": [
+        {
+          "slot": "bai",
+          "output": "bai"
+        }
+      ]
+    },
+    {
+      "from": "hc",
+      "to": "stats",
+      "bind": [
+        {
+          "slot": "vcf",
+          "output": "vcf"
+        }
+      ]
+    },
+    {
+      "from": "fastp",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "json_report"
+        }
+      ]
+    },
+    {
+      "from": "markdup",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "metrics"
+        }
+      ]
+    },
+    {
+      "from": "stats",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "stats"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Variant calls",
+      "step": "hc",
+      "slot": "vcf",
+      "hint": "VCF with every candidate HaplotypeCaller found."
+    },
+    {
+      "label": "Alignments",
+      "step": "markdup",
+      "slot": "marked",
+      "hint": "Sorted BAM with duplicates marked."
+    },
+    {
+      "label": "Duplication metrics",
+      "step": "markdup",
+      "slot": "metrics",
+      "hint": "How many reads were PCR duplicates."
+    },
+    {
+      "label": "Variant statistics",
+      "step": "stats",
+      "slot": "stats",
+      "hint": "Counts of SNPs, indels and base changes."
+    },
+    {
+      "label": "Combined report",
+      "step": "multiqc",
+      "slot": "report",
+      "hint": "Open multiqc_report.html in a browser."
+    }
+  ],
+  "references": [
+    {
+      "label": "Poplin R, Ruano-Rubio V, DePristo MA, et al. Scaling accurate genetic variant discovery to tens of thousands of samples. bioRxiv 2018;201178.",
+      "url": "https://doi.org/10.1101/201178"
+    },
+    {
+      "label": "Van der Auwera GA, O'Connor BD. Genomics in the Cloud: Using Docker, GATK, and WDL in Terra. O'Reilly Media, 2020.",
+      "url": "https://gatk.broadinstitute.org/"
+    },
+    {
+      "label": "Li H. Aligning sequence reads, clone sequences and assembly contigs with BWA-MEM. arXiv 2013;1303.3997.",
+      "url": "https://doi.org/10.48550/arXiv.1303.3997"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    },
+    {
+      "label": "Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.",
+      "url": "https://doi.org/10.1093/bioinformatics/btw354"
+    }
+  ]
+}

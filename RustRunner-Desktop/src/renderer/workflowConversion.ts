@@ -3,64 +3,36 @@
  * wildcard helpers. No React or Electron imports so it is unit-testable.
  */
 
-export function labelToId(label: string): string {
-  return label
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .replace(/_+/g, '_');
-}
+import {
+  DEFAULT_WILDCARD_NAME,
+  MAX_WILDCARD_NAME_LENGTH,
+  declaredOutputs,
+  extractWildcardNames,
+  labelToId,
+  normalizeThreads,
+  normalizeWildcardName,
+  wildcardNameError,
+} from './stepNames';
+import { slotYaml, unescapeBraces } from './slots';
+import { catalogToolName, findTool, installYaml } from './tools/catalog';
 
-/** The wildcard name a node uses until the user picks another one. */
-export const DEFAULT_WILDCARD_NAME = 'sample';
-
-/** Longest wildcard name the Properties panel accepts. */
-export const MAX_WILDCARD_NAME_LENGTH = 40;
-
-/**
- * Names the engine reads as command placeholders (`{input}`, `{output}`, ...);
- * a wildcard called that would rewrite the command, so the engine rejects it.
- */
-const RESERVED_WILDCARD_NAMES = ['input', 'output', 'inputs', 'outputs'];
-
-/** Why `value` cannot name a wildcard, or null when it can (blank = default). */
-export function wildcardNameError(value: unknown): string | null {
-  const name = typeof value === 'string' ? value.trim() : '';
-  if (name === '') return null;
-  if (name.length > MAX_WILDCARD_NAME_LENGTH) {
-    return `Use at most ${MAX_WILDCARD_NAME_LENGTH} characters`;
-  }
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-    return 'Start with a letter or underscore, then use only letters, digits and underscores';
-  }
-  if (RESERVED_WILDCARD_NAMES.includes(name.toLowerCase())) {
-    return `"${name}" is a command placeholder; pick another name`;
-  }
-  return null;
-}
-
-/** The wildcard name a node uses: its own when valid, else the default. */
-export function normalizeWildcardName(value: unknown): string {
-  if (typeof value !== 'string' || wildcardNameError(value) !== null) {
-    return DEFAULT_WILDCARD_NAME;
-  }
-  return value.trim() || DEFAULT_WILDCARD_NAME;
-}
+// Re-exported: these live in stepNames.ts so the tool catalog can use them
+// without importing this module (which imports the catalog through slots).
+export {
+  DEFAULT_WILDCARD_NAME,
+  MAX_WILDCARD_NAME_LENGTH,
+  declaredOutputs,
+  extractWildcardNames,
+  labelToId,
+  normalizeThreads,
+  normalizeWildcardName,
+  wildcardNameError,
+};
 
 /** Replaces `{from}` with `{to}` in a path pattern. */
 export function renameWildcardInPattern(text: string, from: string, to: string): string {
   if (!text || from === to) return text;
   return text.split(`{${from}}`).join(`{${to}}`);
-}
-
-/** The `{name}` wildcards used in a path pattern, in order, without repeats. */
-export function extractWildcardNames(text: string): string[] {
-  const names: string[] = [];
-  for (const match of text.matchAll(/\{([^{}]+)\}/g)) {
-    if (!names.includes(match[1])) names.push(match[1]);
-  }
-  return names;
 }
 
 /**
@@ -91,17 +63,32 @@ export function convertNodesToWorkflow(
     const incoming = edges.filter((e: any) => e.target === node.id);
     const outgoing = edges.filter((e: any) => e.source === node.id);
     const files = nodeWildcardFiles[node.id] || [];
+    // Named file slots (see slots.ts). Only a step that has some gets the
+    // strict placeholder rules in the engine, so plain steps are written as before.
+    const slotInfo = slotYaml(node, nodes, edges);
+    const hasSlots = Object.keys(slotInfo).length > 0;
 
     const step: any = {
       id: stepId,
       tool: node.data.tool || '',
-      command: node.data.command || '',
+      // `{{x}}` keeps literal braces in a step with slots; a step without them
+      // gets the braces the way the engine would pass them to the shell.
+      command: hasSlots ? node.data.command || '' : unescapeBraces(node.data.command || ''),
       input: node.data.input ? [node.data.input] : [],
       output: node.data.output ? [node.data.output] : [],
       previous: incoming.map((e: any) => nodeIdToStepId.get(e.source)!),
       next: outgoing.map((e: any) => nodeIdToStepId.get(e.target)!),
       threads: normalizeThreads(node.data.threads),
+      ...slotInfo,
     };
+
+    // A step made from the catalog says where its tool comes from, so the
+    // engine installs the pinned version. A step whose Tool field was edited
+    // away from the catalog's tool is a free-form step and carries nothing.
+    const catalogTool = findTool(node.data.catalogId);
+    if (catalogTool && node.data.tool === catalogToolName(catalogTool)) {
+      step.install = installYaml(catalogTool.install);
+    }
 
     // Retry / timeout settings are emitted only when they change behaviour so
     // YAML for plain steps stays exactly as it was. Keys are snake_case: they
@@ -124,7 +111,7 @@ export function convertNodesToWorkflow(
     }
 
     // Output checks mirror the Rust `checks` list; omitted when none apply.
-    const checks = buildChecks(node.data);
+    const checks = buildChecks(node.data, Object.keys(slotInfo.named_outputs ?? {}).length > 0);
     if (checks.length > 0) {
       step.checks = checks;
     }
@@ -216,12 +203,6 @@ export function buildMetadata(
   return metadata;
 }
 
-/** Coerces a threads value from the UI into a positive integer. */
-export function normalizeThreads(value: unknown): number {
-  const n = Math.floor(Number(value));
-  return Number.isFinite(n) && n >= 1 ? n : 1;
-}
-
 /** Limits mirrored from the Rust validator (`MAX_RETRIES`, `MAX_RETRY_DELAY_SECS`). */
 export const MAX_RETRIES = 100;
 export const MAX_RETRY_DELAY_SECS = 3600;
@@ -258,15 +239,6 @@ export interface OutputCheckYaml {
   blocking?: false;
 }
 
-/** The individual outputs of an output field (comma-separated, like the engine reads it). */
-export function declaredOutputs(output: unknown): string[] {
-  if (typeof output !== 'string') return [];
-  return output
-    .split(',')
-    .map((part) => part.trim())
-    .filter((part) => part !== '');
-}
-
 /** A check target from the UI: a non-blank string, or undefined for "all outputs". */
 export function normalizeCheckTarget(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -298,12 +270,12 @@ export function isBlocking(value: unknown): boolean {
 
 /**
  * Turns the Properties panel's check presets into the engine's `checks` list.
- * Checks need an output to look at, so a step without one emits none (the
- * Rust validator would reject them). `blocking` is only written when off,
+ * Checks need an output to look at (the main one or a named one), so a step
+ * without any emits none (the Rust validator would reject them). `blocking` is only written when off,
  * because true is the engine default.
  */
-export function buildChecks(data: any): OutputCheckYaml[] {
-  if (!data?.output) return [];
+export function buildChecks(data: any, hasNamedOutputs = false): OutputCheckYaml[] {
+  if (!data?.output && !hasNamedOutputs) return [];
   const checks: OutputCheckYaml[] = [];
   const withTarget = (check: OutputCheckYaml, target: unknown): OutputCheckYaml => {
     const t = normalizeCheckTarget(target);
@@ -391,7 +363,13 @@ export function validateWorkflow(workflow: any): string[] {
 
     // A check aimed at one output must name an output the step still has (the
     // engine rejects it otherwise); say so before the run starts.
-    const outputs = (step.output ?? []).flatMap((o: string) => declaredOutputs(o));
+    // A target may be a path or the name of a named output.
+    const namedOutputs: Record<string, string[]> = step.named_outputs ?? {};
+    const outputs = [
+      ...(step.output ?? []).flatMap((o: string) => declaredOutputs(o)),
+      ...Object.values(namedOutputs).flat(),
+      ...Object.keys(namedOutputs),
+    ];
     for (const check of step.checks ?? []) {
       if (check.target !== undefined && !outputs.includes(check.target)) {
         errors.push(
@@ -403,7 +381,13 @@ export function validateWorkflow(workflow: any): string[] {
     // Every {name} in a path pattern needs files; the engine would reject the
     // step otherwise, and this says so before the run starts.
     const mapped = Object.keys(step.wildcard_files ?? {});
-    const used = extractWildcardNames([...(step.input ?? []), ...(step.output ?? [])].join(' '));
+    const slotFiles: string[] = [
+      ...Object.values((step.named_inputs ?? {}) as Record<string, string[]>).flat(),
+      ...Object.values(namedOutputs).flat(),
+    ];
+    const used = extractWildcardNames(
+      [...(step.input ?? []), ...(step.output ?? []), ...slotFiles].join(' ')
+    );
     for (const name of used) {
       if (!mapped.includes(name)) {
         errors.push(
@@ -411,6 +395,18 @@ export function validateWorkflow(workflow: any): string[] {
             ? `Step ${step.id}: pattern uses {${name}} but the selected files are for {${mapped[0]}}`
             : `Step ${step.id}: pattern uses {${name}} but no files are selected for it`
         );
+      }
+    }
+
+    // A slot with no file would reach the engine as an unbound placeholder,
+    // unless the step says it is optional (then the engine fills it with nothing).
+    const optional: string[] = step.optional_slots ?? [];
+    for (const [slot, files] of [
+      ...Object.entries((step.named_inputs ?? {}) as Record<string, string[]>),
+      ...Object.entries(namedOutputs),
+    ]) {
+      if (files.length === 0 && !optional.includes(slot)) {
+        errors.push(`Step ${step.id}: "${slot}" has no file yet`);
       }
     }
   });

@@ -68,3 +68,17 @@ examples/out/
 
 # Real-tool validation sandbox (micromamba, conda envs, synthetic data)
 /.sandbox/
+
+# Ribo-seq test data (downloaded by riboseq-test/prepare_data.sh)
+/riboseq-test/data/
+
+# Results of runs of the Ribo-seq test (whatever the results folder is called).
+# README.md, DATA.md, checksums and the scripts stay tracked.
+/riboseq-test/output/
+/riboseq-test/output*/
+/riboseq-test/out/
+/riboseq-test/out-*/
+/riboseq-test/result/
+/riboseq-test/results*/
+/riboseq-test/run*/
+__pycache__/

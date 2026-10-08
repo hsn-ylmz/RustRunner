@@ -22,8 +22,9 @@ fn expand_wildcards_in_workflow(workflow: &mut Workflow) -> Result<(), String> {
 
     // Check if any steps have wildcards
     let has_wildcards = workflow.steps.iter().any(|step| {
-        wildcards::has_wildcards(&step.input.join(" "))
-            || wildcards::has_wildcards(&step.output.join(" "))
+        step.pattern_entries()
+            .iter()
+            .any(|pattern| wildcards::has_wildcards(pattern))
     });
 
     if !has_wildcards {
@@ -214,23 +215,19 @@ fn derive_dependencies_from_files(workflow: &mut Workflow) -> Result<(), String>
         step.next.clear();
     }
 
-    // Build output -> step mapping
+    // Build output -> step mapping. Named outputs count like plain ones, so a
+    // step can be connected through any of its outputs.
     let mut output_to_step: HashMap<String, String> = HashMap::new();
 
     for step in &workflow.steps {
-        for output in &step.output {
-            // Handle comma-separated outputs
-            for file in output.split(',').map(|s| s.trim()) {
-                if !file.is_empty() {
-                    if output_to_step.contains_key(file) {
-                        return Err(format!(
-                            "Multiple steps produce '{}': '{}' and '{}'",
-                            file, output_to_step[file], step.id
-                        ));
-                    }
-                    output_to_step.insert(file.to_string(), step.id.clone());
-                }
+        for file in step.output_paths() {
+            if output_to_step.contains_key(&file) {
+                return Err(format!(
+                    "Multiple steps produce '{}': '{}' and '{}'",
+                    file, output_to_step[&file], step.id
+                ));
             }
+            output_to_step.insert(file, step.id.clone());
         }
     }
 
@@ -239,19 +236,17 @@ fn derive_dependencies_from_files(workflow: &mut Workflow) -> Result<(), String>
     let mut dependents: HashMap<String, Vec<String>> = HashMap::new();
 
     for step in &workflow.steps {
-        for input in &step.input {
-            for file in input.split(',').map(|s| s.trim()) {
-                if let Some(producer_id) = output_to_step.get(file) {
-                    dependencies
-                        .entry(step.id.clone())
-                        .or_default()
-                        .push(producer_id.clone());
+        for file in step.input_paths() {
+            if let Some(producer_id) = output_to_step.get(&file) {
+                dependencies
+                    .entry(step.id.clone())
+                    .or_default()
+                    .push(producer_id.clone());
 
-                    dependents
-                        .entry(producer_id.clone())
-                        .or_default()
-                        .push(step.id.clone());
-                }
+                dependents
+                    .entry(producer_id.clone())
+                    .or_default()
+                    .push(step.id.clone());
             }
         }
     }
@@ -481,5 +476,119 @@ steps:
         let result = expand_wildcards_in_workflow(&mut workflow);
         assert!(result.is_ok());
         assert_eq!(workflow.steps.len(), 1);
+    }
+
+    // ---- named slots ----
+
+    fn load_yaml(yaml: &str) -> Result<Workflow, String> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("w.yaml");
+        std::fs::write(&path, yaml).unwrap();
+        load_workflow(path.to_str().unwrap()).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn test_connections_are_derived_through_named_outputs() {
+        let wf = load_yaml(
+            r#"
+steps:
+  - id: sort
+    tool: bash
+    command: sort {raw} -o {bam}
+    named_inputs:
+      raw: [aligned.sam]
+    named_outputs:
+      bam: [sorted.bam]
+      bai: [sorted.bai]
+  - id: call
+    tool: bash
+    command: call {bam} {idx}
+    named_inputs:
+      bam: [sorted.bam]
+      idx: [sorted.bai]
+"#,
+        )
+        .unwrap();
+        let call = wf.steps.iter().find(|s| s.id == "call").unwrap();
+        assert_eq!(call.previous, vec!["sort"]);
+        let sort = wf.steps.iter().find(|s| s.id == "sort").unwrap();
+        assert_eq!(sort.next, vec!["call"]);
+    }
+
+    #[test]
+    fn test_two_steps_writing_the_same_named_output_are_rejected() {
+        let err = load_yaml(
+            r#"
+steps:
+  - id: a
+    tool: bash
+    command: echo {o}
+    named_outputs: {o: [same.txt]}
+  - id: b
+    tool: bash
+    command: echo {o}
+    named_outputs: {o: [same.txt]}
+"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("same.txt"), "{err}");
+    }
+
+    #[test]
+    fn test_load_reports_the_unbound_slot() {
+        let err = load_yaml(
+            r#"
+steps:
+  - id: align
+    tool: bash
+    command: bwa {ref} {reads}
+    named_inputs:
+      ref: []
+      reads: [r.fq]
+"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("{ref}") && err.contains("no file"), "{err}");
+        assert!(!err.contains("{reads}"), "{err}");
+    }
+
+    #[test]
+    fn test_per_slot_wildcards_expand_on_load() {
+        let wf = load_yaml(
+            r#"
+steps:
+  - id: align
+    tool: bash
+    command: bwa {r1} {r2} > {bam}
+    named_inputs:
+      r1: ["data/{sample}_R1.fastq"]
+      r2: ["data/{sample}_R2.fastq"]
+    named_outputs:
+      bam: ["out/{sample}.bam"]
+    wildcard_files:
+      sample: [data/s1_R1.fastq, data/s2_R1.fastq]
+"#,
+        )
+        .unwrap();
+        let ids: Vec<&str> = wf.steps.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["align_s1", "align_s2"]);
+        assert_eq!(wf.steps[1].named_inputs["r2"], vec!["data/s2_R2.fastq"]);
+    }
+
+    #[test]
+    fn test_old_yaml_without_slots_loads_unchanged() {
+        let wf = load_yaml(
+            r#"
+steps:
+  - id: a
+    tool: bash
+    command: awk '{print}' {input} > {output}
+    input: [in.txt]
+    output: [out.txt]
+"#,
+        )
+        .unwrap();
+        assert!(!wf.steps[0].is_structured());
+        assert_eq!(wf.steps[0].command, "awk '{print}' {input} > {output}");
     }
 }

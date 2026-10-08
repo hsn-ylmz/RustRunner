@@ -1,26 +1,33 @@
 import { describe, expect, it } from 'vitest';
 import {
   CATALOG,
-  ENGINE_PLACEHOLDERS,
   PARAM_TYPES,
+  RESERVED_NAMES,
   applyParamChange,
   buildCatalogNodeData,
+  catalogToolName,
   checkConnection,
   checkEdge,
   coerceNumber,
   defaultParams,
   findTool,
+  inputTypesOf,
+  installYaml,
   missingRequiredParams,
+  outputTypesOf,
   renderCommand,
   searchTools,
   shellQuote,
+  slotNames,
   templatePlaceholders,
   uniqueLabel,
+  validateCatalog,
   validateCatalogNodes,
   type Catalog,
   type CatalogTool,
 } from '../tools/catalog';
 import { convertNodesToWorkflow } from '../workflowConversion';
+import { isNodeColorId } from '../nodeColors';
 
 const tool = (id: string): CatalogTool => {
   const found = findTool(id);
@@ -29,11 +36,15 @@ const tool = (id: string): CatalogTool => {
 };
 
 describe('catalog structure', () => {
-  it('has a schema version, a catalog version and 12 to 15 tools', () => {
-    expect(CATALOG.schemaVersion).toBe(1);
+  it('has schema version 2, a catalog version and 12 to 100 tools', () => {
+    expect(CATALOG.schema_version).toBe(2);
     expect(CATALOG.version).toMatch(/^\d{4}\.\d+\.\d+$/);
     expect(CATALOG.tools.length).toBeGreaterThanOrEqual(12);
-    expect(CATALOG.tools.length).toBeLessThanOrEqual(15);
+    expect(CATALOG.tools.length).toBeLessThanOrEqual(100);
+  });
+
+  it('passes the schema check (the same one the CI test uses on every future catalog)', () => {
+    expect(validateCatalog(CATALOG)).toEqual([]);
   });
 
   it('has unique tool ids made of lowercase letters, digits and dashes', () => {
@@ -42,70 +53,110 @@ describe('catalog structure', () => {
     for (const id of ids) expect(id).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
   });
 
-  it('has a unique, non-empty name for every tool', () => {
+  it('has a unique, non-empty name and description for every tool', () => {
     const names = CATALOG.tools.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
     for (const t of CATALOG.tools) expect(t.description.trim()).not.toBe('');
   });
 
   it('only uses declared file types, and declares each only once', () => {
-    expect(new Set(CATALOG.fileTypes).size).toBe(CATALOG.fileTypes.length);
+    expect(new Set(CATALOG.file_types).size).toBe(CATALOG.file_types.length);
     for (const t of CATALOG.tools) {
-      expect(t.inputTypes.length, `${t.id} input types`).toBeGreaterThan(0);
-      expect(t.outputTypes.length, `${t.id} output types`).toBeGreaterThan(0);
-      for (const type of [...t.inputTypes, ...t.outputTypes]) {
-        expect(CATALOG.fileTypes, `${t.id} uses unknown type ${type}`).toContain(type);
+      expect(inputTypesOf(t).length, `${t.id} input types`).toBeGreaterThan(0);
+      expect(outputTypesOf(t).length, `${t.id} output types`).toBeGreaterThan(0);
+      for (const type of [...inputTypesOf(t), ...outputTypesOf(t)]) {
+        if (type === 'any') continue;
+        expect(CATALOG.file_types, `${t.id} uses unknown type ${type}`).toContain(type);
       }
     }
   });
 
-  it('puts every tool in a declared category with a colour', () => {
+  it('puts every tool in a declared category and a subcategory, with a colour for each category', () => {
     for (const t of CATALOG.tools) {
       expect(Object.keys(CATALOG.categories), `${t.id} category`).toContain(t.category);
+      expect(t.subcategory.trim(), `${t.id} subcategory`).not.toBe('');
     }
     for (const [id, category] of Object.entries(CATALOG.categories)) {
       expect(category.label, id).not.toBe('');
-      expect(category.color, id).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(isNodeColorId(category.color), `${id} colour ${category.color}`).toBe(true);
     }
   });
 
-  it('names a bioconda package and a positive whole default thread count', () => {
+  it('pins every conda tool to one exact version and names a plain package', () => {
     for (const t of CATALOG.tools) {
-      expect(t.conda.package, t.id).toMatch(/^[a-z0-9][a-z0-9._-]*$/);
-      expect(Number.isInteger(t.defaultThreads) && t.defaultThreads >= 1, t.id).toBe(true);
+      if (t.install.kind !== 'conda') continue;
+      expect(t.install.package, t.id).toMatch(/^[a-z0-9][a-z0-9._-]*$/);
+      expect(t.install.version, `${t.id} must be pinned`).toMatch(/^[0-9][A-Za-z0-9._+-]*$/);
+      expect(t.install.channel, t.id).toBe('bioconda');
     }
   });
 
-  it('defines every placeholder of every command template', () => {
+  it('pins STAR to 2.7.10b and installs the Intel build on Apple silicon', () => {
+    const star = tool('star');
+    expect(star.install).toMatchObject({ kind: 'conda', package: 'star', version: '2.7.10b', osx64: true });
+  });
+
+  it('gives every tool a positive whole default thread count and an https docs link', () => {
     for (const t of CATALOG.tools) {
-      const defined = new Set([...ENGINE_PLACEHOLDERS, 'threads', ...t.params.map((p) => p.id)]);
-      for (const name of templatePlaceholders(t.command)) {
-        expect(defined.has(name), `${t.id}: {${name}} is not defined`).toBe(true);
+      expect(Number.isInteger(t.threads) && t.threads >= 1, t.id).toBe(true);
+      expect(t.docs, t.id).toMatch(/^https:\/\//);
+    }
+  });
+
+  it('defines every placeholder of every command template and uses every slot and option', () => {
+    for (const t of CATALOG.tools) {
+      const defined = new Set(['threads', ...slotNames(t), ...t.params.map((p) => p.id)]);
+      const used = templatePlaceholders(t.command);
+      for (const name of used) expect(defined.has(name), `${t.id}: {${name}} is not defined`).toBe(true);
+      for (const p of t.params) expect(used, `${t.id}: ${p.id} is never used`).toContain(p.id);
+      for (const slot of [...t.inputs, ...t.outputs]) {
+        if ('derived' in slot && slot.derived) continue;
+        expect(used, `${t.id}: ${slot.name} is never used`).toContain(slot.name);
       }
     }
   });
 
-  it('uses every parameter in its template, with unique ids and no reserved names', () => {
+  it('names slots plainly, uniquely and never like an engine placeholder or an option', () => {
     for (const t of CATALOG.tools) {
-      const ids = t.params.map((p) => p.id);
-      expect(new Set(ids).size, `${t.id} param ids`).toBe(ids.length);
-      const used = templatePlaceholders(t.command);
-      for (const id of ids) {
-        expect(id, t.id).toMatch(/^[a-z][a-z0-9_]*$/);
-        expect([...ENGINE_PLACEHOLDERS, 'threads'], `${t.id}: ${id} is reserved`).not.toContain(id);
-        expect(used, `${t.id}: ${id} is never used`).toContain(id);
+      const names = slotNames(t);
+      expect(new Set(names).size, `${t.id} slot names`).toBe(names.length);
+      for (const name of names) {
+        const where = `${t.id}.${name}`;
+        expect(name, where).toMatch(/^[a-z][a-z0-9_]*$/);
+        expect(name.length, where).toBeLessThanOrEqual(40);
+        expect(RESERVED_NAMES, `${where} is reserved`).not.toContain(name);
+        expect(t.params.map((p) => p.id), `${where} is also an option`).not.toContain(name);
+      }
+      for (const slot of [...t.inputs, ...t.outputs]) {
+        expect(slot.label.trim(), `${t.id}.${slot.name}`).not.toBe('');
+        expect(slot.description.trim(), `${t.id}.${slot.name}`).not.toBe('');
       }
     }
   });
 
-  it('gives every tool an input and an output path when its command needs them', () => {
+  it('gives every output a file name pattern (a folder ends in a slash) or a derived rule', () => {
+    for (const t of CATALOG.tools) {
+      for (const out of t.outputs) {
+        const where = `${t.id}.${out.name}`;
+        if (out.derived) {
+          expect(out.pattern, where).toBeUndefined();
+          const source = t.outputs.find((o) => o.name === out.derived!.from);
+          expect(source, `${where} follows an output of the same tool`).toBeDefined();
+          expect(source!.derived, `${where} follows a derived output`).toBeUndefined();
+        } else {
+          expect(out.pattern!.endsWith('/'), where).toBe(out.is_dir);
+          expect(out.pattern, where).not.toMatch(/[{}\s]/);
+        }
+      }
+    }
+  });
+
+  it('makes tools take their reads and references through input slots, not a main Input', () => {
     for (const t of CATALOG.tools) {
       const used = templatePlaceholders(t.command);
-      expect(used, t.id).toContain('input');
-      expect(t.defaultInput.trim(), `${t.id} default input`).not.toBe('');
-      if (used.includes('output')) expect(t.defaultOutput.trim(), `${t.id} default output`).not.toBe('');
-      // Plain file names: a `{...}` wildcard would need selected files to run.
-      expect(t.defaultInput + t.defaultOutput).not.toMatch(/[{}]/);
+      expect(used, t.id).not.toContain('input');
+      expect(used, t.id).not.toContain('output');
+      expect(t.inputs.length, t.id).toBeGreaterThan(0);
     }
   });
 
@@ -124,7 +175,6 @@ describe('catalog structure', () => {
             break;
           case 'string':
             expect(typeof p.default, where).toBe('string');
-            // A required parameter with a default is fine; one without must start empty.
             break;
           case 'boolean':
             expect(typeof p.default, where).toBe('boolean');
@@ -139,13 +189,13 @@ describe('catalog structure', () => {
     }
   });
 
-  it('renders every default command with only the engine placeholders and required gaps left', () => {
+  it('renders every default command with only the file slots and required gaps left', () => {
     for (const t of CATALOG.tools) {
-      const command = renderCommand(t, defaultParams(t), t.defaultThreads);
+      const command = renderCommand(t, defaultParams(t), t.threads);
       const gaps = missingRequiredParams(t, defaultParams(t));
       for (const name of templatePlaceholders(command)) {
         expect(
-          [...ENGINE_PLACEHOLDERS, ...gaps].includes(name),
+          [...slotNames(t), ...gaps].includes(name),
           `${t.id}: {${name}} left in "${command}"`
         ).toBe(true);
       }
@@ -173,62 +223,78 @@ describe('catalog structure', () => {
       expect(ids).toContain(id);
     }
   });
+
+  it('migrates the 14 version 1 tools: cutadapt and samtools flagstat are still there', () => {
+    const ids = CATALOG.tools.map((t) => t.id);
+    expect(ids).toEqual(expect.arrayContaining(['cutadapt', 'samtools-flagstat']));
+  });
+
+  it('describes the files of the tools the migration brief names', () => {
+    const inputs = (id: string) => tool(id).inputs.map((s) => `${s.name}${s.required ? '' : '?'}${s.multiple ? '*' : ''}`);
+    expect(inputs('bwa-mem')).toEqual(['ref', 'reads1', 'reads2?']);
+    expect(inputs('featurecounts')).toEqual(['bams*', 'annotation']);
+    expect(inputs('salmon-quant')).toEqual(['index', 'reads']);
+    expect(inputs('star')).toEqual(['index', 'reads', 'reads2?']);
+    expect(inputs('bcftools-call')).toEqual(['ref', 'bam']);
+    expect(inputs('multiqc')).toEqual(['reports*']);
+    expect(tool('multiqc').inputs[0].types).toEqual(['any']);
+  });
 });
 
 describe('renderCommand', () => {
-  it('fills threads and parameters but leaves {input} and {output} to the engine', () => {
+  it('fills threads and parameters but leaves the file slots to the engine', () => {
     expect(renderCommand(tool('samtools-sort'), defaultParams(tool('samtools-sort')), 8)).toBe(
-      'samtools sort -@ 8 -m 768M -o {output} {input}'
+      'samtools sort -@ 8 -m 768M -o {bam} {alignments}'
     );
   });
 
   it('renders an unticked flag as nothing and a ticked flag as its text', () => {
     const t = tool('samtools-sort');
     const on = renderCommand(t, { by_name: true, memory_per_thread: '2G' }, 2);
-    expect(on).toBe('samtools sort -@ 2 -n -m 2G -o {output} {input}');
+    expect(on).toBe('samtools sort -@ 2 -n -m 2G -o {bam} {alignments}');
     const off = renderCommand(t, { by_name: false, memory_per_thread: '2G' }, 2);
-    expect(off).toBe('samtools sort -@ 2 -m 2G -o {output} {input}');
+    expect(off).toBe('samtools sort -@ 2 -m 2G -o {bam} {alignments}');
   });
 
   it('keeps no double space when a flag at the end of a template is off', () => {
     const t = tool('featurecounts');
-    const text = renderCommand(t, { ...defaultParams(t), annotation: 'genes.gtf', paired: true }, 4);
-    expect(text).toContain('-g gene_id -p --countReadPairs -o {output}');
-    expect(renderCommand(t, { ...defaultParams(t), annotation: 'genes.gtf', paired: false }, 4)).toContain(
-      '-g gene_id -o {output}'
+    const text = renderCommand(t, { ...defaultParams(t), paired: true }, 4);
+    expect(text).toContain('-g gene_id -p --countReadPairs -o {counts}');
+    expect(renderCommand(t, { ...defaultParams(t), paired: false }, 4)).toContain(
+      '-g gene_id -o {counts}'
     );
   });
 
   it('renders a select value and ignores one that is not an option', () => {
     const t = tool('bowtie2');
-    expect(renderCommand(t, { index: 'idx', preset: 'very-fast' }, 4)).toContain('--very-fast -x idx');
-    expect(renderCommand(t, { index: 'idx', preset: 'rm -rf /' }, 4)).toContain('--sensitive -x idx');
+    expect(renderCommand(t, { preset: 'very-fast' }, 4)).toContain('--very-fast -x {index}');
+    expect(renderCommand(t, { preset: 'rm -rf /' }, 4)).toContain('--sensitive -x {index}');
   });
 
   it('shell-quotes string values that are not plain', () => {
-    const t = tool('bwa-mem');
-    const text = renderCommand(t, { ref: 'my genome; rm -rf ~.fa' }, 4);
-    expect(text).toContain(" 'my genome; rm -rf ~.fa' ");
+    const t = tool('cutadapt');
+    const text = renderCommand(t, { adapter: 'AGAT; rm -rf ~' }, 4);
+    expect(text).toContain(" -a 'AGAT; rm -rf ~' ");
     expect(shellQuote("it's")).toBe(`'it'\\''s'`);
     expect(shellQuote('refs/hg38.fa')).toBe('refs/hg38.fa');
   });
 
   it('leaves the placeholder of an empty required parameter so the gap is visible', () => {
-    const t = tool('bwa-mem');
-    expect(renderCommand(t, defaultParams(t), 4)).toBe(
-      'bwa mem -t 4 -M -k 19 {ref} {input} > {output}'
+    const t = tool('cutadapt');
+    expect(renderCommand(t, defaultParams(t), 4)).toContain('-a AGATCGGAAGAGC ');
+    expect(renderCommand(t, { adapter: '  ' }, 4)).toContain('-a {adapter} ');
+    // A read group is always written (GATK and Picard need one); an emptied name leaves the gap visible.
+    expect(renderCommand(tool('bwa-mem'), defaultParams(tool('bwa-mem')), 4)).toBe(
+      'sample=sample; bwa mem -t 4 -M -k 19 -R "@RG\\tID:$sample\\tSM:$sample" {ref} {reads1} {reads2} > {sam}'
     );
-    expect(renderCommand(t, { ref: '  ' }, 4)).toContain('{ref}');
-    expect(renderCommand(t, { ref: 'hg38.fa' }, 4)).toBe(
-      'bwa mem -t 4 -M -k 19 hg38.fa {input} > {output}'
-    );
+    expect(renderCommand(tool('bwa-mem'), { sample_name: '' }, 4)).toContain('sample={sample_name};');
   });
 
   it('turns an unusable thread count into 1 and clamps numbers to their bounds', () => {
     const t = tool('samtools-index');
-    expect(renderCommand(t, {}, '')).toBe('samtools index -@ 1 {input} {output}');
-    expect(renderCommand(t, {}, 'abc')).toBe('samtools index -@ 1 {input} {output}');
-    expect(renderCommand(t, {}, '6')).toBe('samtools index -@ 6 {input} {output}');
+    expect(renderCommand(t, {}, '')).toBe('samtools index -@ 1 {bam} {bai}');
+    expect(renderCommand(t, {}, 'abc')).toBe('samtools index -@ 1 {bam} {bai}');
+    expect(renderCommand(t, {}, '6')).toBe('samtools index -@ 6 {bam} {bai}');
 
     const view = tool('samtools-view');
     expect(renderCommand(view, { min_mapq: 999, mapped_only: false }, 2)).toContain('-q 255 -o');
@@ -239,42 +305,43 @@ describe('renderCommand', () => {
   });
 
   it('does not expand placeholders inside a value', () => {
-    const t = tool('bwa-mem');
-    const text = renderCommand(t, { ref: '{threads}.fa' }, 4);
-    expect(text).toContain("'{threads}.fa'");
+    const t = tool('cutadapt');
+    const text = renderCommand(t, { adapter: '{threads}' }, 4);
+    expect(text).toContain("-a '{threads}' ");
   });
 
   it('falls back to defaults when parameters are missing (old or partial node data)', () => {
     const t = tool('fastp');
     expect(renderCommand(t, undefined, 4)).toBe(
-      'fastp -i {input} -o {output} -w 4 -q 15 -l 15 --html fastp.html --json fastp.json'
+      'fastp -i {reads} -o {trimmed} -w 4 -q 15 -l 15 --html {html_report} --json {json_report}'
     );
   });
 
   it('keeps a pipe command intact', () => {
     const t = tool('bcftools-call');
-    const text = renderCommand(t, { ref: 'ref.fa', min_mapq: 30 }, 2);
+    const text = renderCommand(t, { min_mapq: 30 }, 2);
     expect(text).toBe(
-      'set -o pipefail; bcftools mpileup --threads 2 -Ou -f ref.fa -q 30 {input} | bcftools call --threads 2 -mv -Ov -o {output}'
+      'set -o pipefail; bcftools mpileup --threads 2 -Ou -f {ref} -q 30 {bam} | bcftools call --threads 2 -mv -Ov -o {vcf}'
     );
   });
 });
 
 describe('required parameters', () => {
   it('lists the empty required parameters', () => {
-    expect(missingRequiredParams(tool('bwa-mem'), defaultParams(tool('bwa-mem')))).toEqual(['ref']);
-    expect(missingRequiredParams(tool('bwa-mem'), { ref: 'a.fa' })).toEqual([]);
+    expect(missingRequiredParams(tool('cutadapt'), defaultParams(tool('cutadapt')))).toEqual([]);
+    expect(missingRequiredParams(tool('cutadapt'), { adapter: '' })).toEqual(['adapter']);
+    expect(missingRequiredParams(tool('cutadapt'), { adapter: 'AGAT' })).toEqual([]);
     expect(missingRequiredParams(tool('fastqc'), {})).toEqual([]);
   });
 
   it('reports catalog steps with a gap before a run, but not edited commands', () => {
-    const gap = { id: 'n1', data: { label: 'BWA MEM', catalogId: 'bwa-mem', catalogParams: { ref: '' } } };
-    expect(validateCatalogNodes([gap])).toEqual(['Step bwa_mem: fill in Reference FASTA']);
+    const gap = { id: 'n1', data: { label: 'Cutadapt', catalogId: 'cutadapt', catalogParams: { adapter: '' } } };
+    expect(validateCatalogNodes([gap])).toEqual(["Step cutadapt: fill in 3' adapter sequence"]);
 
     const edited = { id: 'n2', data: { ...gap.data, catalogCommandCustom: true } };
     expect(validateCatalogNodes([edited])).toEqual([]);
 
-    const filled = { id: 'n3', data: { ...gap.data, catalogParams: { ref: 'a.fa' } } };
+    const filled = { id: 'n3', data: { ...gap.data, catalogParams: { adapter: 'AGAT' } } };
     expect(validateCatalogNodes([filled])).toEqual([]);
 
     const free = { id: 'n4', data: { label: 'Custom', tool: 'bash' } };
@@ -289,17 +356,21 @@ describe('search', () => {
 
   it('finds tools by name, ignoring case', () => {
     expect(searchTools('FASTQC').map((t) => t.id)).toEqual(['fastqc']);
-    expect(searchTools('bwa').map((t) => t.id)).toEqual(['bwa-mem']);
+    expect(searchTools('bwa').map((t) => t.id)).toEqual(['bwa-index', 'bwa-mem']);
   });
 
   it('finds tools by category id and by category label', () => {
     const byId = searchTools('alignment').map((t) => t.id);
     expect(byId).toEqual(expect.arrayContaining(['bwa-mem', 'bowtie2', 'star']));
-    expect(searchTools('variant calling').map((t) => t.id)).toEqual(['bcftools-call']);
+    expect(searchTools('variant calling').map((t) => t.id)).toEqual(
+      expect.arrayContaining(['bcftools-call', 'freebayes', 'gatk-haplotypecaller'])
+    );
+    expect(searchTools('variant calling').map((t) => t.id)).not.toContain('bwa-mem');
   });
 
   it('requires every word and can narrow by category', () => {
-    expect(searchTools('samtools index').map((t) => t.id)).toEqual(['samtools-index']);
+    expect(searchTools('samtools index').map((t) => t.id)).toEqual(['samtools-faidx', 'samtools-index']);
+    expect(searchTools('samtools index', 'processing').map((t) => t.id)).toEqual(['samtools-index']);
     expect(searchTools('zzz')).toEqual([]);
     const processing = searchTools('', 'processing').map((t) => t.id);
     expect(processing).toEqual(expect.arrayContaining(['samtools-sort', 'samtools-index']));
@@ -313,18 +384,20 @@ describe('search', () => {
 });
 
 describe('new catalog nodes', () => {
-  it('prefills label, tool, command, threads, files and the parameter form', () => {
+  it('prefills label, tool, command, threads, output names and the parameter form', () => {
     const t = tool('fastqc');
     const data = buildCatalogNodeData(t, []);
     expect(data).toMatchObject({
       label: 'FastQC',
       tool: 'fastqc',
-      command: 'mkdir -p qc && fastqc -t 2 --outdir qc {input}',
-      input: 'reads.fastq.gz',
-      output: 'qc/reads_fastqc.html',
+      command: 'fastqc -t 2 --outdir {report_dir} {reads}',
+      input: '',
+      output: '',
       threads: 2,
       catalogId: 'fastqc',
-      catalogParams: { outdir: 'qc' },
+      catalogSchema: 2,
+      catalogParams: {},
+      slotFiles: { report_dir: 'qc/' },
     });
     expect(data.color).toBe(CATALOG.categories[t.category].color);
   });
@@ -343,7 +416,16 @@ describe('new catalog nodes', () => {
     expect(buildCatalogNodeData(tool('fastqc'), ['FastQC']).label).toBe('FastQC 2');
   });
 
-  it('becomes a normal engine step: the catalog fields never reach the YAML', () => {
+  it('starts every output slot with its default name, but not the derived ones', () => {
+    expect(buildCatalogNodeData(tool('star'), []).slotFiles).toEqual({ out_dir: 'star/' });
+    expect(buildCatalogNodeData(tool('fastp'), []).slotFiles).toEqual({
+      trimmed: 'trimmed.fastq.gz',
+      html_report: 'fastp.html',
+      json_report: 'fastp.json',
+    });
+  });
+
+  it('becomes a normal engine step: only the install block and the file slots are added', () => {
     const data = buildCatalogNodeData(tool('samtools-sort'), []);
     const workflow = convertNodesToWorkflow(
       [{ id: 'n1', position: { x: 0, y: 0 }, data }],
@@ -354,13 +436,46 @@ describe('new catalog nodes', () => {
     expect(workflow.steps[0]).toEqual({
       id: 'samtools_sort',
       tool: 'samtools',
-      command: 'samtools sort -@ 4 -m 768M -o {output} {input}',
-      input: ['aligned.sam'],
-      output: ['sorted.bam'],
+      command: 'samtools sort -@ 4 -m 768M -o {bam} {alignments}',
+      input: [],
+      output: [],
       previous: [],
       next: [],
       threads: 4,
+      install: { kind: 'conda', package: 'samtools', version: '1.24', channel: 'bioconda' },
+      named_inputs: { alignments: [] },
+      named_outputs: { bam: ['sorted.bam'] },
     });
+  });
+
+  it('writes the install block, with the Intel flag only where the catalog sets it', () => {
+    const star = convertNodesToWorkflow(
+      [{ id: 'n1', position: { x: 0, y: 0 }, data: buildCatalogNodeData(tool('star'), []) }],
+      [],
+      {},
+      {}
+    ).steps[0];
+    expect(star.install).toEqual({
+      kind: 'conda',
+      package: 'star',
+      version: '2.7.10b',
+      channel: 'bioconda',
+      osx64: true,
+    });
+    expect(installYaml(tool('bwa-mem').install)).not.toHaveProperty('osx64');
+  });
+
+  it('writes no install block once the Tool field was edited away from the catalog', () => {
+    const data = { ...buildCatalogNodeData(tool('fastqc'), []), tool: 'my-own-fastqc' };
+    const step = convertNodesToWorkflow([{ id: 'n1', position: { x: 0, y: 0 }, data }], [], {}, {}).steps[0];
+    expect(step).not.toHaveProperty('install');
+  });
+
+  it('marks optional inputs for the engine so an empty second read file is fine', () => {
+    const data = buildCatalogNodeData(tool('bwa-mem'), []);
+    const step = convertNodesToWorkflow([{ id: 'n1', position: { x: 0, y: 0 }, data }], [], {}, {}).steps[0];
+    expect(step.optional_slots).toEqual(['reads2']);
+    expect(step.named_inputs.reads2).toEqual([]);
   });
 });
 
@@ -372,21 +487,21 @@ describe('editing parameters re-renders the command', () => {
     const patch = applyParamChange(t, data, {
       params: { ...data.catalogParams, memory_per_thread: '4G', by_name: true },
     });
-    expect(patch.command).toBe('samtools sort -@ 4 -n -m 4G -o {output} {input}');
+    expect(patch.command).toBe('samtools sort -@ 4 -n -m 4G -o {bam} {alignments}');
     expect(patch.catalogParams).toEqual({ memory_per_thread: '4G', by_name: true });
   });
 
   it('renders again when the thread count changes', () => {
     const data: Record<string, any> = buildCatalogNodeData(t, []);
     const patch = applyParamChange(t, data, { threads: '12' });
-    expect(patch.command).toBe('samtools sort -@ 12 -m 768M -o {output} {input}');
+    expect(patch.command).toBe('samtools sort -@ 12 -m 768M -o {bam} {alignments}');
     expect(patch).not.toHaveProperty('catalogParams');
   });
 
   it('keeps a command the user edited by hand, but still stores the parameters', () => {
     const data: Record<string, any> = {
       ...buildCatalogNodeData(t, []),
-      command: 'samtools sort -T /scratch -o {output} {input}',
+      command: 'samtools sort -T /scratch -o {bam} {alignments}',
       catalogCommandCustom: true,
     };
     const patch = applyParamChange(t, data, { params: { by_name: true, memory_per_thread: '1G' } });
@@ -418,6 +533,8 @@ describe('file type matching', () => {
     expect(check.message).toContain('FastQC');
     expect(check.message).toContain('samtools sort');
     expect(check.message).toContain('still works');
+    expect(check.made).toEqual(outputTypesOf(tool('fastqc')));
+    expect(check.expected).toEqual(inputTypesOf(tool('samtools-sort')));
     expect(checkConnection(tool('bwa-mem'), tool('samtools-index')).status).toBe('mismatch');
   });
 
@@ -440,6 +557,12 @@ describe('file type matching', () => {
     expect(checkEdge({ source: 'a', target: 'missing' }, nodes).status).toBe('unknown');
   });
 
+  it('lets an input that takes any file (MultiQC) accept every tool', () => {
+    for (const source of ['fastp', 'cutadapt', 'samtools-flagstat', 'star', 'salmon-quant']) {
+      expect(checkConnection(tool(source), tool('multiqc')).status, source).toBe('match');
+    }
+  });
+
   it('is directional: sorted BAM into BWA would not match', () => {
     expect(checkConnection(tool('samtools-sort'), tool('bwa-mem')).status).toBe('mismatch');
   });
@@ -449,7 +572,7 @@ describe('file type matching', () => {
       ...CATALOG,
       tools: [
         ...CATALOG.tools,
-        { ...tool('fastqc'), id: 'x', inputTypes: ['zip'], outputTypes: ['html'] },
+        { ...tool('fastqc'), id: 'x', name: 'Extra' },
       ],
     };
     expect(findTool('x', extra)).toBeDefined();
@@ -461,20 +584,51 @@ describe('file type matching', () => {
 describe('flags verified against the real tools', () => {
   it('fastqc uses --outdir (FastQC 0.13 dropped -o)', () => {
     const cmd = renderCommand(tool('fastqc'), {}, 2);
-    expect(cmd).toContain('--outdir qc');
+    expect(cmd).toContain('--outdir {report_dir}');
     expect(cmd).not.toMatch(/ -o /);
   });
 
   it('star unpacks reads with gzip -cdf, never zcat (macOS zcat wants .Z files)', () => {
-    const cmd = renderCommand(tool('star'), { genome_dir: 'idx' }, 4);
+    const cmd = renderCommand(tool('star'), {}, 4);
     expect(cmd).toContain('--readFilesCommand gzip -cdf');
     expect(cmd).not.toContain('zcat');
   });
 
   it('featurecounts counts read pairs when paired-end is ticked (-p alone counts reads)', () => {
-    const on = renderCommand(tool('featurecounts'), { annotation: 'g.gtf', paired: true }, 1);
+    const on = renderCommand(tool('featurecounts'), { paired: true }, 1);
     expect(on).toContain('-p --countReadPairs');
-    const off = renderCommand(tool('featurecounts'), { annotation: 'g.gtf', paired: false }, 1);
+    const off = renderCommand(tool('featurecounts'), { paired: false }, 1);
     expect(off).not.toContain('-p');
+  });
+});
+
+describe('Bowtie2 read pairs and samtools fastq (catalog 2026.16.0)', () => {
+  it('Bowtie2 takes the second read file as an optional slot and aligns pairs when it is set', () => {
+    const t = tool('bowtie2');
+    const second = t.inputs.find((i) => i.name === 'reads2')!;
+    expect(second.required).toBe(false);
+    expect(second.types).toEqual(['fastq']);
+    const cmd = renderCommand(t, defaultParams(t), 4);
+    // One command for both kinds: single-end unless the second file is given.
+    expect(cmd).toContain('set -- -U "{reads}"; if [ -n "{reads2}" ]; then set -- -1 "{reads}" -2 "{reads2}"; fi;');
+    expect(cmd).toContain('-X 500 "$@"');
+    expect(renderCommand(t, { max_fragment: 2000 }, 4)).toContain('-X 2000 "$@"');
+  });
+
+  it('Bowtie2 still asks only for the index and the first reads file', () => {
+    const t = tool('bowtie2');
+    const nodes = [{ id: 'a', position: { x: 0, y: 0 }, data: { ...buildCatalogNodeData(t, []), slotFiles: { index: 'idx', reads: 'r.fq.gz', sam: 'a.sam' } } }];
+    expect(validateCatalogNodes(nodes)).toEqual([]);
+  });
+
+  it('samtools fastq turns a BAM into compressed FASTQ and keeps a failed pipe visible', () => {
+    const t = tool('samtools-fastq');
+    expect(t.install).toEqual(tool('samtools-sort').install);
+    expect(t.inputs.map((i) => i.name)).toEqual(['alignments']);
+    expect(t.outputs.map((o) => [o.name, o.types, o.pattern])).toEqual([['reads', ['fastq'], 'reads.fastq.gz']]);
+    expect(renderCommand(t, {}, 2)).toBe('set -o pipefail; samtools fastq -@ 2 {alignments} | gzip > {reads}');
+    // The Dorado output connects to it, and its output connects to the read filters.
+    expect(t.inputs[0].types).toContain(tool('dorado-basecaller').outputs[0].types[0]);
+    expect(tool('chopper').inputs[0].types).toContain('fastq');
   });
 });

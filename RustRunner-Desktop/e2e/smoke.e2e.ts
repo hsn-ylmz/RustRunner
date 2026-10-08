@@ -8,9 +8,11 @@ import {
   connect,
   fillNode,
   nodes,
+  openSection,
   openStepStatus,
   pidsMatching,
   selectNode,
+  showRunTooltip,
   stepRow,
 } from './fixtures';
 
@@ -55,6 +57,8 @@ test('two nodes can be added, connected and filled in', async ({ page, consoleEr
 test('retries, timeout and output checks render and persist on reselect', async ({ page }) => {
   await buildChain(page, TWO_STEPS);
   await selectNode(page, 'Make');
+  await openSection(page, 'reliability');
+  await openSection(page, 'checks');
 
   // Retry options are hidden until retries > 0.
   await expect(page.getByTestId('prop-retry-backoff')).toHaveCount(0);
@@ -92,6 +96,7 @@ test('retries, timeout and output checks render and persist on reselect', async 
 test('output checks are disabled until the node has an output', async ({ page }) => {
   await addNode(page);
   await nodes(page).first().click();
+  await openSection(page, 'checks');
   await expect(page.getByTestId('prop-check-exists')).toBeDisabled();
   await page.getByTestId('prop-output').fill('x.txt');
   await expect(page.getByTestId('prop-check-exists')).toBeEnabled();
@@ -109,7 +114,7 @@ test('a two-step workflow runs to success and both steps show as succeeded', asy
 
   await expect(stepRow(page, 'make')).toHaveAttribute('data-state', 'succeeded');
   await expect(stepRow(page, 'copy')).toHaveAttribute('data-state', 'succeeded');
-  await expect(page.getByTestId('step-status')).toContainText('2 succeeded');
+  await expect(page.getByTestId('step-status')).toContainText('2 done');
   await expect(page.getByTestId('progress')).toHaveText('2 / 2 steps');
   await expect(nodes(page).filter({ hasText: 'Make' })).toHaveAttribute('data-state', 'succeeded');
 
@@ -134,6 +139,7 @@ test('a failing step shows as retrying with its attempt, then succeeds', async (
     },
   ]);
   await selectNode(page, 'Flaky');
+  await openSection(page, 'reliability');
   await page.getByTestId('prop-retries').fill('1');
   await page.getByTestId('prop-retry-delay').fill('4');
 
@@ -166,6 +172,7 @@ test('a failed blocking output check fails the step and skips the one after it',
     { label: 'Next', command: 'cp {input} {output}', input: 'empty.txt', output: 'next.txt' },
   ]);
   await selectNode(page, 'Empty');
+  await openSection(page, 'checks');
   await page.getByTestId('prop-check-non-empty').check();
 
   await page.getByTestId('run-from-scratch').click();
@@ -173,9 +180,13 @@ test('a failed blocking output check fails the step and skips the one after it',
 
   const failed = stepRow(page, 'empty');
   await expect(failed).toHaveAttribute('data-state', 'failed');
-  await expect(failed.locator('.step-row-details')).toContainText('output check failed');
+  // Plain words, the same as the failure card: no engine check names.
+  await expect(failed.locator('.step-row-details')).toContainText('empty.txt is empty');
+  await expect(failed.locator('.step-row-details')).toContainText('Outputs must be non-empty');
+  await expect(failed.locator('.step-row-details')).not.toContainText('non_empty');
   await expect(stepRow(page, 'next')).toHaveAttribute('data-state', 'skipped');
-  await expect(stepRow(page, 'next').locator('.step-row-details')).toContainText('not run');
+  await expect(stepRow(page, 'next').locator('.step-row-details')).toContainText('Did not run because "Empty" failed.');
+  await expect(stepRow(page, 'next').locator('.step-row-details')).not.toContainText("step 'empty'");
   await expect(page.getByTestId('run-from-scratch')).toBeEnabled();
 });
 
@@ -210,10 +221,10 @@ test('a second Run skips every up-to-date step and Run from scratch runs them ag
 }) => {
   await buildChain(page, TWO_STEPS);
   await page.getByTestId('set-directory').click();
-  await expect(page.locator('.working-directory')).toBeVisible();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
   // A directory with no saved state: Run is available and says nothing is saved.
   await expect(page.getByTestId('run')).toBeEnabled();
-  await expect(page.getByTestId('run')).toHaveAttribute('title', /No saved run/);
+  await expect(await showRunTooltip(page)).toContainText('No saved run');
 
   await page.getByTestId('run').click();
   await openStepStatus(page);
@@ -222,7 +233,7 @@ test('a second Run skips every up-to-date step and Run from scratch runs them ag
   await expect(page.getByTestId('run')).toBeEnabled();
 
   // The engine's state file now exists and the tooltip counts its steps.
-  await expect(page.getByTestId('run')).toHaveAttribute('title', /2 step/);
+  await expect(await showRunTooltip(page)).toContainText(/2 steps? already finished/);
 
   // Both outputs are current, so the second Run skips both steps.
   await page.getByTestId('run').click();
@@ -265,7 +276,7 @@ test('editing a command re-runs that step and its children, not its parents', as
     { label: 'Count', command: 'echo run >> count.log; wc -c < {input} > {output}', input: 'b.txt', output: 'c.txt' },
   ]);
   await page.getByTestId('set-directory').click();
-  await expect(page.locator('.working-directory')).toBeVisible();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
 
   const runsOf = () => ['make', 'copy', 'count'].map((n) => lineCount(sandbox.workDir, `${n}.log`));
 
@@ -381,7 +392,7 @@ test('keep going runs the independent branch after a failure', async ({ page, sa
 
   await expect(stepRow(page, 'bad')).toHaveAttribute('data-state', 'failed');
   await expect(stepRow(page, 'after')).toHaveAttribute('data-state', 'skipped');
-  await expect(stepRow(page, 'after').locator('.step-row-details')).toContainText("step 'bad' failed");
+  await expect(stepRow(page, 'after').locator('.step-row-details')).toContainText('Did not run because "Bad" failed.');
   await expect(stepRow(page, 'free')).toHaveAttribute('data-state', 'succeeded');
   await expect(stepRow(page, 'free2')).toHaveAttribute('data-state', 'succeeded');
   await expect(page.getByTestId('run-from-scratch')).toBeEnabled();
@@ -392,7 +403,7 @@ test('keep going runs the independent branch after a failure', async ({ page, sa
 test('renaming the workflow keeps its saved run for Run', async ({ page }) => {
   await buildChain(page, TWO_STEPS);
   await page.getByTestId('set-directory').click();
-  await expect(page.locator('.working-directory')).toBeVisible();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
 
   await page.getByTestId('run-from-scratch').click();
   await openStepStatus(page);
@@ -402,7 +413,7 @@ test('renaming the workflow keeps its saved run for Run', async ({ page }) => {
   await editDetails(page, { name: 'A completely different name' });
   await expect(page.getByTestId('workflow-title')).toContainText('A completely different name');
   await expect(page.getByTestId('run')).toBeEnabled();
-  await expect(page.getByTestId('run')).toHaveAttribute('title', /2 step/);
+  await expect(await showRunTooltip(page)).toContainText(/2 steps? already finished/);
 
   await page.getByTestId('run').click();
   await expect(page.getByTestId('run-from-scratch')).toBeEnabled();

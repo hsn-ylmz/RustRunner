@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Templates and tools - RustRunner</title>
+<meta name="description" content="The 14 workflow templates and 85 catalog tools that ship with RustRunner 1.0.0-beta.1.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-header">
+  <div class="wrap bar">
+    <a class="brand" href="index.html">RustRunner <span class="badge">open beta</span></a>
+    <nav aria-label="Main">
+      <a href="index.html">Home</a>
+      <a href="ribo-seq.html">Ribo-seq walkthrough</a>
+      <a href="library.html" aria-current="page">Templates and tools</a>
+      <a href="https://github.com/hsn-ylmz/RustRunner">GitHub</a>
+    </nav>
+  </div>
+</header>
+<main id="main" class="wrap">
+
+<h1>Templates and tools</h1>
+<p class="lead">This page is generated from the app's own catalog (version 2026.17.1), so it always matches what ships: 14 templates and 85 tools.</p>
+
+<h2 id="templates">Templates</h2>
+<p>A template builds a whole pipeline from your files. The settings that depend on your data (adapter, strandedness, genome size) are asked before the workflow is created.</p>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Template</th><th scope="col">Field</th><th scope="col">Level</th><th scope="col">Reads</th><th scope="col">Steps</th><th scope="col">Tools</th></tr></thead>
+    <tbody>
+    <tr id="template-assembly-flye-quast">
+      <th scope="row">Genome assembly from long reads (Flye and QUAST)<div class="small">Put long Nanopore or PacBio reads of a microbial genome together without a reference, then measure how good the assembly is.</div></th>
+      <td>Genome assembly</td>
+      <td>Intermediate</td>
+      <td>Long reads or signal</td>
+      <td>2</td>
+      <td>Flye, QUAST</td>
+    </tr>
+    <tr id="template-assembly-spades-quast">
+      <th scope="row">Genome assembly from short reads (SPAdes and QUAST)<div class="small">Put Illumina reads of a microbial genome together without a reference, then measure how good the assembly is.</div></th>
+      <td>Genome assembly</td>
+      <td>Intermediate</td>
+      <td>Single- or paired-end reads</td>
+      <td>2</td>
+      <td>SPAdes, QUAST</td>
+    </tr>
+    <tr id="template-atacseq-genrich">
+      <th scope="row">ATAC-seq open chromatin peaks with Genrich<div class="small">Find open chromatin regions from paired-end ATAC-seq reads: align, call peaks in ATAC mode, merge them and make a signal track.</div></th>
+      <td>Epigenomics</td>
+      <td>Advanced</td>
+      <td>Paired-end reads</td>
+      <td>8</td>
+      <td>Bowtie2 build, Bowtie2, samtools sort, Genrich, bedtools merge, samtools index, deepTools bamCoverage</td>
+    </tr>
+    <tr id="template-basic-read-qc">
+      <th scope="row">Basic read quality check<div class="small">Check the quality of sequencing reads, trim them, check again and get one combined report.</div></th>
+      <td>Read quality</td>
+      <td>Beginner</td>
+      <td>Single-end reads</td>
+      <td>4</td>
+      <td>FastQC, fastp, MultiQC</td>
+    </tr>
+    <tr id="template-chipseq-macs3">
+      <th scope="row">ChIP-seq peak calling with MACS3<div class="small">Find where a protein binds the genome: trim, align a ChIP sample and its input control, call peaks, draw the signal and say which genes the peaks lie near.</div></th>
+      <td>Epigenomics</td>
+      <td>Advanced</td>
+      <td>Single-end reads</td>
+      <td>14</td>
+      <td>fastp, Bowtie2 build, Bowtie2, samtools sort, samtools index, MACS3 callpeak, deepTools bamCoverage, deepTools plotFingerprint, HOMER annotatePeaks</td>
+    </tr>
+    <tr id="template-metagenomics-kraken2-bracken">
+      <th scope="row">Who is in my sample? Kraken2 and Bracken<div class="small">Find which organisms a metagenomic sample contains and how abundant they are: trim, classify the reads with Kraken2, estimate abundances with Bracken and gather the results in one report.</div></th>
+      <td>Metagenomics</td>
+      <td>Intermediate</td>
+      <td>Single-end reads</td>
+      <td>4</td>
+      <td>fastp, Kraken2, Bracken, MultiQC</td>
+    </tr>
+    <tr id="template-nanopore-fastq">
+      <th scope="row">Nanopore reads from FASTQ to coverage<div class="small">Filter Nanopore reads, check their quality, map them to a genome and measure coverage. Works on every computer.</div></th>
+      <td>Long reads</td>
+      <td>Intermediate</td>
+      <td>Long reads or signal</td>
+      <td>6</td>
+      <td>chopper, NanoPlot, minimap2 (long reads), samtools sort, samtools index, mosdepth</td>
+    </tr>
+    <tr id="template-nanopore-signal">
+      <th scope="row">Nanopore from raw signal to coverage<div class="small">Start from the raw POD5 signal files of a Nanopore run: call the bases with Dorado, filter, check the reads, map them to a genome and measure coverage.</div></th>
+      <td>Long reads</td>
+      <td>Advanced</td>
+      <td>Long reads or signal</td>
+      <td>10</td>
+      <td>pod5 merge, pod5 inspect, Dorado basecaller, samtools fastq, chopper, NanoPlot, minimap2 (long reads), samtools sort, samtools index, mosdepth</td>
+    </tr>
+    <tr id="template-riboseq-umi-ribowaltz">
+      <th scope="row">Ribo-seq with UMIs (riboWaltz)<div class="small">Ribosome profiling with UMIs: trim, extract UMIs, remove rRNA/tRNA/ncRNA, map to transcripts with STAR, deduplicate, riboWaltz report and MultiQC.</div></th>
+      <td>RNA sequencing</td>
+      <td>Advanced</td>
+      <td>Single-end reads</td>
+      <td>20</td>
+      <td>FastQC, Cutadapt, UMI-tools extract, Bowtie2 build, Remove reads matching a database (bowtie2), STAR genome index, STAR (Ribo-seq, transcriptome BAM), samtools view, samtools sort, samtools index, UMI-tools dedup, riboWaltz report, MultiQC</td>
+    </tr>
+    <tr id="template-rnaseq-hisat2-counts">
+      <th scope="row">RNA-seq alignment and gene counts<div class="small">Align RNA-seq reads to a genome with HISAT2 and count the reads per gene, ready for differential expression.</div></th>
+      <td>RNA sequencing</td>
+      <td>Intermediate</td>
+      <td>Single-end reads</td>
+      <td>7</td>
+      <td>fastp, HISAT2 build, HISAT2, samtools sort, samtools index, featureCounts, MultiQC</td>
+    </tr>
+    <tr id="template-rnaseq-salmon">
+      <th scope="row">RNA-seq quantification with Salmon<div class="small">Estimate how much of each transcript is present in an RNA-seq sample, without aligning the reads to a genome.</div></th>
+      <td>RNA sequencing</td>
+      <td>Intermediate</td>
+      <td>Single-end reads</td>
+      <td>4</td>
+      <td>fastp, Salmon index, Salmon quant, MultiQC</td>
+    </tr>
+    <tr id="template-variants-bcftools-paired">
+      <th scope="row">Germline variant calling, paired-end reads (bcftools)<div class="small">Find variants in one paired-end sample against a reference genome, with alignment statistics and a filtered VCF.</div></th>
+      <td>DNA sequencing</td>
+      <td>Intermediate</td>
+      <td>Paired-end reads</td>
+      <td>10</td>
+      <td>BWA index, BWA MEM, samtools sort, samtools markdup, samtools index, samtools flagstat, bcftools call, bcftools filter, bcftools stats, MultiQC</td>
+    </tr>
+    <tr id="template-variants-bcftools">
+      <th scope="row">Germline variant calling with bcftools<div class="small">Find single-base differences between one sample and a reference genome, from trimming to a filtered, summarised VCF.</div></th>
+      <td>DNA sequencing</td>
+      <td>Intermediate</td>
+      <td>Single-end reads</td>
+      <td>10</td>
+      <td>fastp, BWA index, BWA MEM, samtools sort, samtools markdup, samtools index, bcftools call, bcftools filter, bcftools stats, MultiQC</td>
+    </tr>
+    <tr id="template-variants-gatk">
+      <th scope="row">Germline variant calling with GATK<div class="small">Find variants in one sample with GATK HaplotypeCaller, the standard caller for human and other diploid genomes.</div></th>
+      <td>DNA sequencing</td>
+      <td>Advanced</td>
+      <td>Single-end reads</td>
+      <td>11</td>
+      <td>fastp, BWA index, BWA MEM, samtools sort, Picard MarkDuplicates, samtools index, samtools faidx, GATK CreateSequenceDictionary, GATK HaplotypeCaller, bcftools stats, MultiQC</td>
+    </tr>
+    </tbody>
+</table></div>
+
+<h2 id="tools">Catalog tools</h2>
+<p>Each entry names every file it reads and writes, installs the tool at a pinned version and was run against the real program. Jump to: <a href="#category-qc">Quality control</a> | <a href="#category-trimming">Trimming</a> | <a href="#category-reference">Reference preparation</a> | <a href="#category-alignment">Alignment</a> | <a href="#category-processing">BAM processing</a> | <a href="#category-variant_calling">Variant calling</a> | <a href="#category-annotation">Variant annotation</a> | <a href="#category-quantification">Quantification</a> | <a href="#category-peak_calling">Peak calling and epigenomics</a> | <a href="#category-signal">Signal tracks and plots</a> | <a href="#category-intervals">Genome intervals</a> | <a href="#category-sequences">FASTA and FASTQ tools</a> | <a href="#category-assembly">Assembly</a> | <a href="#category-metagenomics">Metagenomics</a> | <a href="#category-nanopore">Nanopore signal data</a></p>
+<h3 id="category-qc">Quality control <span class="count">9</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-fastqc">
+        <th scope="row"><a href="https://www.bioinformatics.babraham.ac.uk/projects/fastqc/">FastQC</a><div class="small">Read quality</div></th>
+        <td>Quality report for raw sequencing reads.</td>
+        <td>fastq</td>
+        <td>html, zip</td>
+        <td class="small">fastqc 0.13.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-multiqc">
+        <th scope="row"><a href="https://docs.seqera.io/multiqc">MultiQC</a><div class="small">Report summaries</div></th>
+        <td>Combines the reports of many tools into one HTML page.</td>
+        <td>any</td>
+        <td>html</td>
+        <td class="small">multiqc 1.35 (bioconda)</td>
+      </tr>
+      <tr id="tool-mosdepth">
+        <th scope="row"><a href="https://github.com/brentp/mosdepth">mosdepth</a><div class="small">Coverage</div></th>
+        <td>Fast coverage summary: the average depth per chromosome and in windows along the genome.</td>
+        <td>bam, bai</td>
+        <td>txt, bed</td>
+        <td class="small">mosdepth 0.3.13 (bioconda)</td>
+      </tr>
+      <tr id="tool-qualimap-bamqc">
+        <th scope="row"><a href="https://bioconda.github.io/recipes/qualimap/README.html">Qualimap BamQC</a><div class="small">Alignment QC</div></th>
+        <td>Quality report of an alignment: coverage, mapping quality, insert size and base content.</td>
+        <td>bam</td>
+        <td>html, txt</td>
+        <td class="small">qualimap 2.3 (bioconda)</td>
+      </tr>
+      <tr id="tool-rseqc-infer-experiment">
+        <th scope="row"><a href="https://rseqc.sourceforge.net/#infer-experiment-py">RSeQC infer experiment</a><div class="small">RNA-seq QC</div></th>
+        <td>Works out whether an RNA-seq library is stranded, and which way, from where reads fall on genes.</td>
+        <td>bam, bed</td>
+        <td>txt</td>
+        <td class="small">rseqc 5.0.5 (bioconda)</td>
+      </tr>
+      <tr id="tool-rseqc-read-distribution">
+        <th scope="row"><a href="https://rseqc.sourceforge.net/#read-distribution-py">RSeQC read distribution</a><div class="small">RNA-seq QC</div></th>
+        <td>Shows how the reads divide between exons, introns and the regions around genes.</td>
+        <td>bam, bed</td>
+        <td>txt</td>
+        <td class="small">rseqc 5.0.5 (bioconda)</td>
+      </tr>
+      <tr id="tool-deeptools-plotfingerprint">
+        <th scope="row"><a href="https://deeptools.readthedocs.io/en/latest/content/tools/plotFingerprint.html">deepTools plotFingerprint</a><div class="small">Enrichment</div></th>
+        <td>Shows how well a ChIP-seq or ATAC-seq sample is enriched: a good ChIP puts most of its reads into a small part of the genome, an input control spreads them evenly.</td>
+        <td>bam, bai</td>
+        <td>image, tsv</td>
+        <td class="small">deeptools 3.5.6 (bioconda)</td>
+      </tr>
+      <tr id="tool-nanoplot">
+        <th scope="row"><a href="https://github.com/wdecoster/NanoPlot">NanoPlot</a><div class="small">Long-read QC</div></th>
+        <td>Summarises a Nanopore or PacBio run: how many reads, how long and how accurate, with plots. Reads FASTQ, a Dorado BAM or a sequencing summary.</td>
+        <td>fastq, fasta, bam, tsv</td>
+        <td>html, txt</td>
+        <td class="small">nanoplot 1.48.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-seqkit-stats">
+        <th scope="row"><a href="https://bioinf.shenwei.me/seqkit/usage/#stats">seqkit stats</a><div class="small">Sequence statistics</div></th>
+        <td>Counts the sequences in FASTA or FASTQ files and reports their total length, shortest, longest, N50 and average quality, one line per file.</td>
+        <td>fastq, fasta</td>
+        <td>tsv</td>
+        <td class="small">seqkit 2.14.0 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-trimming">Trimming <span class="count">6</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-fastp">
+        <th scope="row"><a href="https://github.com/OpenGene/fastp">fastp</a><div class="small">Trim and filter reads</div></th>
+        <td>Fast adapter and quality trimming for FASTQ reads.</td>
+        <td>fastq</td>
+        <td>fastq, html, json</td>
+        <td class="small">fastp 1.3.7 (bioconda)</td>
+      </tr>
+      <tr id="tool-cutadapt">
+        <th scope="row"><a href="https://cutadapt.readthedocs.io/">Cutadapt</a><div class="small">Trim and filter reads</div></th>
+        <td>Removes adapter sequences and low-quality ends from reads.</td>
+        <td>fastq</td>
+        <td>fastq, txt</td>
+        <td class="small">cutadapt 5.2 (bioconda)</td>
+      </tr>
+      <tr id="tool-filtlong">
+        <th scope="row"><a href="https://github.com/rrwick/Filtlong">Filtlong</a><div class="small">Long-read filtering</div></th>
+        <td>Keeps the best long reads of a Nanopore or PacBio run: drops reads that are too short or too inaccurate, and can keep only as many bases as you need. Writes a compressed FASTQ.</td>
+        <td>fastq</td>
+        <td>fastq</td>
+        <td class="small">filtlong 0.3.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-chopper">
+        <th scope="row"><a href="https://github.com/wdecoster/chopper">chopper</a><div class="small">Long-read filtering</div></th>
+        <td>Filters and trims long reads by their average quality and length. Fast, and the usual first step for Nanopore reads. Writes a compressed FASTQ.</td>
+        <td>fastq</td>
+        <td>fastq</td>
+        <td class="small">chopper 0.14.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-umi-tools-extract">
+        <th scope="row"><a href="https://umi-tools.readthedocs.io/en/latest/reference/extract.html">UMI-tools extract</a><div class="small">UMI handling</div></th>
+        <td>Moves each read's UMI (unique molecular identifier) into its name and cuts it, and any spacer next to it, out of the sequence. Run it before aligning so duplicates can be removed later.</td>
+        <td>fastq</td>
+        <td>fastq, txt</td>
+        <td class="small">umi_tools 1.1.6 (bioconda)</td>
+      </tr>
+      <tr id="tool-bowtie2-remove-reads">
+        <th scope="row"><a href="https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml#reporting-options">Remove reads matching a database (bowtie2)</a><div class="small">Remove contaminant reads</div></th>
+        <td>Aligns reads to sequences you do not want (rRNA, tRNA, small RNAs, PhiX, a contaminant genome) and keeps the reads that do not match. Matches are counted in the log, not saved.</td>
+        <td>index, fastq</td>
+        <td>fastq, txt</td>
+        <td class="small">bowtie2 2.5.5 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-reference">Reference preparation <span class="count">10</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-bwa-index">
+        <th scope="row"><a href="https://bio-bwa.sourceforge.net/bwa.shtml">BWA index</a><div class="small">Aligner indexes</div></th>
+        <td>Builds the index BWA MEM needs to align reads to a genome.</td>
+        <td>fasta</td>
+        <td>index, fasta</td>
+        <td class="small">bwa 0.7.19 (bioconda)</td>
+      </tr>
+      <tr id="tool-bowtie2-build">
+        <th scope="row"><a href="https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml#the-bowtie2-build-indexer">Bowtie2 build</a><div class="small">Aligner indexes</div></th>
+        <td>Builds the genome index Bowtie2 needs to align reads.</td>
+        <td>fasta</td>
+        <td>index</td>
+        <td class="small">bowtie2 2.5.5 (bioconda)</td>
+      </tr>
+      <tr id="tool-samtools-faidx">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-faidx.html">samtools faidx</a><div class="small">Reference indexes</div></th>
+        <td>Indexes a reference FASTA (makes the .fai file variant callers need).</td>
+        <td>fasta</td>
+        <td>fasta, fai</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-gatk-createsequencedictionary">
+        <th scope="row"><a href="https://gatk.broadinstitute.org/hc/en-us/articles/360036712531-CreateSequenceDictionary-Picard">GATK CreateSequenceDictionary</a><div class="small">Reference indexes</div></th>
+        <td>Makes the sequence dictionary (.dict) that GATK needs next to the reference.</td>
+        <td>fasta</td>
+        <td>fasta, fai, dict</td>
+        <td class="small">gatk4 4.6.2.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-hisat2-build">
+        <th scope="row"><a href="https://daehwankimlab.github.io/hisat2/manual/">HISAT2 build</a><div class="small">Aligner indexes</div></th>
+        <td>Builds the genome index HISAT2 needs to align RNA-seq reads.</td>
+        <td>fasta</td>
+        <td>index</td>
+        <td class="small">hisat2 2.2.3 (bioconda)</td>
+      </tr>
+      <tr id="tool-salmon-index">
+        <th scope="row"><a href="https://salmon.readthedocs.io/en/latest/salmon.html#preparing-transcriptome-indices-mapping-based-mode">Salmon index</a><div class="small">Aligner indexes</div></th>
+        <td>Builds the index Salmon quant needs from transcript sequences.</td>
+        <td>fasta</td>
+        <td>index</td>
+        <td class="small">salmon 2.8.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-star-genomegenerate">
+        <th scope="row"><a href="https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf">STAR genome index</a><div class="small">Aligner indexes</div></th>
+        <td>Builds the genome index STAR needs to align RNA-seq reads, with the known splice junctions of an annotation.</td>
+        <td>fasta, gtf</td>
+        <td>index</td>
+        <td class="small">star 2.7.10b (bioconda)</td>
+      </tr>
+      <tr id="tool-kallisto-index">
+        <th scope="row"><a href="https://pachterlab.github.io/kallisto/manual">kallisto index</a><div class="small">Aligner indexes</div></th>
+        <td>Builds the index kallisto quant needs from transcript sequences.</td>
+        <td>fasta</td>
+        <td>index</td>
+        <td class="small">kallisto 0.52.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-gffread">
+        <th scope="row"><a href="https://ccb.jhu.edu/software/stringtie/gff.shtml#gffread">gffread transcripts</a><div class="small">Annotation files</div></th>
+        <td>Cuts the transcript sequences (exons joined together) out of a genome using an annotation.</td>
+        <td>fasta, gtf</td>
+        <td>fasta</td>
+        <td class="small">gffread 0.12.9 (bioconda)</td>
+      </tr>
+      <tr id="tool-gffread-bed">
+        <th scope="row"><a href="https://ccb.jhu.edu/software/stringtie/gff.shtml#gffread">Annotation to BED12</a><div class="small">Annotation files</div></th>
+        <td>Converts a gene annotation (GTF or GFF3) to the BED12 gene model that RSeQC reads.</td>
+        <td>gtf</td>
+        <td>bed</td>
+        <td class="small">gffread 0.12.9 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-alignment">Alignment <span class="count">7</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-bwa-mem">
+        <th scope="row"><a href="https://bio-bwa.sourceforge.net/bwa.shtml">BWA MEM</a><div class="small">DNA aligners</div></th>
+        <td>Aligns reads to a reference genome. Writes SAM.</td>
+        <td>fasta, fastq</td>
+        <td>sam</td>
+        <td class="small">bwa 0.7.19 (bioconda)</td>
+      </tr>
+      <tr id="tool-bowtie2">
+        <th scope="row"><a href="https://bowtie-bio.sourceforge.net/bowtie2/manual.shtml">Bowtie2</a><div class="small">DNA aligners</div></th>
+        <td>Aligns reads to an indexed genome, single-end or as read pairs. Writes SAM.</td>
+        <td>index, fastq</td>
+        <td>sam</td>
+        <td class="small">bowtie2 2.5.5 (bioconda)</td>
+      </tr>
+      <tr id="tool-minimap2">
+        <th scope="row"><a href="https://lh3.github.io/minimap2/minimap2.html">minimap2 (short reads)</a><div class="small">DNA aligners</div></th>
+        <td>Aligns short reads (the sr preset) to a reference genome. Writes SAM with a read group.</td>
+        <td>fasta, fastq</td>
+        <td>sam</td>
+        <td class="small">minimap2 2.30 (bioconda)</td>
+      </tr>
+      <tr id="tool-star">
+        <th scope="row"><a href="https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf">STAR</a><div class="small">RNA-seq aligners</div></th>
+        <td>Splice-aware RNA-seq aligner, single-end or paired-end. Writes a coordinate-sorted BAM.</td>
+        <td>index, fastq</td>
+        <td>bam, txt</td>
+        <td class="small">star 2.7.10b (bioconda)</td>
+      </tr>
+      <tr id="tool-hisat2">
+        <th scope="row"><a href="https://daehwankimlab.github.io/hisat2/manual/">HISAT2</a><div class="small">RNA-seq aligners</div></th>
+        <td>Splice-aware RNA-seq aligner, single-end or paired-end. Writes SAM.</td>
+        <td>index, fastq</td>
+        <td>sam, txt</td>
+        <td class="small">hisat2 2.2.3 (bioconda)</td>
+      </tr>
+      <tr id="tool-minimap2-long">
+        <th scope="row"><a href="https://lh3.github.io/minimap2/minimap2.html">minimap2 (long reads)</a><div class="small">Long-read aligners</div></th>
+        <td>Aligns long reads (Nanopore, PacBio HiFi or cDNA) to a reference genome. Pick the preset that matches how the reads were made. Writes SAM.</td>
+        <td>fasta, fastq</td>
+        <td>sam</td>
+        <td class="small">minimap2 2.30 (bioconda)</td>
+      </tr>
+      <tr id="tool-star-riboseq">
+        <th scope="row"><a href="https://github.com/alexdobin/STAR/blob/master/doc/STARmanual.pdf">STAR (Ribo-seq, transcriptome BAM)</a><div class="small">RNA-seq aligners</div></th>
+        <td>Aligns footprint reads to the genome and writes them in transcript coordinates, as riboWaltz needs. Defaults suit short footprints; reads that did not align stay in the BAM, marked unmapped.</td>
+        <td>index, fastq</td>
+        <td>bam, txt</td>
+        <td class="small">star 2.7.10b (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-processing">BAM processing <span class="count">10</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-samtools-sort">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-sort.html">samtools sort</a><div class="small">Alignment files</div></th>
+        <td>Sorts alignments by coordinate (or by read name).</td>
+        <td>sam, bam</td>
+        <td>bam</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-samtools-index">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-index.html">samtools index</a><div class="small">Alignment files</div></th>
+        <td>Builds the .bai index of a coordinate-sorted BAM.</td>
+        <td>bam</td>
+        <td>bai</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-samtools-view">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-view.html">samtools view</a><div class="small">Alignment files</div></th>
+        <td>Filters alignments and converts them to BAM.</td>
+        <td>sam, bam</td>
+        <td>bam</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-samtools-flagstat">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-flagstat.html">samtools flagstat</a><div class="small">Alignment files</div></th>
+        <td>Counts reads by alignment flag. Writes a text summary.</td>
+        <td>sam, bam</td>
+        <td>txt</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-samtools-fastq">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-fastq.html">samtools fastq</a><div class="small">Alignment files</div></th>
+        <td>Turns an unaligned BAM, such as the output of the Dorado basecaller, into a FASTQ file of reads. Writes compressed FASTQ.</td>
+        <td>bam</td>
+        <td>fastq</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-samtools-merge">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-merge.html">samtools merge</a><div class="small">Alignment files</div></th>
+        <td>Combines several sorted BAM files into one.</td>
+        <td>bam</td>
+        <td>bam</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-samtools-markdup">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-markdup.html">samtools markdup</a><div class="small">Duplicates</div></th>
+        <td>Finds PCR duplicates and marks (or removes) them. Runs fixmate and sort first, so plain aligner output works.</td>
+        <td>sam, bam</td>
+        <td>bam, txt</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-picard-markduplicates">
+        <th scope="row"><a href="https://broadinstitute.github.io/picard/command-line-overview.html#MarkDuplicates">Picard MarkDuplicates</a><div class="small">Duplicates</div></th>
+        <td>Finds PCR duplicates in a sorted BAM and marks (or removes) them. Writes a duplication report.</td>
+        <td>bam</td>
+        <td>bam, txt</td>
+        <td class="small">picard 3.4.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-samtools-depth">
+        <th scope="row"><a href="https://www.htslib.org/doc/samtools-depth.html">samtools depth</a><div class="small">Coverage</div></th>
+        <td>Writes how many reads cover each position of the genome, one column per BAM file.</td>
+        <td>bam</td>
+        <td>tsv</td>
+        <td class="small">samtools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-umi-tools-dedup">
+        <th scope="row"><a href="https://umi-tools.readthedocs.io/en/latest/reference/dedup.html">UMI-tools dedup</a><div class="small">Duplicates</div></th>
+        <td>Removes PCR duplicates: reads with the same start and UMI (allowing for UMI errors) count once. Needs a sorted BAM with its index, and read names that end in the UMI.</td>
+        <td>bam, bai</td>
+        <td>bam, txt</td>
+        <td class="small">umi_tools 1.1.6 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-variant_calling">Variant calling <span class="count">8</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-bcftools-call">
+        <th scope="row"><a href="https://samtools.github.io/bcftools/bcftools.html">bcftools call</a><div class="small">SNPs and small indels</div></th>
+        <td>Calls SNPs and indels from a sorted BAM (mpileup then call).</td>
+        <td>fasta, bam</td>
+        <td>vcf</td>
+        <td class="small">bcftools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-freebayes">
+        <th scope="row"><a href="https://github.com/freebayes/freebayes">FreeBayes</a><div class="small">SNPs and small indels</div></th>
+        <td>Calls SNPs and small indels from one or more sorted, indexed BAM files.</td>
+        <td>fasta, bam</td>
+        <td>vcf</td>
+        <td class="small">freebayes 1.3.10 (bioconda)</td>
+      </tr>
+      <tr id="tool-gatk-haplotypecaller">
+        <th scope="row"><a href="https://gatk.broadinstitute.org/hc/en-us/articles/360037225632-HaplotypeCaller">GATK HaplotypeCaller</a><div class="small">SNPs and small indels</div></th>
+        <td>Calls SNPs and small indels by re-assembling the reads around each variant.</td>
+        <td>fasta, bam, bai</td>
+        <td>vcf</td>
+        <td class="small">gatk4 4.6.2.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-bcftools-filter">
+        <th scope="row"><a href="https://samtools.github.io/bcftools/bcftools.html#filter">bcftools filter</a><div class="small">VCF tools</div></th>
+        <td>Keeps the variants that are good enough (enough quality and depth), or marks the others.</td>
+        <td>vcf</td>
+        <td>vcf</td>
+        <td class="small">bcftools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-bcftools-norm">
+        <th scope="row"><a href="https://samtools.github.io/bcftools/bcftools.html#norm">bcftools norm</a><div class="small">VCF tools</div></th>
+        <td>Writes variants in one standard form: indels left-aligned, optionally one line per alternative allele.</td>
+        <td>vcf, fasta</td>
+        <td>vcf</td>
+        <td class="small">bcftools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-bcftools-stats">
+        <th scope="row"><a href="https://samtools.github.io/bcftools/bcftools.html#stats">bcftools stats</a><div class="small">VCF tools</div></th>
+        <td>Counts the variants in a VCF: SNPs, indels, transitions and transversions. MultiQC reads it.</td>
+        <td>vcf</td>
+        <td>txt</td>
+        <td class="small">bcftools 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-bgzip">
+        <th scope="row"><a href="https://www.htslib.org/doc/bgzip.html">bgzip</a><div class="small">VCF tools</div></th>
+        <td>Compresses a VCF, BED or other table so it can be indexed with tabix.</td>
+        <td>vcf, bed, gtf, tsv</td>
+        <td>vcf, bed, gtf, tsv</td>
+        <td class="small">htslib 1.24 (bioconda)</td>
+      </tr>
+      <tr id="tool-tabix">
+        <th scope="row"><a href="https://www.htslib.org/doc/tabix.html">tabix</a><div class="small">VCF tools</div></th>
+        <td>Indexes a compressed, sorted VCF, BED or GFF so a region can be read without reading the whole file.</td>
+        <td>vcf, bed, gtf, tsv</td>
+        <td>vcf, bed, gtf, tsv, tbi</td>
+        <td class="small">htslib 1.24 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-annotation">Variant annotation <span class="count">2</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-snpeff-build">
+        <th scope="row"><a href="https://pcingola.github.io/SnpEff/snpeff/build_db/">snpEff build database</a><div class="small">Custom databases</div></th>
+        <td>Builds a snpEff database for your own genome from its FASTA and gene annotation (GTF).</td>
+        <td>fasta, gtf</td>
+        <td>database</td>
+        <td class="small">snpeff 5.4.0c (bioconda)</td>
+      </tr>
+      <tr id="tool-snpeff-annotate">
+        <th scope="row"><a href="https://pcingola.github.io/SnpEff/snpeff/running/">snpEff annotate</a><div class="small">Variant effects</div></th>
+        <td>Says what each variant does to the genes: missense, synonymous, intron, intergenic and so on. <span class="small">Needs a snpEff database.</span></td>
+        <td>vcf, database</td>
+        <td>vcf, html, tsv</td>
+        <td class="small">snpeff 5.4.0c (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-quantification">Quantification <span class="count">5</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-salmon-quant">
+        <th scope="row"><a href="https://salmon.readthedocs.io/">Salmon quant</a><div class="small">Transcript abundance</div></th>
+        <td>Quantifies transcript abundance from single-end reads.</td>
+        <td>index, fastq</td>
+        <td>tsv</td>
+        <td class="small">salmon 2.8.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-featurecounts">
+        <th scope="row"><a href="https://subread.sourceforge.net/SubreadUsersGuide.pdf">featureCounts</a><div class="small">Gene counts</div></th>
+        <td>Counts reads per gene from alignments and an annotation.</td>
+        <td>bam, sam, gtf</td>
+        <td>tsv, txt</td>
+        <td class="small">subread 2.1.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-kallisto-quant">
+        <th scope="row"><a href="https://pachterlab.github.io/kallisto/manual">kallisto quant</a><div class="small">Transcript abundance</div></th>
+        <td>Quantifies transcript abundance from single-end or paired-end reads, without aligning them.</td>
+        <td>index, fastq</td>
+        <td>tsv, txt</td>
+        <td class="small">kallisto 0.52.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-stringtie-assemble">
+        <th scope="row"><a href="https://ccb.jhu.edu/software/stringtie/index.shtml?t=manual">StringTie assemble</a><div class="small">Transcript assembly</div></th>
+        <td>Assembles transcripts from RNA-seq alignments, optionally guided by a gene annotation, and estimates their abundance.</td>
+        <td>bam, gtf</td>
+        <td>gtf, tsv</td>
+        <td class="small">stringtie 3.0.3 (bioconda)</td>
+      </tr>
+      <tr id="tool-stringtie-quantify">
+        <th scope="row"><a href="https://ccb.jhu.edu/software/stringtie/index.shtml?t=manual">StringTie quantify</a><div class="small">Transcript assembly</div></th>
+        <td>Measures the abundance of the transcripts of an annotation (no new transcripts are made).</td>
+        <td>bam, gtf</td>
+        <td>gtf, tsv</td>
+        <td class="small">stringtie 3.0.3 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-peak_calling">Peak calling and epigenomics <span class="count">3</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-macs3-callpeak">
+        <th scope="row"><a href="https://macs3-project.github.io/MACS/docs/callpeak.html">MACS3 callpeak</a><div class="small">Peak calling</div></th>
+        <td>Finds the places in the genome where a ChIP-seq (or ATAC-seq) sample has more reads than expected, with an optional input control. Makes sharp peaks, summits and a signal track.</td>
+        <td>bam</td>
+        <td>peaks, bed, tsv, bedgraph</td>
+        <td class="small">macs3 3.0.5 (bioconda)</td>
+      </tr>
+      <tr id="tool-genrich">
+        <th scope="row"><a href="https://github.com/jsh58/Genrich">Genrich</a><div class="small">Peak calling</div></th>
+        <td>Finds open chromatin in ATAC-seq data (or enriched regions in ChIP-seq). It reads all replicates together and takes the Tn5 cut sites into account.</td>
+        <td>bam, bed</td>
+        <td>peaks, bed</td>
+        <td class="small">genrich 0.6.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-homer-annotatepeaks">
+        <th scope="row"><a href="https://bioconda.github.io/recipes/homer/README.html">HOMER annotatePeaks</a><div class="small">Peak annotation</div></th>
+        <td>Tells you where each peak lies: in a promoter, an exon, an intron or between genes, and which gene is closest. Uses the genome FASTA and gene annotation you connect. <span class="small">Needs a Genome FASTA and gene annotation.</span></td>
+        <td>bed, peaks, fasta, gtf</td>
+        <td>tsv, txt</td>
+        <td class="small">homer 5.1 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-signal">Signal tracks and plots <span class="count">4</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-deeptools-bamcoverage">
+        <th scope="row"><a href="https://deeptools.readthedocs.io/en/latest/content/tools/bamCoverage.html">deepTools bamCoverage</a><div class="small">Signal tracks</div></th>
+        <td>Turns alignments into a signal track (bigWig) that shows how many reads cover each stretch of the genome, scaled so that samples can be compared.</td>
+        <td>bam, bai, bed</td>
+        <td>bigwig</td>
+        <td class="small">deeptools 3.5.6 (bioconda)</td>
+      </tr>
+      <tr id="tool-deeptools-computematrix">
+        <th scope="row"><a href="https://deeptools.readthedocs.io/en/latest/content/tools/computeMatrix.html">deepTools computeMatrix</a><div class="small">Signal around regions</div></th>
+        <td>Collects the signal around one point of every region (the centre of each peak, or the start of each gene) into a table. plotHeatmap draws it.</td>
+        <td>bigwig, bed, peaks, gtf</td>
+        <td>matrix, bed, tsv</td>
+        <td class="small">deeptools 3.5.6 (bioconda)</td>
+      </tr>
+      <tr id="tool-deeptools-plotheatmap">
+        <th scope="row"><a href="https://deeptools.readthedocs.io/en/latest/content/tools/plotHeatmap.html">deepTools plotHeatmap</a><div class="small">Plots</div></th>
+        <td>Draws a heatmap of the signal around your regions, one row per region, with an average profile on top.</td>
+        <td>matrix</td>
+        <td>image</td>
+        <td class="small">deeptools 3.5.6 (bioconda)</td>
+      </tr>
+      <tr id="tool-ribowaltz-report">
+        <th scope="row"><a href="https://github.com/LabTranslationalArchitectomics/riboWaltz">riboWaltz report</a><div class="small">Ribosome profiling</div></th>
+        <td>Finds where the ribosome sits in each footprint (the P-site offset) and writes one HTML report: lengths, offsets, 3-nt periodicity, start and stop profiles, regions, codon usage, plus TSV tables.</td>
+        <td>bam, gtf, fasta</td>
+        <td>html, tsv</td>
+        <td class="small">ribowaltz 2.0 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-intervals">Genome intervals <span class="count">4</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-bedtools-intersect">
+        <th scope="row"><a href="https://bedtools.readthedocs.io/en/latest/content/tools/intersect.html">bedtools intersect</a><div class="small">Compare regions</div></th>
+        <td>Compares two sets of regions: keeps the ones that overlap, the ones that do not, or just the overlapping stretches. For example, which peaks of one sample are also peaks in another.</td>
+        <td>bed, peaks, gtf, vcf</td>
+        <td>bed, peaks</td>
+        <td class="small">bedtools 2.31.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-bedtools-merge">
+        <th scope="row"><a href="https://bedtools.readthedocs.io/en/latest/content/tools/merge.html">bedtools merge</a><div class="small">Combine regions</div></th>
+        <td>Joins regions that overlap (or lie close together) into single regions. Give it the peaks of several samples to get one combined set.</td>
+        <td>bed, peaks</td>
+        <td>bed</td>
+        <td class="small">bedtools 2.31.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-bedtools-genomecov">
+        <th scope="row"><a href="https://bedtools.readthedocs.io/en/latest/content/tools/genomecov.html">bedtools genomecov</a><div class="small">Coverage</div></th>
+        <td>Measures how deeply every stretch of the genome is covered by reads and writes it as a bedGraph track.</td>
+        <td>bam</td>
+        <td>bedgraph</td>
+        <td class="small">bedtools 2.31.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-bedtools-getfasta">
+        <th scope="row"><a href="https://bedtools.readthedocs.io/en/latest/content/tools/getfasta.html">bedtools getfasta</a><div class="small">Sequences</div></th>
+        <td>Cuts the DNA sequence of every region out of a genome FASTA, for example the sequences under your peaks for a motif search.</td>
+        <td>fasta, bed, peaks, gtf</td>
+        <td>fasta</td>
+        <td class="small">bedtools 2.31.1 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-sequences">FASTA and FASTQ tools <span class="count">2</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-seqkit-seq">
+        <th scope="row"><a href="https://bioinf.shenwei.me/seqkit/usage/#seq">seqkit seq (filter or convert)</a><div class="small">Filter and convert</div></th>
+        <td>Keeps the sequences within a length or quality range, and can reverse-complement or upper-case them. Writes a compressed file.</td>
+        <td>fastq, fasta</td>
+        <td>fastq, fasta</td>
+        <td class="small">seqkit 2.14.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-seqkit-grep">
+        <th scope="row"><a href="https://bioinf.shenwei.me/seqkit/usage/#grep">seqkit grep (pick sequences)</a><div class="small">Pick sequences</div></th>
+        <td>Picks sequences by name or by a stretch of sequence, from a list of names or a pattern you type. Can also leave those out instead.</td>
+        <td>fastq, fasta, txt, tsv</td>
+        <td>fastq, fasta</td>
+        <td class="small">seqkit 2.14.0 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-assembly">Assembly <span class="count">3</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-flye">
+        <th scope="row"><a href="https://github.com/mikolmogorov/Flye/blob/flye/docs/USAGE.md">Flye</a><div class="small">Long-read assemblers</div></th>
+        <td>Assembles a genome from long reads (Nanopore or PacBio) without a reference. Writes the contigs, the assembly graph and a table of contig lengths and coverage.</td>
+        <td>fastq, fasta</td>
+        <td>fasta, gfa, tsv, txt</td>
+        <td class="small">flye 2.9.6 (bioconda)</td>
+      </tr>
+      <tr id="tool-spades">
+        <th scope="row"><a href="https://ablab.github.io/spades/">SPAdes</a><div class="small">Short-read assemblers</div></th>
+        <td>Assembles a genome from short Illumina reads without a reference. Writes the contigs, the scaffolds and the assembly graph.</td>
+        <td>fastq</td>
+        <td>fasta, gfa, txt</td>
+        <td class="small">spades 4.2.0 (bioconda)</td>
+      </tr>
+      <tr id="tool-quast">
+        <th scope="row"><a href="https://quast.sourceforge.net/docs/manual.html">QUAST</a><div class="small">Assembly quality</div></th>
+        <td>Judges genome assemblies: how many contigs, how long, and (with a reference) how complete and correct. Several assemblies go into one comparison.</td>
+        <td>fasta</td>
+        <td>tsv, html, txt</td>
+        <td class="small">quast 5.3.0 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-metagenomics">Metagenomics <span class="count">4</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-kraken2-build">
+        <th scope="row"><a href="https://github.com/DerrickWood/kraken2/wiki/Manual#custom-databases">Kraken2 build database</a><div class="small">Databases</div></th>
+        <td>Builds a Kraken2 database from your own genomes, for example the few species you expect in a sample. Needs a taxonomy that names every genome.</td>
+        <td>fasta, taxonomy</td>
+        <td>database</td>
+        <td class="small">kraken2 2.17.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-kraken2">
+        <th scope="row"><a href="https://github.com/DerrickWood/kraken2/wiki/Manual">Kraken2</a><div class="small">Classification</div></th>
+        <td>Names the organism each read most likely comes from (its taxonomy) by matching it against a database of genomes. Writes a summary table by species and a line for every read. <span class="small">Needs a Kraken2 database.</span></td>
+        <td>fastq, fasta, database</td>
+        <td>tsv, txt</td>
+        <td class="small">kraken2 2.17.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-bracken-build">
+        <th scope="row"><a href="https://github.com/jenniferlu717/Bracken">Bracken prepare database</a><div class="small">Databases</div></th>
+        <td>Gets a Kraken2 database ready for Bracken. Makes a new folder that links to your database and adds the files Bracken needs for one read length. Your database is not changed. <span class="small">Needs a Kraken2 database.</span></td>
+        <td>database</td>
+        <td>database</td>
+        <td class="small">bracken 2.6.1 (bioconda)</td>
+      </tr>
+      <tr id="tool-bracken">
+        <th scope="row"><a href="https://github.com/jenniferlu717/Bracken">Bracken</a><div class="small">Abundance</div></th>
+        <td>Turns a Kraken2 summary into better abundance estimates. Reads that Kraken2 could only place on a genus are shared out over the species of that genus. <span class="small">Needs a Bracken database.</span></td>
+        <td>tsv, txt, database</td>
+        <td>tsv, txt</td>
+        <td class="small">bracken 2.6.1 (bioconda)</td>
+      </tr>
+    </tbody>
+</table></div>
+<h3 id="category-nanopore">Nanopore signal data <span class="count">8</span></h3>
+<div class="table-wrap"><table class="wide">
+    <thead><tr><th scope="col">Tool</th><th scope="col">What it does</th><th scope="col">Reads</th><th scope="col">Makes</th><th scope="col">Installed as</th></tr></thead>
+    <tbody>
+      <tr id="tool-pod5-view">
+        <th scope="row"><a href="https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-view">pod5 view</a><div class="small">POD5 files</div></th>
+        <td>Lists the reads in POD5 files as a table: read ID, channel, length in samples, start time and more. Use it to pick reads for pod5 filter or pod5 subset.</td>
+        <td>pod5</td>
+        <td>tsv</td>
+        <td class="small">pod5 0.3.48 (bioconda)</td>
+      </tr>
+      <tr id="tool-pod5-inspect">
+        <th scope="row"><a href="https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-inspect">pod5 inspect</a><div class="small">POD5 files</div></th>
+        <td>Reports what a POD5 file holds: how many reads it has, how they are grouped into batches, and the version of the file format.</td>
+        <td>pod5</td>
+        <td>txt</td>
+        <td class="small">pod5 0.3.48 (bioconda)</td>
+      </tr>
+      <tr id="tool-pod5-filter">
+        <th scope="row"><a href="https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-filter">pod5 filter</a><div class="small">POD5 files</div></th>
+        <td>Copies only the reads you list into a new POD5 file. Use it to basecall or share a small part of a run.</td>
+        <td>pod5, txt, tsv</td>
+        <td>pod5</td>
+        <td class="small">pod5 0.3.48 (bioconda)</td>
+      </tr>
+      <tr id="tool-pod5-subset">
+        <th scope="row"><a href="https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-subset">pod5 subset (split by column)</a><div class="small">POD5 files</div></th>
+        <td>Splits POD5 files into several files by a value in a table, for example one file per channel. The table can come from pod5 view or from a sequencing summary.</td>
+        <td>pod5, tsv</td>
+        <td>pod5</td>
+        <td class="small">pod5 0.3.48 (bioconda)</td>
+      </tr>
+      <tr id="tool-pod5-merge">
+        <th scope="row"><a href="https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-merge">pod5 merge</a><div class="small">POD5 files</div></th>
+        <td>Joins several POD5 files into one, for example the many files MinKNOW writes during a run.</td>
+        <td>pod5</td>
+        <td>pod5</td>
+        <td class="small">pod5 0.3.48 (bioconda)</td>
+      </tr>
+      <tr id="tool-pod5-convert-fast5">
+        <th scope="row"><a href="https://pod5-file-format.readthedocs.io/en/latest/docs/tools.html#pod5-convert">pod5 convert from FAST5</a><div class="small">POD5 files</div></th>
+        <td>Converts old FAST5 signal files to one POD5 file, the format Dorado reads.</td>
+        <td>fast5</td>
+        <td>pod5</td>
+        <td class="small">pod5 0.3.48 (bioconda)</td>
+      </tr>
+      <tr id="tool-dorado-basecaller">
+        <th scope="row"><a href="https://github.com/nanoporetech/dorado">Dorado basecaller</a><div class="small">Basecalling</div></th>
+        <td>Turns the raw signal of a Nanopore run (POD5) into DNA sequence. Writes an unaligned BAM. Needs a graphics card or an Apple chip for anything but tests. <span class="small">Needs a Basecalling model.</span></td>
+        <td>pod5</td>
+        <td>bam</td>
+        <td class="small">dorado 1.4.0 (downloaded from the vendor, Oxford Nanopore Technologies Public License)</td>
+      </tr>
+      <tr id="tool-dorado-summary">
+        <th scope="row"><a href="https://github.com/nanoporetech/dorado">Dorado summary</a><div class="small">Basecalling</div></th>
+        <td>Makes a table with one line per read from a Dorado BAM: read ID, channel, length and quality. NanoPlot and pod5 subset read it.</td>
+        <td>bam</td>
+        <td>tsv</td>
+        <td class="small">dorado 1.4.0 (downloaded from the vendor, Oxford Nanopore Technologies Public License)</td>
+      </tr>
+    </tbody>
+</table></div>
+
+</main>
+<footer class="site-footer">
+  <div class="wrap">
+    <p>RustRunner 1.0.0-beta.1 (open beta). MIT License. <a href="https://github.com/hsn-ylmz/RustRunner">Source code</a> | <a href="https://github.com/hsn-ylmz/RustRunner/releases">Releases</a> | <a href="https://github.com/hsn-ylmz/RustRunner/issues">Report a problem</a></p>
+  </div>
+</footer>
+</body>
+</html>

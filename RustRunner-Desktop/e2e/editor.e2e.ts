@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { test, expect, buildChain, nodes, openStepStatus, selectNode, stepRow } from './fixtures';
+import { test, expect, buildChain, nodes, openSection, openStepStatus, selectNode, stepRow } from './fixtures';
 
 test('a mocked step creates placeholder outputs, shows MOCKED, and a real run then runs it for real', async ({
   page,
@@ -11,7 +11,7 @@ test('a mocked step creates placeholder outputs, shows MOCKED, and a real run th
     { label: 'Copy', command: 'cp {input} {output}', input: 'a.txt', output: 'b.txt' },
   ]);
   await page.getByTestId('set-directory').click();
-  await expect(page.locator('.working-directory')).toBeVisible();
+  await expect(page.locator('.working-directory')).toContainText('Folder: work');
 
   // No mocked step, no warning.
   await expect(page.getByTestId('mock-warning')).toHaveCount(0);
@@ -51,6 +51,7 @@ test('an output check can apply to one declared output or to all of them', async
     { label: 'Two', command: 'echo data > a.txt; : > b.txt', output: 'a.txt, b.txt' },
   ]);
   await selectNode(page, 'Two');
+  await openSection(page, 'checks');
   await page.getByTestId('prop-check-non-empty').check();
 
   const target = page.getByTestId('prop-check-non-empty-target');
@@ -81,6 +82,7 @@ test('an output check can apply to one declared output or to all of them', async
 test('a check target that is no longer an output is flagged, not silently changed', async ({ page }) => {
   await buildChain(page, [{ label: 'One', command: 'echo x > {output}', output: 'x.txt, y.txt' }]);
   await selectNode(page, 'One');
+  await openSection(page, 'checks');
   await page.getByTestId('prop-check-exists').check();
   await page.getByTestId('prop-check-exists-target').selectOption('y.txt');
 

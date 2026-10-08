@@ -1,0 +1,197 @@
+{
+  "formatVersion": 1,
+  "id": "metagenomics-kraken2-bracken",
+  "name": "Who is in my sample? Kraken2 and Bracken",
+  "description": "Find which organisms a metagenomic sample contains and how abundant they are: trim, classify the reads with Kraken2, estimate abundances with Bracken and gather the results in one report.",
+  "details": "Use this to profile a mixed sample such as a gut, soil or water metagenome, or to check a culture for contamination. The pipeline trims the reads with fastp, assigns each read to an organism with Kraken2, re-estimates how many reads belong to each species with Bracken, and gathers the fastp and Kraken2 results in a MultiQC report. It needs a Kraken2 database, which is a large folder of reference genomes that you download or build once: pick a ready-made one from the Kraken2 index downloads (the standard ones need 8 to 70 GB of memory; the \"Standard-8\" and \"Standard-16\" collections fit an ordinary computer). Choose one that also has the Bracken files for your read length, or prepare it with the \"Bracken prepare database\" tool first. The same folder is used for both Kraken2 and Bracken. The setup step asks for your read length, which must be one the database was prepared for. Bracken reports species by default; change the level in its step for genera or families. The reads are single-end. For read pairs, choose the first file of each pair (R1): Kraken2 and Bracken give a sound profile from it, and the trimming step takes one file at a time. One sample per run.",
+  "domain": "metagenomics",
+  "difficulty": "intermediate",
+  "minCatalogVersion": "2026.16.0",
+  "readLayout": "single",
+  "inputs": [
+    {
+      "id": "reads",
+      "label": "Sequencing reads",
+      "hint": "One FASTQ file of reads from the sample, plain or compressed. For read pairs, choose the first file (R1).",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample.fastq.gz",
+      "targets": [
+        {
+          "step": "fastp",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "database",
+      "label": "Kraken2 database",
+      "hint": "The folder of a Kraken2 database that also holds the Bracken files for your read length.",
+      "types": [
+        "database"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "k2_standard_8gb/",
+      "targets": [
+        {
+          "step": "kraken2",
+          "slot": "db"
+        },
+        {
+          "step": "bracken",
+          "slot": "db"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "read_length",
+      "label": "Read length (bases)",
+      "hint": "The length of your reads, for example 150. The database must hold the Bracken files for this length (database150mers.kmer_distrib for 150).",
+      "targets": [
+        {
+          "step": "bracken",
+          "param": "read_length"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "fastp",
+      "tool": "fastp",
+      "label": "Trim reads (fastp)",
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "key": "kraken2",
+      "tool": "kraken2",
+      "label": "Classify reads (Kraken2)",
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "bracken",
+      "tool": "bracken",
+      "label": "Estimate abundances (Bracken)",
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "multiqc",
+      "tool": "multiqc",
+      "label": "MultiQC report",
+      "files": {
+        "report_dir": "multiqc/"
+      },
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "fastp",
+      "to": "kraken2",
+      "bind": [
+        {
+          "slot": "reads1",
+          "output": "trimmed"
+        }
+      ]
+    },
+    {
+      "from": "kraken2",
+      "to": "bracken",
+      "bind": [
+        {
+          "slot": "report",
+          "output": "report"
+        }
+      ]
+    },
+    {
+      "from": "fastp",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "json_report"
+        }
+      ]
+    },
+    {
+      "from": "kraken2",
+      "to": "multiqc",
+      "bind": [
+        {
+          "slot": "reports",
+          "output": "report"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Abundance estimates",
+      "step": "bracken",
+      "slot": "estimates",
+      "hint": "Table: one line per species with the estimated number and share of reads."
+    },
+    {
+      "label": "Summary by taxonomy",
+      "step": "bracken",
+      "slot": "new_report",
+      "hint": "Kraken2-style summary with the Bracken numbers, to load in tools such as Pavian."
+    },
+    {
+      "label": "Kraken2 summary",
+      "step": "kraken2",
+      "slot": "report",
+      "hint": "How many reads fell into each group of the taxonomy."
+    },
+    {
+      "label": "Read assignments",
+      "step": "kraken2",
+      "slot": "assignments",
+      "hint": "One line per read with the organism it was given."
+    },
+    {
+      "label": "Combined report",
+      "step": "multiqc",
+      "slot": "report",
+      "hint": "Open multiqc_report.html in a browser."
+    }
+  ],
+  "references": [
+    {
+      "label": "Wood DE, Lu J, Langmead B. Improved metagenomic analysis with Kraken 2. Genome Biology 2019;20:257.",
+      "url": "https://doi.org/10.1186/s13059-019-1891-0"
+    },
+    {
+      "label": "Lu J, Breitwieser FP, Thielen P, Salzberg SL. Bracken: estimating species abundance in metagenomics data. PeerJ Computer Science 2017;3:e104.",
+      "url": "https://doi.org/10.7717/peerj-cs.104"
+    },
+    {
+      "label": "Chen S, Zhou Y, Chen Y, Gu J. fastp: an ultra-fast all-in-one FASTQ preprocessor. Bioinformatics 2018;34:i884-i890.",
+      "url": "https://doi.org/10.1093/bioinformatics/bty560"
+    },
+    {
+      "label": "Ewels P, Magnusson M, Lundin S, Kaller M. MultiQC: summarize analysis results for multiple tools and samples in a single report. Bioinformatics 2016;32:3047-3048.",
+      "url": "https://doi.org/10.1093/bioinformatics/btw354"
+    }
+  ]
+}

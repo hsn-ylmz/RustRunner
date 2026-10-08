@@ -186,6 +186,45 @@ describe('user-named wildcards', () => {
     const ok = { ...step, wildcard_files: { lane: ['a.fq'] } };
     expect(validateWorkflow({ steps: [ok] })).toEqual([]);
   });
+
+  it('validateWorkflow lets an optional slot stay empty, but not a required one', () => {
+    const step = {
+      id: 's',
+      tool: 'bash',
+      command: 'x {ref} {mate} > {out}',
+      named_inputs: { ref: ['g.fa'], mate: [] as string[] },
+      named_outputs: { out: ['o.txt'] },
+      optional_slots: ['mate'],
+    };
+    expect(validateWorkflow({ steps: [step] })).toEqual([]);
+    const required = { ...step, optional_slots: [] as string[] };
+    expect(validateWorkflow({ steps: [required] })).toEqual(['Step s: "mate" has no file yet']);
+  });
+
+  it('validateWorkflow checks named slots', () => {
+    const step = {
+      id: 's',
+      tool: 'bash',
+      command: 'x {ref} > {out}',
+      named_inputs: { ref: [] as string[] },
+      named_outputs: { out: ['o.txt'] },
+    };
+    expect(validateWorkflow({ steps: [step] })).toEqual(['Step s: "ref" has no file yet']);
+    const bound = { ...step, named_inputs: { ref: ['g.fa'] } };
+    expect(validateWorkflow({ steps: [bound] })).toEqual([]);
+    // A pattern in a slot needs files, like one in the input.
+    const pattern = { ...bound, named_inputs: { ref: ['{x}.fa'] } };
+    expect(validateWorkflow({ steps: [pattern] })[0]).toMatch(/uses \{x\} but no files are selected/);
+    // A check may name a path of a named output or the slot itself.
+    const check = (target: string) => ({ ...bound, checks: [{ kind: 'exists', target }] });
+    expect(validateWorkflow({ steps: [check('o.txt')] })).toEqual([]);
+    expect(validateWorkflow({ steps: [check('out')] })).toEqual([]);
+    expect(validateWorkflow({ steps: [check('nope')] })[0]).toMatch(/not one of the step's outputs/);
+  });
+
+  it('wildcard names exclude the placeholders the engine fills', () => {
+    expect(wildcardNameError('threads')).toMatch(/command placeholder/);
+  });
 });
 
 describe('workflow metadata', () => {

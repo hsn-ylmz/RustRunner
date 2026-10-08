@@ -25,12 +25,22 @@ function headlessLinuxArgs(): string[] {
   return ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'];
 }
 
+/** Screenshots for the UX review are taken at 1x so the PNGs stay small. */
+function captureArgs(): string[] {
+  return process.env.UX_OUT ? ['--force-device-scale-factor=1'] : [];
+}
+
 export interface Sandbox {
   /** Directory the workflow runs in (set through the mocked directory dialog). */
   workDir: string;
 }
 
 export interface Fixtures {
+  /**
+   * Extra environment for the app (and so the engine). `{root}` in a value is
+   * replaced by the test's sandbox folder. Set with `test.use({ appEnv })`.
+   */
+  appEnv: Record<string, string>;
   sandbox: Sandbox;
   app: ElectronApplication;
   page: Page;
@@ -38,7 +48,35 @@ export interface Fixtures {
   consoleErrors: string[];
 }
 
+/**
+ * Starts the app with HOME, TMPDIR and the profile (the app's data folder)
+ * inside `root`. Calling it again with the same root is a restart: the second
+ * run finds what the first saved.
+ */
+export function launchApp(root: string, extraEnv: Record<string, string> = {}): Promise<ElectronApplication> {
+  const extra = Object.fromEntries(
+    Object.entries(extraEnv).map(([k, v]) => [k, v.split('{root}').join(root)])
+  );
+  return _electron.launch({
+    args: [DESKTOP_DIR, `--user-data-dir=${path.join(root, 'profile')}`, ...headlessLinuxArgs(), ...captureArgs()],
+    cwd: DESKTOP_DIR,
+    env: {
+      ...(process.env as Record<string, string>),
+      HOME: path.join(root, 'home'),
+      TMPDIR: path.join(root, 'tmp'),
+      NODE_ENV: 'production',
+      RUSTRUNNER_BIN: ENGINE_BIN,
+      // The engine's tool-to-environment map, kept in the sandbox so a test
+      // never rewrites the tracked RustRunner/runtime/env_map.json.
+      RUSTRUNNER_ENV_MAP: path.join(root, 'env_map.json'),
+      ...extra,
+    },
+  });
+}
+
 export const test = base.extend<Fixtures>({
+  appEnv: [{}, { option: true }],
+
   sandbox: async ({}, use) => {
     fs.mkdirSync(TMP_ROOT, { recursive: true });
     const root = fs.mkdtempSync(path.join(TMP_ROOT, 'run-'));
@@ -48,27 +86,15 @@ export const test = base.extend<Fixtures>({
     fs.rmSync(root, { recursive: true, force: true });
   },
 
-  app: async ({ sandbox }, use, testInfo) => {
+  app: async ({ sandbox, appEnv }, use, testInfo) => {
     expect(fs.existsSync(ENGINE_BIN), `engine binary missing: ${ENGINE_BIN} (run cargo build)`).toBe(true);
     const root = path.dirname(sandbox.workDir);
     // HOME, TMPDIR and the profile all point into the sandbox so a test run
     // leaves nothing in the real user directories.
-    const home = path.join(root, 'home');
-    const tmp = path.join(root, 'tmp');
-    fs.mkdirSync(home);
-    fs.mkdirSync(tmp);
+    fs.mkdirSync(path.join(root, 'home'));
+    fs.mkdirSync(path.join(root, 'tmp'));
 
-    const app = await _electron.launch({
-      args: [DESKTOP_DIR, `--user-data-dir=${path.join(root, 'profile')}`, ...headlessLinuxArgs()],
-      cwd: DESKTOP_DIR,
-      env: {
-        ...(process.env as Record<string, string>),
-        HOME: home,
-        TMPDIR: tmp,
-        NODE_ENV: 'production',
-        RUSTRUNNER_BIN: ENGINE_BIN,
-      },
-    });
+    const app = await launchApp(root, appEnv);
 
     // Native dialogs cannot be driven from the page: answer the directory
     // picker with the sandbox, and "Discard" for any unsaved-changes prompt.
@@ -186,9 +212,35 @@ export async function buildChain(page: Page, specs: NodeSpec[]): Promise<void> {
   }
 }
 
+export type PanelSection = 'basics' | 'io' | 'reliability' | 'checks' | 'advanced';
+
+/**
+ * Opens a collapsible section of the properties panel (a no-op when it is open
+ * already). The open state is remembered by the app, so it stays open when
+ * another node is selected.
+ */
+export async function openSection(page: Page, section: PanelSection): Promise<void> {
+  const toggle = page.getByTestId(`section-${section}-toggle`);
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+}
+
 export async function openStepStatus(page: Page): Promise<void> {
   await page.getByTestId('tab-steps').click();
   await expect(page.getByTestId('tab-steps')).toHaveAttribute('aria-selected', 'true');
+}
+
+/**
+ * Hovers the Run button and returns the tooltip that opens beside it. The
+ * explanation of what Run will do lives there (and on keyboard focus), not in a
+ * title attribute that only a hovering mouse can reach.
+ */
+export async function showRunTooltip(page: Page) {
+  await page.getByTestId('run').hover();
+  const tip = page.getByRole('tooltip');
+  await expect(tip).toBeVisible();
+  return tip;
 }
 
 export const stepRow = (page: Page, id: string) =>

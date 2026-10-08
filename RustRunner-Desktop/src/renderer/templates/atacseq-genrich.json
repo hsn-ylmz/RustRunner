@@ -1,0 +1,327 @@
+{
+  "formatVersion": 1,
+  "id": "atacseq-genrich",
+  "name": "ATAC-seq open chromatin peaks with Genrich",
+  "description": "Find open chromatin regions from paired-end ATAC-seq reads: align, call peaks in ATAC mode, merge them and make a signal track.",
+  "details": "Use this for ATAC-seq (or a similar cut-site assay) on one sample with paired-end reads, in a genome you have as a FASTA file. The pipeline builds a Bowtie2 index of your genome and aligns the read pairs, allowing fragments up to 2000 bases because ATAC-seq fragments can be long. The alignments are sorted by read name, which is what Genrich needs, and Genrich calls the peaks in ATAC mode: it looks at where the transposase cut the DNA, drops PCR duplicates and ignores the mitochondrial chromosome chrM (the setup step asks for its name, because genomes from Ensembl call it MT). bedtools merge then joins peaks that touch. A second copy of the alignments, sorted by position and indexed, makes a signal track (bigWig) that you can open in a genome browser. A list of regions to ignore, such as a blacklist of the genome, is optional. The pipeline does not trim adapters, because the trimming step used in the other templates takes one read file at a time; if your fragments are shorter than the reads, trim the files first. Genrich needs paired-end reads, so single-end ATAC-seq cannot be used with this template. One sample per run; to use several replicates, give them to Genrich in its step.",
+  "domain": "epigenomics",
+  "difficulty": "advanced",
+  "minCatalogVersion": "2026.16.0",
+  "readLayout": "paired",
+  "inputs": [
+    {
+      "id": "reads1",
+      "label": "Reads, first of the pair",
+      "hint": "The FASTQ file with the first read of each pair, plain or compressed.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample_R1.fastq.gz",
+      "targets": [
+        {
+          "step": "bowtie2",
+          "slot": "reads"
+        }
+      ]
+    },
+    {
+      "id": "reads2",
+      "label": "Reads, second of the pair",
+      "hint": "The FASTQ file with the second read of each pair, in the same order as the first.",
+      "types": [
+        "fastq"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "sample_R2.fastq.gz",
+      "targets": [
+        {
+          "step": "bowtie2",
+          "slot": "reads2"
+        }
+      ]
+    },
+    {
+      "id": "genome",
+      "label": "Reference genome",
+      "hint": "The genome as a FASTA file. The reads are aligned to it.",
+      "types": [
+        "fasta"
+      ],
+      "multiple": false,
+      "required": true,
+      "example": "genome.fa",
+      "targets": [
+        {
+          "step": "bt_build",
+          "slot": "ref"
+        }
+      ]
+    },
+    {
+      "id": "blacklist",
+      "label": "Regions to ignore (optional)",
+      "hint": "A BED file of regions that should not give peaks, for example a blacklist of the genome. Leave empty to use none.",
+      "types": [
+        "bed"
+      ],
+      "multiple": false,
+      "required": false,
+      "example": "blacklist.bed",
+      "targets": [
+        {
+          "step": "genrich",
+          "slot": "blacklist"
+        },
+        {
+          "step": "coverage",
+          "slot": "blacklist"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "skip_chroms",
+      "label": "Chromosomes to ignore",
+      "hint": "The mitochondrial chromosome as your genome FASTA names it: chrM (UCSC), MT (Ensembl) or Mt (some plants). Separate several with commas; leave empty to use every chromosome.",
+      "targets": [
+        {
+          "step": "genrich",
+          "param": "skip_chroms"
+        }
+      ]
+    }
+  ],
+  "steps": [
+    {
+      "key": "bt_build",
+      "tool": "bowtie2-build",
+      "label": "Bowtie2 index",
+      "position": {
+        "x": 0,
+        "y": 160
+      }
+    },
+    {
+      "key": "bowtie2",
+      "tool": "bowtie2",
+      "label": "Align read pairs (Bowtie2)",
+      "params": {
+        "max_fragment": 2000
+      },
+      "files": {
+        "sam": "atac.sam"
+      },
+      "position": {
+        "x": 260,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort_name",
+      "tool": "samtools-sort",
+      "label": "Sort alignments by read name",
+      "params": {
+        "by_name": true
+      },
+      "files": {
+        "bam": "atac.byname.bam"
+      },
+      "position": {
+        "x": 520,
+        "y": 0
+      }
+    },
+    {
+      "key": "genrich",
+      "tool": "genrich",
+      "label": "Call peaks (Genrich, ATAC mode)",
+      "position": {
+        "x": 780,
+        "y": 0
+      }
+    },
+    {
+      "key": "merge",
+      "tool": "bedtools-merge",
+      "label": "Merge touching peaks",
+      "position": {
+        "x": 1040,
+        "y": 0
+      }
+    },
+    {
+      "key": "sort_pos",
+      "tool": "samtools-sort",
+      "label": "Sort alignments by position",
+      "files": {
+        "bam": "atac.sorted.bam"
+      },
+      "position": {
+        "x": 520,
+        "y": 160
+      }
+    },
+    {
+      "key": "index",
+      "tool": "samtools-index",
+      "label": "Index alignments",
+      "files": {
+        "bai": "atac.sorted.bam.bai"
+      },
+      "position": {
+        "x": 780,
+        "y": 160
+      }
+    },
+    {
+      "key": "coverage",
+      "tool": "deeptools-bamcoverage",
+      "label": "Signal track",
+      "params": {
+        "extend": "--extendReads"
+      },
+      "position": {
+        "x": 1040,
+        "y": 160
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "bt_build",
+      "to": "bowtie2",
+      "bind": [
+        {
+          "slot": "index",
+          "output": "index"
+        }
+      ]
+    },
+    {
+      "from": "bowtie2",
+      "to": "sort_name",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "bowtie2",
+      "to": "sort_pos",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "sam"
+        }
+      ]
+    },
+    {
+      "from": "sort_name",
+      "to": "genrich",
+      "bind": [
+        {
+          "slot": "alignments",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "genrich",
+      "to": "merge",
+      "bind": [
+        {
+          "slot": "intervals",
+          "output": "peaks"
+        }
+      ]
+    },
+    {
+      "from": "sort_pos",
+      "to": "index",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "sort_pos",
+      "to": "coverage",
+      "bind": [
+        {
+          "slot": "bam",
+          "output": "bam"
+        }
+      ]
+    },
+    {
+      "from": "index",
+      "to": "coverage",
+      "bind": [
+        {
+          "slot": "bai",
+          "output": "bai"
+        }
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "label": "Peaks",
+      "step": "genrich",
+      "slot": "peaks",
+      "hint": "narrowPeak file: one open region per line with its signal and significance."
+    },
+    {
+      "label": "Merged peaks",
+      "step": "merge",
+      "slot": "merged",
+      "hint": "BED file where peaks that touch are joined into one region."
+    },
+    {
+      "label": "Signal track",
+      "step": "coverage",
+      "slot": "coverage",
+      "hint": "bigWig file to open in a genome browser such as IGV."
+    },
+    {
+      "label": "Alignments",
+      "step": "sort_pos",
+      "slot": "bam",
+      "hint": "Sorted BAM of the read pairs."
+    }
+  ],
+  "references": [
+    {
+      "label": "Gaspar JM. Genrich: detecting sites of genomic enrichment (software). GitHub: jsh58/Genrich.",
+      "url": "https://github.com/jsh58/Genrich"
+    },
+    {
+      "label": "Buenrostro JD, Giresi PG, Zaba LC, Chang HY, Greenleaf WJ. Transposition of native chromatin for fast and sensitive epigenomic profiling of open chromatin, DNA-binding proteins and nucleosome position. Nature Methods 2013;10:1213-1218.",
+      "url": "https://doi.org/10.1038/nmeth.2688"
+    },
+    {
+      "label": "Langmead B, Salzberg SL. Fast gapped-read alignment with Bowtie 2. Nature Methods 2012;9:357-359.",
+      "url": "https://doi.org/10.1038/nmeth.1923"
+    },
+    {
+      "label": "Quinlan AR, Hall IM. BEDTools: a flexible suite of utilities for comparing genomic features. Bioinformatics 2010;26:841-842.",
+      "url": "https://doi.org/10.1093/bioinformatics/btq033"
+    },
+    {
+      "label": "Ramirez F, Ryan DP, Gruning B, et al. deepTools2: a next generation web server for deep-sequencing data analysis. Nucleic Acids Research 2016;44:W160-W165.",
+      "url": "https://doi.org/10.1093/nar/gkw257"
+    },
+    {
+      "label": "Danecek P, Bonfield JK, Liddle J, et al. Twelve years of SAMtools and BCFtools. GigaScience 2021;10:giab008.",
+      "url": "https://doi.org/10.1093/gigascience/giab008"
+    }
+  ]
+}
